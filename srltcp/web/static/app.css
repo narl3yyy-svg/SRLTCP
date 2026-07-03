@@ -738,8 +738,31 @@ body {
   display: flex;
   flex-direction: column;
 }
-.settings-panel { display: none; flex-direction: column; gap: 0.85rem; }
+.settings-panel {
+  display: none;
+  flex-direction: column;
+  gap: 0.85rem;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
 .settings-panel.active { display: flex; }
+.settings-panel .field,
+.settings-panel .checkbox-field {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+.settings-panel select,
+.settings-panel input {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.checkbox-field span {
+  flex: 1;
+  min-width: 0;
+}
 .settings-window-footer {
   padding: 0.85rem 1.25rem;
   border-top: 1px solid var(--border);

@@ -351,8 +351,16 @@ class TransferMixin:
         await self._send_raw(link.transport_peer_id, link.transport, packet)
         return True
 
-    def list_transfers(self: MessagingBackend) -> list[dict]:
-        return [t.to_dict() for t in self._transfers.values()]
+    def list_transfers(self: MessagingBackend, *, active_only: bool = False) -> list[dict]:
+        active_states = (
+            TransferState.OFFERED,
+            TransferState.ACCEPTED,
+            TransferState.TRANSFERRING,
+        )
+        transfers = self._transfers.values()
+        if active_only:
+            transfers = (t for t in transfers if t.state in active_states)
+        return [t.to_dict() for t in transfers]
 
     async def cancel_transfer(self: MessagingBackend, transfer_id: str) -> bool:
         transfer = self._transfers.get(transfer_id)

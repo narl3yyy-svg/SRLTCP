@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "srltcp"
-version = "0.1.18"
+version = "0.1.20"
 description = "Fast, secure peer-to-peer communication and file transfer over Serial (USB) and TCP/IP"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
@@ -38,10 +38,6 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.3",
 ]
-android = [
-    "chaquopy",
-]
-
 [project.scripts]
 srltcp = "srltcp.app:main"
 

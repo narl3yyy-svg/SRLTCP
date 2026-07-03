@@ -11,7 +11,7 @@ _android_data_dir: str | None = None
 
 
 def is_android() -> bool:
-    return "chaquopy" in sys.modules or os.environ.get("SRLTCP_ANDROID") == "1"
+    return os.environ.get("SRLTCP_ANDROID") == "1"
 
 
 def set_android_data_dir(path: str) -> None:

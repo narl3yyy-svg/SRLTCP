@@ -34,6 +34,8 @@
     transferPatchTimer: null,
     pendingTransferPatches: new Map(),
     dropTargetHash: null,
+    folderSendTarget: null,
+    finishedTransferIds: new Set(),
     wanModalTarget: null,
     shareMode: "browse",
     shareGrants: { local: [], remote: [] },
@@ -774,7 +776,10 @@
       return false;
     }
     const sent = await res.json();
-    if (sent.id) updateTransferDock(sent);
+    if (sent.id) {
+      state.finishedTransferIds.delete(sent.id);
+      updateTransferDock(sent);
+    }
     toast(`Sending ${file.name}…`);
     if (state.selectedPeer === hashId) loadMessages();
     renderTransfers();
@@ -784,6 +789,50 @@
   async function sendFile(file) {
     if (!state.selectedPeer || !file) return;
     await sendFileToPeer(file, state.selectedPeer, state.selectedName);
+  }
+
+  async function sendFolderToPeer(folderPath, hashId, peerName) {
+    if (!hashId || !folderPath) return false;
+    if (!isPeerLinked(hashId)) {
+      toast(`Connecting to ${peerName || "peer"}…`);
+      await connectPeer(hashId, false);
+      if (!isPeerLinked(hashId)) {
+        toast("Cannot send folder — peer not connected");
+        return false;
+      }
+    }
+    const folderName = folderPath.split("/").filter(Boolean).pop() || "folder";
+    toast(`Zipping and sending ${folderName}…`);
+    const res = await fetch("/api/transfer-folder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recipient_hash: hashId,
+        path: folderPath,
+        transport: peerTransport(hashId),
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      toast(err.error || "Folder send failed");
+      return false;
+    }
+    const sent = await res.json();
+    if (sent.id) {
+      state.finishedTransferIds.delete(sent.id);
+      updateTransferDock(sent);
+    }
+    toast(`Sending folder ${folderName}.zip…`);
+    if (state.selectedPeer === hashId) loadMessages();
+    renderTransfers();
+    return true;
+  }
+
+  function openFolderSendPicker(hashId, peerName) {
+    state.folderSendTarget = { hashId, peerName };
+    state.folderTarget = "folder-send";
+    browseFolder(null);
+    $("#folder-modal")?.classList.add("open");
   }
 
   async function sendDroppedFiles(files, hashId, peerName) {
@@ -1246,7 +1295,8 @@
     if (peer.transport === "serial" && peer.address) {
       return peer.address;
     }
-    return peer.hash_id.slice(0, 12) + "…";
+    if (isPeerLinked(peer.hash_id)) return "Connected";
+    return "Offline";
   }
 
   function stopNetworkAnimation() {
@@ -2050,13 +2100,25 @@
     return Object.values(state.transfers).some((t) => ACTIVE_TRANSFER_STATES.has(t.state));
   }
 
+  function closeTransferDock() {
+    const dock = $("#transfer-dock");
+    if (!dock) return;
+    dock.classList.add("hidden");
+    delete dock.dataset.transferId;
+  }
+
   function updateTransferDock(data) {
     const dock = $("#transfer-dock");
     if (!dock || !data) return;
+    if (data.id && state.finishedTransferIds.has(data.id)) {
+      if (dock.dataset.transferId === data.id) closeTransferDock();
+      return;
+    }
     if (data.id) state.transfers[data.id] = { ...state.transfers[data.id], ...data };
     const active = ACTIVE_TRANSFER_STATES.has(data.state);
     const done = ["complete", "failed", "cancelled", "rejected"].includes(data.state);
     if (done) {
+      if (data.id) state.finishedTransferIds.add(data.id);
       if (data.state === "cancelled") {
         toast(`Transfer cancelled: ${data.filename || "file"}`, "warning");
       } else if (data.state === "complete") {
@@ -2065,10 +2127,7 @@
       hideTransferDockIfDone(data.id);
       return;
     }
-    if (!active) {
-      syncTransferDockVisibility();
-      return;
-    }
+    if (!active) return;
     dock.classList.remove("hidden");
     const pct = data.size ? Math.min(100, Math.round((data.offset / data.size) * 100)) : 0;
     const speedEl = $("#transfer-dock-speed");
@@ -2081,18 +2140,16 @@
 
   function syncTransferDockVisibility() {
     const dock = $("#transfer-dock");
-    if (!dock) return;
-    const activeList = Object.values(state.transfers).filter((t) =>
-      ACTIVE_TRANSFER_STATES.has(t.state)
-    );
-    if (!activeList.length) {
-      dock.classList.add("hidden");
-      delete dock.dataset.transferId;
+    if (!dock || dock.classList.contains("hidden")) return;
+    const currentId = dock.dataset.transferId;
+    if (!currentId) {
+      closeTransferDock();
       return;
     }
-    const current = activeList[activeList.length - 1];
-    dock.classList.remove("hidden");
-    updateTransferDock(current);
+    const current = state.transfers[currentId];
+    if (!current || !ACTIVE_TRANSFER_STATES.has(current.state) || state.finishedTransferIds.has(currentId)) {
+      closeTransferDock();
+    }
   }
 
   function pruneCompletedTransfers() {
@@ -2105,31 +2162,34 @@
   }
 
   function hideTransferDockIfDone(transferId) {
-    if (transferId && state.transfers[transferId]) {
-      const t = state.transfers[transferId];
-      if (!ACTIVE_TRANSFER_STATES.has(t.state)) {
-        delete state.transfers[transferId];
-      }
+    if (transferId) {
+      delete state.transfers[transferId];
+      state.finishedTransferIds.add(transferId);
     }
     pruneCompletedTransfers();
-    syncTransferDockVisibility();
+    const dock = $("#transfer-dock");
+    if (!transferId || dock?.dataset.transferId === transferId) {
+      closeTransferDock();
+    }
   }
 
   async function pollTransfers() {
     try {
       const res = await fetch("/api/transfers");
       const transfers = await res.json();
-      const activeIds = new Set();
+      const dock = $("#transfer-dock");
+      const dockId = dock?.dataset.transferId;
       transfers.forEach((t) => {
-        if (ACTIVE_TRANSFER_STATES.has(t.state)) {
+        if (t.id === dockId && ACTIVE_TRANSFER_STATES.has(t.state)) {
           state.transfers[t.id] = t;
-          activeIds.add(t.id);
+          updateTransferDock(t);
+        } else if (t.id && state.finishedTransferIds.has(t.id)) {
+          delete state.transfers[t.id];
         }
       });
-      Object.keys(state.transfers).forEach((id) => {
-        if (!activeIds.has(id)) delete state.transfers[id];
-      });
-      syncTransferDockVisibility();
+      if (dockId && !transfers.some((t) => t.id === dockId && ACTIVE_TRANSFER_STATES.has(t.state))) {
+        hideTransferDockIfDone(dockId);
+      }
     } catch (_) { /* ignore */ }
   }
 
@@ -2307,6 +2367,14 @@
     const { hashId, name } = state.contactMenuTarget;
     const peer = state.trusted.find((p) => p.hash_id === hashId);
     switch (btn.dataset.action) {
+      case "copy-hash":
+        closeContactMenu();
+        await copyMessageText(hashId);
+        break;
+      case "send-folder":
+        closeContactMenu();
+        openFolderSendPicker(hashId, name);
+        break;
       case "clear-chat":
         await clearChatHistory(hashId);
         break;
@@ -2343,8 +2411,17 @@
     }
   });
 
-  $("#folder-select")?.addEventListener("click", () => {
-    if (state.folderTarget) $(`#${state.folderTarget}`).value = $("#folder-crumb").textContent;
+  $("#folder-select")?.addEventListener("click", async () => {
+    const path = $("#folder-crumb")?.textContent || "";
+    if (state.folderTarget === "folder-send" && state.folderSendTarget) {
+      const { hashId, peerName } = state.folderSendTarget;
+      state.folderSendTarget = null;
+      state.folderTarget = null;
+      $("#folder-modal").classList.remove("open");
+      await sendFolderToPeer(path, hashId, peerName);
+      return;
+    }
+    if (state.folderTarget) $(`#${state.folderTarget}`).value = path;
     $("#folder-modal").classList.remove("open");
   });
 

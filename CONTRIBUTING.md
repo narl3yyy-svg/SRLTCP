@@ -56,7 +56,7 @@ pre-commit run --all-files
 | `srltcp/transports/` | TCP and serial transports |
 | `srltcp/web/` | HTTPS web UI and static assets |
 | `srltcp/routes/` | REST API handlers |
-| `android/` | Chaquopy Android wrapper |
+| `android/` | python-for-android / Buildozer Android build |
 | `tests/` | Pytest suite |
 
 ## Coding Standards

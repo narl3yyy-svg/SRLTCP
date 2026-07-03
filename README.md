@@ -6,7 +6,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.18
+**Current version:** 0.1.20
 
 ---
 
@@ -27,7 +27,7 @@
 | **System stats** | CPU usage & temperature in the web UI status bar |
 | **Trusted peers** | Trust-before-message security model |
 | **Ping / RTT** | Latency in ms; serial RF link quality % |
-| **Cross-platform** | Linux, macOS, Windows CLI + Android (Chaquopy) |
+| **Cross-platform** | Linux, macOS, Windows CLI + Android (python-for-android) |
 
 ---
 
@@ -221,38 +221,33 @@ pip install -e .
 srltcp web
 ```
 
-### Android (Chaquopy)
+### Android (python-for-android)
 
-See [android/README.md](android/README.md). **Always rsync the Python package before building:**
+See [android/README.md](android/README.md). The APK is built with **Buildozer** + **python-for-android** (Chaquopy was removed in v0.1.20).
+
+**Local build:**
 
 ```bash
-mkdir -p android/app/src/main/python
-rsync -a --delete srltcp/ android/app/src/main/python/srltcp/
-cd android && ./gradlew assembleDebug
+cd android
+buildozer android debug
+adb install -r bin/*debug*.apk
 ```
 
-Sideload `app/build/outputs/apk/debug/SRLTCP-0.1.18.apk` (or latest from [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases)) on arm64 devices.
-
-**CI builds:** Push tag `v0.1.18` (or run the **Build Android APK** workflow manually) to produce a release APK attached to GitHub Releases.
+**CI / releases:** Push tag `v0.1.20` (or run **Build Android APK** workflow) — APK is attached to [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases).
 
 **Troubleshooting:**
 
 | Symptom | What to do |
 |---------|------------|
-| App closes on launch | `adb logcat -s SRLTCP SRLTCPService` — check for Python init errors; serial is auto-disabled on Android |
-| `Python runtime not initialized` | Reinstall APK; re-sync Gradle / Chaquopy in Android Studio |
-| White screen / UI never loads | Wait up to 60s; check logcat for `Server ready on port`; app tries ports 9876–9878 |
-| Notification permission denied (Android 13+) | Grant when prompted, or enable in system settings — required for foreground service |
-| No peers / identities after reinstall | Uninstall clears app data; identities are stored in the app files directory |
-| USB serial not detected | USB-OTG adapter + cable; grant USB permission when device attaches |
-| Shared folder / WAN missing | Rebuild APK after `rsync`; ensure backend is **0.1.18+** (check status bar version) |
-| App won't open / black screen | Install **0.1.18+**; if notification permission denied, UI still loads (server starts in-app) |
-| No discovered peers | Click **Announce TCP** on both devices; or use **Add Contact** with the other peer's hash ID |
-| WAN peer won't connect | Confirm TCP 7825 forwarded on owner; use **WAN only** mode off-LAN; verify hash ID |
+| App closes on launch | `adb logcat -s SRLTCP python:D PythonService:D` |
+| White screen | Wait 10–30s for Python service to bind HTTPS; app tries ports 9876–9878 |
+| No serial on Android | Expected — serial transport is disabled on Android |
+| No peers after reinstall | Uninstall clears app data (identities in app files dir) |
+| No discovered peers | **Announce TCP** on both devices, or **Add Contact** with hash ID |
 
 ```bash
-adb logcat -s SRLTCP SRLTCPService
-adb shell am start -n com.srltcp.app/.MainActivity
+adb logcat -s SRLTCP python:D PythonService:D
+adb shell am start -n org.srltcp.srltcp/org.srltcp.app.MainActivity
 ```
 
 ---

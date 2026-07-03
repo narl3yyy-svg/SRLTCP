@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import tempfile
+import zipfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -72,6 +74,29 @@ async def write_file_chunk(path: Path, offset: int, data: bytes, *, fsync: bool 
 async def fsync_file(path: Path) -> None:
     async with aiofiles.open(path, "rb") as f:
         await aiofiles.os.fsync(f.fileno())
+
+
+def zip_path_to_temp(path: Path) -> Path:
+    """Zip a file or directory to a temporary zip file and return its path."""
+    resolved = path.resolve()
+    if not resolved.exists():
+        raise FileNotFoundError(resolved)
+    fd, tmp_name = tempfile.mkstemp(suffix=".zip", prefix="srltcp-folder-")
+    os.close(fd)
+    zip_path = Path(tmp_name)
+    base_name = resolved.name if resolved.is_dir() else f"{resolved.stem}.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        if resolved.is_file():
+            zf.write(resolved, resolved.name)
+        else:
+            for entry in walk_directory(resolved):
+                if entry.get("type") != "file":
+                    continue
+                rel_file = str(entry.get("name", ""))
+                full = resolved / rel_file
+                arcname = f"{base_name}/{rel_file}" if resolved.is_dir() else rel_file
+                zf.write(full, arcname)
+    return zip_path
 
 
 def walk_directory(root: Path) -> list[dict[str, object]]:

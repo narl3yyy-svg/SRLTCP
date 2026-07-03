@@ -275,8 +275,28 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response(result)
         return web.json_response({"error": "transfer failed"}, status=500)
 
-    async def transfers(_request: web.Request) -> web.Response:
-        return web.json_response(node.backend.list_transfers())
+    async def transfers(request: web.Request) -> web.Response:
+        active_only = request.rel_url.query.get("all") not in ("1", "true", "yes")
+        return web.json_response(node.backend.list_transfers(active_only=active_only))
+
+    async def send_folder(request: web.Request) -> web.Response:
+        data = await request.json()
+        recipient = data.get("recipient_hash", "")
+        path_str = data.get("path", "")
+        transport = data.get("transport", "tcp")
+        if not recipient or not path_str:
+            return web.json_response(
+                {"error": "recipient_hash and path required"}, status=400
+            )
+        if not node.backend.is_trusted(recipient):
+            return web.json_response({"error": "peer not trusted"}, status=403)
+        path = _validate_path(path_str, must_exist=True)
+        if not path or not path.is_dir():
+            return web.json_response({"error": "folder not found"}, status=404)
+        result = await node.backend.send_folder(recipient, path, transport=transport)
+        if result:
+            return web.json_response(result)
+        return web.json_response({"error": "folder transfer failed"}, status=500)
 
     def _mime_for_filename(name: str) -> str:
         ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
@@ -670,6 +690,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_post("/api/announce", announce)
     app.router.add_post("/api/upload", upload_file)
     app.router.add_post("/api/transfer", send_file)
+    app.router.add_post("/api/transfer-folder", send_folder)
     app.router.add_get("/api/transfers", transfers)
     app.router.add_get("/api/transfers/{transfer_id}/file", transfer_file)
     app.router.add_post("/api/transfers/{transfer_id}/cancel", cancel_transfer)

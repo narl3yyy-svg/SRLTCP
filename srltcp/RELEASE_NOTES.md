@@ -1,5 +1,20 @@
 # SRLTCP Release Notes
 
+## v0.1.20 (2026-07-03)
+
+### Android — full rebuild (python-for-android)
+- **Removed Chaquopy** — old `android/` Gradle/Chaquopy project deleted entirely
+- **New P4A + Buildozer stack** — foreground `PythonService` runs `srltcp web`; `MainActivity` WebView loads localhost HTTPS UI
+- **CI** — GitHub Actions builds APK on `main` push and release tags via Buildozer
+
+### Fixes
+- **Transfer dock** — closes when the current transfer completes; no longer reopens for unrelated background transfers
+- **Serial settings panel** — flex layout no longer clipped on the left
+- **Contact list** — hash ID removed from preview; **Copy hash ID** added to right-click menu
+
+### New features
+- **Send folder to peer** — right-click trusted contact → Send folder… (zipped E2EE transfer)
+
 ## v0.1.19 (2026-07-03)
 
 ### Fixes
