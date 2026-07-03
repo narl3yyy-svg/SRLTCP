@@ -11,7 +11,7 @@ def test_settings_defaults(tmp_path: Path) -> None:
     store = SettingsStore(path=tmp_path / "settings.json")
     settings = store.load()
     assert settings.auto_announce is False
-    assert settings.version == "0.1.20"
+    assert settings.version == "0.1.21"
     assert settings.serial_baud == 57600
     assert settings.message_retention_hours == 168
 

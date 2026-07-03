@@ -1,5 +1,10 @@
 # SRLTCP Release Notes
 
+## v0.1.21 (2026-07-03)
+
+### CI
+- **Android APK build** — fixed Ubuntu 24.04 apt packages (`libtinfo6`, `libncurses-dev`); auto-accept SDK license; Rust + pinned Cython for P4A
+
 ## v0.1.20 (2026-07-03)
 
 ### Android — full rebuild (python-for-android)

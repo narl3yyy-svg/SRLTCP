@@ -9,9 +9,13 @@ on:
 permissions:
   contents: write
 
+env:
+  PYTHONFORANDROID_PREREQUISITES_INSTALL_INTERACTIVE: "0"
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -28,12 +32,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git zip unzip openjdk-17-jdk autoconf automake libtool pkg-config \
-            zlib1g-dev libncurses-dev libncurses5-dev libncursesw5-dev libtinfo5 \
-            cmake libffi-dev libssl-dev
+            build-essential git zip unzip autoconf automake libtool pkg-config \
+            zlib1g-dev libncurses-dev libtinfo6 cmake libffi-dev libssl-dev \
+            libltdl-dev gettext autopoint
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Install Buildozer
-        run: pip install buildozer cython
+        run: pip install buildozer "cython==0.29.34" setuptools
 
       - name: Build debug APK with python-for-android
         working-directory: android
@@ -41,6 +50,7 @@ jobs:
 
       - name: Rename APK
         run: |
+          pip install -e .
           VERSION=$(python -c "import srltcp; print(srltcp.__version__)")
           APK=$(find android/bin -maxdepth 1 -name '*.apk' | head -1)
           test -n "$APK"
