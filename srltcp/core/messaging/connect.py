@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING
 
 from srltcp.core.messaging.links import PeerLink
@@ -75,6 +76,10 @@ class ConnectMixin:
             await self.ping_peer(hash_id)
             return True
 
+        if existing and not existing.handshake_complete and not force:
+            await self._initiate_handshake(hash_id)
+            return True
+
         if existing and force:
             await self._teardown_link(hash_id)
 
@@ -133,6 +138,22 @@ class ConnectMixin:
 
         return False
 
+    async def wait_for_handshake(
+        self: MessagingBackend, hash_id: str, *, timeout: float = 10.0
+    ) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            link = self.get_link(hash_id)
+            if link and link.handshake_complete:
+                return True
+            await asyncio.sleep(0.1)
+        return bool(self.get_link(hash_id) and self.get_link(hash_id).handshake_complete)
+
+    def _cancel_reconnect(self: MessagingBackend, hash_id: str) -> None:
+        task = self._reconnect_tasks.pop(hash_id, None)
+        if task and not task.done():
+            task.cancel()
+
     async def disconnect_peer(self: MessagingBackend, hash_id: str) -> bool:
         if not self.get_link(hash_id):
             return False
@@ -171,6 +192,7 @@ class ConnectMixin:
             return
         if link:
             link.peer_name = remote_name
+        self._cancel_reconnect(remote_hash)
         await self.ping_peer(remote_hash)
         if self._on_link_up:
             await self._on_link_up(remote_hash, remote_name)

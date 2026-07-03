@@ -129,6 +129,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         ok = await node.backend.connect_to_peer(
             hash_id, host=host, port=port, transport=transport, force=force
         )
+        if ok:
+            await node.backend.wait_for_handshake(hash_id, timeout=12.0)
         link = node.backend.get_link(hash_id)
         return web.json_response(
             {
@@ -246,6 +248,10 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         if preset not in ("forever", "restart"):
             updated.message_retention_hours = max(1, min(updated.message_retention_hours, 8760))
         updated.web_port = max(1024, min(updated.web_port, 65535))
+        if updated.clock_source not in ("system", "ntp"):
+            updated.clock_source = "system"
+        if updated.ntp_server:
+            updated.ntp_server = str(updated.ntp_server).strip()[:253]
 
         for field_name in ("incoming_files_dir", "shared_folder"):
             val = getattr(updated, field_name)
@@ -308,8 +314,21 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     async def interfaces(_request: web.Request) -> web.Response:
         return web.json_response({"interfaces": list_interfaces()})
 
+    async def cancel_transfer(request: web.Request) -> web.Response:
+        transfer_id = request.match_info.get("transfer_id", "")
+        ok = await node.backend.cancel_transfer(transfer_id)
+        if not ok:
+            return web.json_response({"error": "transfer not found"}, status=404)
+        return web.json_response({"cancelled": True, "id": transfer_id})
+
     async def system(_request: web.Request) -> web.Response:
-        return web.json_response(system_stats(timezone=node.settings.timezone))
+        return web.json_response(
+            system_stats(
+                timezone=node.settings.timezone,
+                clock_source=node.settings.clock_source,
+                ntp_server=node.settings.ntp_server,
+            )
+        )
 
     async def timezones(_request: web.Request) -> web.Response:
         return web.json_response({"timezones": list_timezones()})
@@ -432,6 +451,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_post("/api/transfer", send_file)
     app.router.add_get("/api/transfers", transfers)
     app.router.add_get("/api/transfers/{transfer_id}/file", transfer_file)
+    app.router.add_post("/api/transfers/{transfer_id}/cancel", cancel_transfer)
     app.router.add_post("/api/share/create", create_share)
     app.router.add_get("/api/settings", settings_get)
     app.router.add_post("/api/settings", settings_post)

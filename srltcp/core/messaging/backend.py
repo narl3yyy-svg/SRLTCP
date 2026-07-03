@@ -232,16 +232,32 @@ class MessagingBackend(
             return
         if not self.trusted.is_trusted(hash_id):
             return
+        if self.has_active_transfer_for(hash_id):
+            return
 
         async def _reconnect() -> None:
+            delay = 2.0
             try:
-                await asyncio.sleep(2.0)
-                if self.get_link(hash_id) or not self._running:
-                    return
-                trusted = self.trusted.get(hash_id)
-                transport = trusted.transport if trusted else "tcp"
-                log.info("Auto-reconnecting to %s", hash_id[:8])
-                await self.connect_to_peer(hash_id, transport=transport, force=True)
+                for attempt in range(6):
+                    await asyncio.sleep(delay)
+                    if not self._running:
+                        return
+                    link = self.get_link(hash_id)
+                    if link and link.handshake_complete:
+                        return
+                    if self.has_active_transfer_for(hash_id):
+                        return
+                    trusted = self.trusted.get(hash_id)
+                    transport = trusted.transport if trusted else "tcp"
+                    log.info(
+                        "Auto-reconnecting to %s (attempt %d)",
+                        hash_id[:8],
+                        attempt + 1,
+                    )
+                    await self.connect_to_peer(hash_id, transport=transport, force=False)
+                    if await self.wait_for_handshake(hash_id, timeout=8.0):
+                        return
+                    delay = min(delay * 1.5, 30.0)
             finally:
                 self._reconnect_tasks.pop(hash_id, None)
 
@@ -396,6 +412,10 @@ class MessagingBackend(
             log.warning("Recipient %s not in trusted list", recipient_hash[:8])
             return None
         link = self.get_link(recipient_hash)
+        if not link or not link.handshake_complete:
+            await self.connect_to_peer(recipient_hash, transport=transport, force=False)
+            await self.wait_for_handshake(recipient_hash, timeout=8.0)
+            link = self.get_link(recipient_hash)
         identity = self._identity_for_transport(transport)
         msg = ChatMessage.create(
             sender_hash=identity.hash_id,
@@ -548,6 +568,10 @@ class MessagingBackend(
             log.warning("Recipient %s not trusted for file send", recipient_hash[:8])
             return None
         link = self.get_link(recipient_hash)
+        if not link or not link.handshake_complete:
+            await self.connect_to_peer(recipient_hash, transport=transport, force=False)
+            await self.wait_for_handshake(recipient_hash, timeout=10.0)
+            link = self.get_link(recipient_hash)
         if not link or not link.handshake_complete:
             log.warning("No active link to %s for file send", recipient_hash[:8])
             return None

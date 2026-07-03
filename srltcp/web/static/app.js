@@ -195,9 +195,13 @@
         case "transfer_progress":
         case "transfer_complete":
           state.transfers[data.id] = data;
+          updateTransferDock(data);
           renderTransfers();
           if (state.selectedPeer) updateChatTransfer(data);
-          if (type === "transfer_complete") toast(`Transfer complete: ${data.filename}`);
+          if (type === "transfer_complete") {
+            toast(`Transfer complete: ${data.filename}`);
+            hideTransferDockIfDone(data.id);
+          }
           break;
         case "transport_event":
           logActivity(`Transport: ${data.kind}${data.hash_id ? ` (${data.hash_id.slice(0, 8)})` : ""}`);
@@ -430,7 +434,12 @@
           state.linkMetrics[hashId] = { rtt_ms: data.rtt_ms };
         }
         if (state.selectedPeer === hashId) refreshPeerStatus(hashId);
-      } else if (!data.connected && state.selectedPeer === hashId) {
+      } else if (data.connected) {
+        if (state.selectedPeer === hashId) {
+          updatePeerStatus("Handshaking…");
+          $(".status-dot").className = "status-dot pending";
+        }
+      } else if (state.selectedPeer === hashId) {
         updatePeerStatus("Connection failed");
         toast("Could not connect to peer");
       }
@@ -511,6 +520,8 @@
       const err = await res.json().catch(() => ({}));
       toast(err.error || "File send failed");
     } else {
+      const sent = await res.json();
+      if (sent.id) updateTransferDock(sent);
       toast(`Sending ${file.name}…`);
       loadMessages();
     }
@@ -575,8 +586,15 @@
     if ($("#set-show-clock")) {
       $("#set-show-clock").checked = settings.show_clock !== false;
     }
+    if ($("#set-clock-source")) {
+      $("#set-clock-source").value = settings.clock_source || "system";
+    }
+    if ($("#set-ntp-server")) {
+      $("#set-ntp-server").value = settings.ntp_server || "pool.ntp.org";
+    }
+    toggleNtpField();
     applyClockVisibility();
-    if ($("#drawer").classList.contains("open") || !state.interfacesLoaded) {
+    if (!$("#settings-window")?.classList.contains("hidden") || !state.interfacesLoaded) {
       loadInterfaces($("#set-lan-ip"), settings.lan_ip || "");
       state.interfacesLoaded = true;
     }
@@ -750,7 +768,7 @@
     if (data.version) $("#stat-version").textContent = `v${data.version}`;
 
     if (state.settings && Object.keys(state.settings).length) {
-      if ($("#drawer").classList.contains("open") || state.settingsFormDirty) {
+      if (!$("#settings-window")?.classList.contains("hidden") || state.settingsFormDirty) {
         fillSettingsForm(state.settings);
       }
       showSetupIfNeeded(state.settings);
@@ -986,7 +1004,10 @@
       && (m.sender_hash === state.selectedPeer || m.recipient_hash === state.selectedPeer);
 
     if (!forPeer) {
-      if (!isOutgoing(m.sender_hash)) toast(`New message from peer`);
+      if (!isOutgoing(m.sender_hash)) {
+        const sender = peerByHash(m.sender_hash);
+        toast(`New message from ${sender?.name || m.sender_hash?.slice(0, 8) || "peer"}`);
+      }
       return;
     }
 
@@ -1034,18 +1055,70 @@
     el.style.height = Math.min(el.scrollHeight, 120) + "px";
   }
 
-  function openDrawer() {
-    $("#drawer").classList.add("open");
-    $("#drawer").setAttribute("aria-hidden", "false");
+  function toggleNtpField() {
+    const src = $("#set-clock-source")?.value || "system";
+    $("#ntp-server-field")?.classList.toggle("hidden", src !== "ntp");
+  }
+
+  function switchSettingsTab(tab) {
+    document.querySelectorAll(".settings-tab").forEach((t) => {
+      t.classList.toggle("active", t.dataset.tab === tab);
+    });
+    document.querySelectorAll(".settings-panel").forEach((p) => {
+      p.classList.toggle("active", p.dataset.panel === tab);
+    });
+  }
+
+  function openSettings() {
+    $("#settings-window").classList.remove("hidden");
+    $("#settings-window").setAttribute("aria-hidden", "false");
     state.settingsFormDirty = true;
     const s = state.settings || {};
     fillSettingsForm(s);
     loadSerialSettings(s.serial_port || "", s.serial_baud || 57600);
   }
 
-  function closeDrawer() {
-    $("#drawer").classList.remove("open");
-    $("#drawer").setAttribute("aria-hidden", "true");
+  function closeSettings() {
+    $("#settings-window").classList.add("hidden");
+    $("#settings-window").setAttribute("aria-hidden", "true");
+    state.settingsFormDirty = false;
+  }
+
+  function updateTransferDock(data) {
+    const dock = $("#transfer-dock");
+    if (!dock || !data) return;
+    const active = ["transferring", "accepted", "offered"].includes(data.state);
+    if (!active) {
+      hideTransferDockIfDone(data.id);
+      return;
+    }
+    dock.classList.remove("hidden");
+    const pct = data.size ? Math.min(100, Math.round((data.offset / data.size) * 100)) : 0;
+    const speed = data.speed_mbps ? `${Number(data.speed_mbps).toFixed(2)} MB/s` : "";
+    $("#transfer-dock-title").textContent = data.filename || "Transfer";
+    $("#transfer-dock-meta").textContent = `${pct}% · ${formatBytes(data.offset)} / ${formatBytes(data.size)}${speed ? ` · ${speed}` : ""}`;
+    $("#transfer-dock-fill").style.width = `${pct}%`;
+    dock.dataset.transferId = data.id;
+  }
+
+  function hideTransferDockIfDone(transferId) {
+    const dock = $("#transfer-dock");
+    if (!dock || dock.classList.contains("hidden")) return;
+    if (!transferId || dock.dataset.transferId === transferId) {
+      dock.classList.add("hidden");
+      delete dock.dataset.transferId;
+    }
+  }
+
+  async function cancelActiveTransfer() {
+    const dock = $("#transfer-dock");
+    const id = dock?.dataset.transferId;
+    if (!id) return;
+    await fetch(`/api/transfers/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+    toast("Transfer cancelled");
+    hideTransferDockIfDone(id);
+    renderTransfers();
+    loadMessages();
   }
 
   function closeSidebarMobile() {
@@ -1056,9 +1129,14 @@
   $("#btn-announce-tcp")?.addEventListener("click", () => announceTransport("tcp"));
   $("#btn-announce-serial")?.addEventListener("click", () => announceTransport("serial"));
 
-  $("#btn-settings").addEventListener("click", openDrawer);
-  $("#btn-close-drawer").addEventListener("click", closeDrawer);
-  $("#drawer-overlay").addEventListener("click", closeDrawer);
+  $("#btn-settings").addEventListener("click", openSettings);
+  $("#btn-close-settings").addEventListener("click", closeSettings);
+  $("#settings-window-overlay").addEventListener("click", closeSettings);
+  document.querySelectorAll(".settings-tab").forEach((tab) => {
+    tab.addEventListener("click", () => switchSettingsTab(tab.dataset.tab));
+  });
+  $("#set-clock-source")?.addEventListener("change", toggleNtpField);
+  $("#transfer-dock-cancel")?.addEventListener("click", cancelActiveTransfer);
 
   $("#btn-back").addEventListener("click", () => {
     $("#chat-active").classList.add("hidden");
@@ -1093,7 +1171,7 @@
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeDrawer();
+    if (e.key === "Escape") closeSettings();
   });
 
   function settingsPayload(prefix) {
@@ -1110,6 +1188,8 @@
       serial_baud: parseInt($("#set-serial-baud")?.value || "57600", 10),
       timezone: $("#set-timezone")?.value || "",
       show_clock: $("#set-show-clock")?.checked !== false,
+      clock_source: $("#set-clock-source")?.value || "system",
+      ntp_server: $("#set-ntp-server")?.value.trim() || "pool.ntp.org",
     };
   }
 

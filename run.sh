@@ -15,4 +15,5 @@ source .venv/bin/activate
 
 pip install -q -e ".[dev]" 2>/dev/null || pip install -q -e .
 
+# Usage: ./run.sh web [--debug] [--port 9876]
 exec python -m srltcp "$@"

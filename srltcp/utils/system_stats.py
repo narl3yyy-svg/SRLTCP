@@ -80,7 +80,36 @@ def cpu_temperature_c() -> float | None:
     return round(sum(temps) / len(temps), 1)
 
 
-def local_time_info(timezone: str = "") -> dict[str, Any]:
+def _query_ntp(server: str, *, timeout: float = 2.0) -> datetime | None:
+    """Fetch UTC time from an NTP server (UDP port 123)."""
+    import socket
+    import struct
+
+    host = (server or "pool.ntp.org").strip()
+    if not host:
+        return None
+    try:
+        packet = b"\x1b" + 47 * b"\0"
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(timeout)
+            sock.sendto(packet, (host, 123))
+            data, _ = sock.recvfrom(96)
+        if len(data) < 48:
+            return None
+        seconds = struct.unpack("!I", data[40:44])[0]
+        fraction = struct.unpack("!I", data[44:48])[0]
+        ntp = seconds + fraction / 2**32 - 2208988800
+        return datetime.fromtimestamp(ntp, tz=ZoneInfo("UTC"))
+    except Exception:
+        return None
+
+
+def local_time_info(
+    timezone: str = "",
+    *,
+    clock_source: str = "system",
+    ntp_server: str = "pool.ntp.org",
+) -> dict[str, Any]:
     """Return local clock info for the status bar and settings."""
     tz_name = timezone.strip()
     if not tz_name:
@@ -90,9 +119,20 @@ def local_time_info(timezone: str = "") -> dict[str, Any]:
     except Exception:
         tz = datetime.now().astimezone().tzinfo or ZoneInfo("UTC")
         tz_name = str(tz)
-    now = datetime.now(tz)
+
+    source = (clock_source or "system").lower()
+    now_utc: datetime | None = None
+    if source == "ntp":
+        now_utc = _query_ntp(ntp_server)
+    if now_utc is None:
+        now = datetime.now(tz)
+        source = "system"
+    else:
+        now = now_utc.astimezone(tz)
     return {
         "timezone": tz_name,
+        "clock_source": source,
+        "ntp_server": ntp_server if source == "ntp" else "",
         "local_time": now.strftime("%H:%M:%S"),
         "local_date": now.strftime("%Y-%m-%d"),
         "utc_offset": now.strftime("%z"),
@@ -108,9 +148,16 @@ def list_timezones() -> list[str]:
         return ["UTC"]
 
 
-def system_stats(*, timezone: str = "") -> dict[str, Any]:
+def system_stats(
+    *,
+    timezone: str = "",
+    clock_source: str = "system",
+    ntp_server: str = "pool.ntp.org",
+) -> dict[str, Any]:
     return {
         "cpu_percent": cpu_usage_percent(),
         "cpu_temp_c": cpu_temperature_c(),
-        **local_time_info(timezone),
+        **local_time_info(
+            timezone, clock_source=clock_source, ntp_server=ntp_server
+        ),
     }

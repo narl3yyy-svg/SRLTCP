@@ -6,7 +6,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.9
+**Current version:** 0.1.10
 
 ---
 
@@ -185,6 +185,8 @@ Change port from CLI: `./run.sh web --port 9999`
 git clone https://github.com/narl3yyy-svg/SRLTCP.git
 cd SRLTCP
 ./run.sh web
+# Verbose backend logs:
+./run.sh web --debug
 ```
 
 Open **https://127.0.0.1:9876** in your browser (self-signed cert — accept once for localhost).
@@ -351,6 +353,11 @@ pytest tests/ -v                # unit tests only
 ## Changelog
 
 See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
+
+### v0.1.10
+
+- Fixed DELETE contact (405), file transfer disconnects, reconnect backoff, serial handshake wait
+- Tabbed settings window, transfer progress dock with cancel, `--debug` flag, NTP clock source
 
 ### v0.1.9
 

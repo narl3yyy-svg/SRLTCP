@@ -107,26 +107,29 @@
       </div>
     </main>
 
-    <!-- Settings drawer -->
-    <aside class="drawer" id="drawer" aria-hidden="true">
-      <div class="drawer-overlay" id="drawer-overlay"></div>
-      <div class="drawer-panel">
-        <header class="drawer-header">
+    <!-- Settings window -->
+    <div class="settings-window hidden" id="settings-window" aria-hidden="true">
+      <div class="settings-window-overlay" id="settings-window-overlay"></div>
+      <div class="settings-window-panel">
+        <header class="settings-window-header">
           <h3>Settings</h3>
-          <button class="icon-btn" id="btn-close-drawer" aria-label="Close">
+          <button class="icon-btn" id="btn-close-settings" aria-label="Close">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
         </header>
-        <div class="drawer-body">
-          <form id="settings-form" class="settings-form">
+        <nav class="settings-tabs" role="tablist">
+          <button type="button" class="settings-tab active" data-tab="general">General</button>
+          <button type="button" class="settings-tab" data-tab="network">Network</button>
+          <button type="button" class="settings-tab" data-tab="serial">Serial</button>
+          <button type="button" class="settings-tab" data-tab="folders">Folders</button>
+          <button type="button" class="settings-tab" data-tab="clock">Clock</button>
+          <button type="button" class="settings-tab" data-tab="advanced">Advanced</button>
+        </nav>
+        <form id="settings-form" class="settings-window-body">
+          <div class="settings-panel active" data-panel="general">
             <label class="field">
               <span>Display name</span>
               <input type="text" id="set-name" maxlength="64" required />
-            </label>
-            <label class="field">
-              <span>Web UI port (HTTPS)</span>
-              <input type="number" id="set-web-port" min="1024" max="65535" />
-              <small>Restart required after changing port</small>
             </label>
             <label class="field">
               <span>Keep messages</span>
@@ -139,6 +142,39 @@
                 <option value="restart">Until restart</option>
               </select>
             </label>
+          </div>
+          <div class="settings-panel" data-panel="network">
+            <label class="field">
+              <span>Web UI port (HTTPS)</span>
+              <input type="number" id="set-web-port" min="1024" max="65535" />
+              <small>Restart required after changing port</small>
+            </label>
+            <label class="field">
+              <span>Network interface / IP</span>
+              <select id="set-lan-ip"></select>
+            </label>
+            <label class="field checkbox-field">
+              <input type="checkbox" id="set-auto-announce" />
+              <span>Auto-announce on startup</span>
+            </label>
+            <button type="button" class="action-btn" id="btn-network-viz">Network map</button>
+          </div>
+          <div class="settings-panel" data-panel="serial">
+            <label class="field checkbox-field">
+              <input type="checkbox" id="set-enable-serial" />
+              <span>Enable serial transport</span>
+            </label>
+            <label class="field">
+              <span>Serial port</span>
+              <select id="set-serial-port"></select>
+              <small>Plug in USB device, then reopen settings</small>
+            </label>
+            <label class="field">
+              <span>Baud rate</span>
+              <select id="set-serial-baud"></select>
+            </label>
+          </div>
+          <div class="settings-panel" data-panel="folders">
             <label class="field">
               <span>Incoming files folder</span>
               <div class="folder-row">
@@ -153,55 +189,59 @@
                 <button type="button" class="action-btn small" data-browse="set-shared">Browse</button>
               </div>
             </label>
-            <h4 class="drawer-subhead">Serial (USB / RF)</h4>
+          </div>
+          <div class="settings-panel" data-panel="clock">
             <label class="field checkbox-field">
-              <input type="checkbox" id="set-enable-serial" />
-              <span>Enable serial transport</span>
-            </label>
-            <label class="field">
-              <span>Serial port</span>
-              <select id="set-serial-port"></select>
-              <small>Plug in USB device, then refresh settings</small>
-            </label>
-            <label class="field">
-              <span>Baud rate</span>
-              <select id="set-serial-baud"></select>
-            </label>
-            <label class="field">
-              <span>Network interface / IP</span>
-              <select id="set-lan-ip"></select>
+              <input type="checkbox" id="set-show-clock" checked />
+              <span>Show clock at top of sidebar</span>
             </label>
             <label class="field">
               <span>Timezone</span>
               <select id="set-timezone"></select>
             </label>
-            <label class="field checkbox-field">
-              <input type="checkbox" id="set-show-clock" checked />
-              <span>Show clock in status bar</span>
+            <label class="field">
+              <span>Clock source</span>
+              <select id="set-clock-source">
+                <option value="system">This machine (local)</option>
+                <option value="ntp">NTP server (online)</option>
+              </select>
             </label>
-            <label class="field checkbox-field">
-              <input type="checkbox" id="set-auto-announce" />
-              <span>Auto-announce on startup</span>
+            <label class="field" id="ntp-server-field">
+              <span>NTP server</span>
+              <input type="text" id="set-ntp-server" placeholder="pool.ntp.org" />
+              <small>Used when clock source is NTP</small>
             </label>
-            <button type="button" class="action-btn" id="btn-network-viz">Network map</button>
+          </div>
+          <div class="settings-panel" data-panel="advanced">
+            <section class="drawer-section">
+              <h4>Your Identities</h4>
+              <div id="identities"></div>
+            </section>
+            <section class="drawer-section">
+              <h4>Active Transfers</h4>
+              <div id="transfers"></div>
+            </section>
+            <section class="drawer-section">
+              <h4>Activity</h4>
+              <div class="activity-log" id="activity-log"></div>
+            </section>
+            <button type="button" class="action-btn danger-btn" id="btn-restart">Restart SRLTCP</button>
+          </div>
+          <footer class="settings-window-footer">
             <button type="submit" class="action-btn save-btn">Save settings</button>
-            <button type="button" class="action-btn danger-btn" id="btn-restart">Restart</button>
-          </form>
-          <section class="drawer-section">
-            <h4>Your Identities</h4>
-            <div id="identities"></div>
-          </section>
-          <section class="drawer-section">
-            <h4>Active Transfers</h4>
-            <div id="transfers"></div>
-          </section>
-          <section class="drawer-section">
-            <h4>Activity</h4>
-            <div class="activity-log" id="activity-log"></div>
-          </section>
-        </div>
+          </footer>
+        </form>
       </div>
-    </aside>
+    </div>
+
+    <div class="transfer-dock hidden" id="transfer-dock" aria-live="polite">
+      <div class="transfer-dock-main">
+        <div class="transfer-dock-title" id="transfer-dock-title">Transferring…</div>
+        <div class="transfer-dock-meta" id="transfer-dock-meta">0% · 0 MB/s</div>
+        <div class="progress-track transfer-dock-progress"><div class="progress-fill" id="transfer-dock-fill"></div></div>
+      </div>
+      <button type="button" class="action-btn small danger" id="transfer-dock-cancel">Cancel</button>
+    </div>
 
     <!-- First-run setup -->
     <div class="setup-overlay hidden" id="setup-overlay">
@@ -267,7 +307,7 @@
         <span class="stat-value">—</span>
       </div>
       <div class="stat-item hidden" id="stat-clock" aria-hidden="true"></div>
-      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.9</div>
+      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.10</div>
     </footer>
 
     <div class="modal-overlay" id="folder-modal">

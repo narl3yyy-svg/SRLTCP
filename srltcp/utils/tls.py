@@ -14,7 +14,7 @@ from cryptography.x509.oid import NameOID
 
 from srltcp.utils.files import ensure_dir
 from srltcp.utils.logging import get_logger
-from srltcp.utils.platform import data_dir
+from srltcp.utils.platform import data_dir, is_android
 
 log = get_logger(__name__)
 
@@ -30,7 +30,8 @@ def ensure_localhost_cert() -> tuple[Path, Path]:
         return CERT_FILE, KEY_FILE
 
     log.info("Generating localhost TLS certificate in %s", CERT_DIR)
-    key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
+    key_bits = 2048 if is_android() else 4096
+    key = rsa.generate_private_key(public_exponent=65537, key_size=key_bits)
     subject = issuer = x509.Name(
         [
             x509.NameAttribute(NameOID.COMMON_NAME, "SRLTCP Localhost"),

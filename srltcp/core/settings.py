@@ -44,7 +44,9 @@ class AppSettings:
     bind_interface: str = ""
     timezone: str = ""
     show_clock: bool = True
-    version: str = "0.1.9"
+    clock_source: str = "system"  # system | ntp
+    ntp_server: str = "pool.ntp.org"
+    version: str = "0.1.10"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

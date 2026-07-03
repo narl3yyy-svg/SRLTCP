@@ -32,11 +32,13 @@ async def security_middleware(request: web.Request, handler):  # type: ignore[no
     if host not in ALLOWED_HOSTS:
         raise web.HTTPForbidden(text="SRLTCP web UI is localhost-only")
 
-    if request.method not in ("GET", "HEAD", "OPTIONS", "POST"):
-        raise web.HTTPMethodNotAllowed(request.method, ["GET", "HEAD", "OPTIONS", "POST"])
+    if request.method not in ("GET", "HEAD", "OPTIONS", "POST", "DELETE", "PATCH"):
+        raise web.HTTPMethodNotAllowed(
+            request.method, ["GET", "HEAD", "OPTIONS", "POST", "DELETE", "PATCH"]
+        )
 
     # Origin check for state-changing requests
-    if request.method == "POST":
+    if request.method in ("POST", "DELETE", "PATCH"):
         origin = request.headers.get("Origin", "")
         if origin:
             origin_host = origin.split("//")[-1].split(":")[0].lower()

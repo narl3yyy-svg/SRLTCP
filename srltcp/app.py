@@ -43,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--no-tcp", action="store_true", help="Disable TCP transport")
     web.add_argument("--relay", action="store_true", help="Enable relay/router mode")
     web.add_argument("--log-level", default="INFO", help="Log level")
+    web.add_argument(
+        "--debug",
+        action="store_true",
+        help="Verbose debug logging (all backend activity)",
+    )
 
     relay = sub.add_parser("relay", help="Start headless relay server")
     relay.add_argument("--name", default="srltcp-relay", help="Relay name")
@@ -177,12 +182,15 @@ def get_android_web_port() -> int:
 
 def start_android_server() -> None:
     """Entry point for Chaquopy Android app (background thread)."""
+    import os
     import threading
+
+    os.environ["SRLTCP_ANDROID"] = "1"
 
     def _run() -> None:
         import sys
 
-        sys.argv = ["srltcp", "web", "--log-level", "INFO"]
+        sys.argv = ["srltcp", "web", "--log-level", "DEBUG", "--debug"]
         try:
             main()
         except Exception:
@@ -194,7 +202,10 @@ def start_android_server() -> None:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    setup_logging(getattr(args, "log_level", "INFO"))
+    setup_logging(
+        getattr(args, "log_level", "INFO"),
+        debug=bool(getattr(args, "debug", False)),
+    )
 
     if args.command == "web":
         asyncio.run(run_web(args))

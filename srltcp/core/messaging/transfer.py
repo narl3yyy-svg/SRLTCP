@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import zstandard as zstd
 
-from srltcp.core.messaging.constants import CHUNK_SIZE, COMPRESS_THRESHOLD
+from srltcp.core.messaging.constants import CHUNK_SEND_DELAY, CHUNK_SIZE, COMPRESS_THRESHOLD
 from srltcp.core.messaging.models import FileTransfer, TransferState
 from srltcp.core.protocol.messages import (
     Flags,
@@ -164,6 +164,12 @@ class TransferMixin:
             async with aiofiles.open(transfer.path, "rb") as f:
                 await f.seek(transfer.offset)
                 while transfer.offset < transfer.size:
+                    if transfer.state == TransferState.CANCELLED:
+                        return
+                    link = self.get_link(hash_id)
+                    if not link or not link.handshake_complete:
+                        transfer.state = TransferState.FAILED
+                        return
                     chunk = await f.read(CHUNK_SIZE)
                     if not chunk:
                         break
@@ -186,7 +192,15 @@ class TransferMixin:
                     if self._on_transfer_progress:
                         await self._on_transfer_progress(transfer.to_dict())
                     await self._update_file_message(transfer.to_dict())
+                    if CHUNK_SEND_DELAY > 0:
+                        await asyncio.sleep(CHUNK_SEND_DELAY)
 
+            if transfer.state == TransferState.CANCELLED:
+                return
+            link = self.get_link(hash_id)
+            if not link or not link.handshake_complete:
+                transfer.state = TransferState.FAILED
+                return
             complete_body = encode_payload(
                 {"transfer_id": transfer.id, "sha256": transfer.sha256}
             )
@@ -197,9 +211,19 @@ class TransferMixin:
             if self._on_transfer_complete:
                 await self._on_transfer_complete(transfer.to_dict())
             await self._update_file_message(transfer.to_dict())
+        except asyncio.CancelledError:
+            transfer.state = TransferState.CANCELLED
+            if self._on_transfer_progress:
+                await self._on_transfer_progress(transfer.to_dict())
+            raise
         except Exception as exc:
-            log.exception("Transfer failed: %s", exc)
+            log.warning("Transfer failed for %s: %s", transfer.filename, exc)
             transfer.state = TransferState.FAILED
+            if self._on_transfer_progress:
+                await self._on_transfer_progress(transfer.to_dict())
+            await self._update_file_message(transfer.to_dict())
+        finally:
+            self._transfer_tasks.pop(transfer.id, None)
 
     async def _handle_file_chunk(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         link = self.get_link(hash_id)
@@ -264,3 +288,30 @@ class TransferMixin:
 
     def list_transfers(self: MessagingBackend) -> list[dict]:
         return [t.to_dict() for t in self._transfers.values()]
+
+    async def cancel_transfer(self: MessagingBackend, transfer_id: str) -> bool:
+        transfer = self._transfers.get(transfer_id)
+        if not transfer:
+            return False
+        transfer.state = TransferState.CANCELLED
+        task = self._transfer_tasks.pop(transfer_id, None)
+        if task and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        if self._on_transfer_progress:
+            await self._on_transfer_progress(transfer.to_dict())
+        await self._update_file_message(transfer.to_dict())
+        return True
+
+    def has_active_transfer_for(self: MessagingBackend, hash_id: str) -> bool:
+        for transfer in self._transfers.values():
+            if transfer.state not in (
+                TransferState.TRANSFERRING,
+                TransferState.ACCEPTED,
+                TransferState.OFFERED,
+            ):
+                continue
+            if transfer.recipient_hash == hash_id or transfer.sender_hash == hash_id:
+                return True
+        return False

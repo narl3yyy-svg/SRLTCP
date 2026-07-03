@@ -19,6 +19,7 @@ class TransferState(StrEnum):
     REJECTED = "rejected"
     FAILED = "failed"
     PAUSED = "paused"
+    CANCELLED = "cancelled"
 
 
 @dataclass

@@ -1,5 +1,22 @@
 # SRLTCP Release Notes
 
+## v0.1.10 (2026-07-03)
+
+### Fixes
+- **Delete contact 405** — security middleware now allows `DELETE` and `PATCH` (trusted contact removal works)
+- **File transfer stability** — chunk size reduced to 256 KiB with flow control; fewer disconnects on large files/images
+- **Reconnect storm** — exponential backoff, skip during active transfers, cancel on successful handshake
+- **Serial handshake** — retry handshake on incomplete links; connect API waits up to 12s for handshake
+- **Stale send after reconnect** — messages/files auto-reconnect before send when link is down
+- **Android APK** — loading screen, crash handler, 2048-bit TLS on device, longer server wait; `SRLTCP-0.1.10.apk`
+
+### New
+- **`./run.sh web --debug`** — verbose backend logging on Arch/Ubuntu/Windows
+- **Settings window** — full-screen tabbed settings (General, Network, Serial, Folders, Clock, Advanced)
+- **Transfer dock** — bottom progress bar with cancel on sender and receiver
+- **Clock source** — sync from this machine or NTP server (configurable in settings)
+- **`POST /api/transfers/{id}/cancel`** — cancel active file transfer
+
 ## v0.1.9 (2026-07-03)
 
 ### Fixes
