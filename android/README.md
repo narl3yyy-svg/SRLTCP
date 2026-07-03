@@ -11,12 +11,20 @@ The Android APK wraps the same `srltcp/` Python package via [Chaquopy](https://c
 ## Setup
 
 1. Open `android/` in Android Studio.
-2. Ensure `settings.gradle` points `srcDir` to the repo-root `srltcp/` package.
-3. Sync Gradle — Chaquopy installs Python 3.12 and pip dependencies from `pyproject.toml`.
+2. Stage the Python package into Chaquopy's default source dir:
+
+```bash
+mkdir -p android/app/src/main/python
+rsync -a --delete srltcp/ android/app/src/main/python/srltcp/
+```
+
+3. Sync Gradle — Chaquopy installs Python 3.12 and pip dependencies.
 
 ## Build
 
 ```bash
+mkdir -p android/app/src/main/python
+rsync -a --delete srltcp/ android/app/src/main/python/srltcp/
 cd android
 ./gradlew assembleDebug
 ```

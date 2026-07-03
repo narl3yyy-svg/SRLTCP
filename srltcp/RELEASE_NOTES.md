@@ -1,5 +1,10 @@
 # SRLTCP Release Notes
 
+## v0.1.6 (2026-07-03)
+
+### Fixes
+- **APK build** — stage `srltcp/` into `src/main/python` (avoids Gradle task validation failure from scanning `android/build`)
+
 ## v0.1.5 (2026-07-03)
 
 ### Fixes

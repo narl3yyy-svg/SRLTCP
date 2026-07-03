@@ -40,6 +40,11 @@ jobs:
         working-directory: android
         run: gradle wrapper --gradle-version 8.7
 
+      - name: Stage Python sources for Chaquopy
+        run: |
+          mkdir -p android/app/src/main/python
+          rsync -a --delete srltcp/ android/app/src/main/python/srltcp/
+
       - name: Build debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
