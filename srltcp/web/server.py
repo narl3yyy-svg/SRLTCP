@@ -12,6 +12,7 @@ from srltcp.routes.api import register_api_routes
 from srltcp.routes.share import register_share_routes
 from srltcp.routes.ws import broadcast_event, register_ws_routes
 from srltcp.utils.logging import get_logger
+from srltcp.utils.ports import start_web_site
 
 log = get_logger(__name__)
 
@@ -70,11 +71,10 @@ async def run_web_server(
     node: SRLTCPNode,
     host: str = "127.0.0.1",
     port: int = WEB_PORT,
-) -> web.AppRunner:
+) -> tuple[web.AppRunner, int]:
     app = create_app(node)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, host, port)
-    await site.start()
-    log.info("Web UI at http://%s:%d", host, port)
-    return runner
+    _site, bound_port = await start_web_site(runner, host, port)
+    log.info("Web UI at http://%s:%d", host, bound_port)
+    return runner, bound_port

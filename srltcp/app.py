@@ -74,7 +74,7 @@ async def run_web(args: argparse.Namespace) -> None:
     )
     node = SRLTCPNode(config)
     await node.start()
-    runner = await run_web_server(node, host=args.host, port=args.port)
+    runner, web_port = await run_web_server(node, host=args.host, port=args.port)
 
     stop_event = asyncio.Event()
 
@@ -86,7 +86,7 @@ async def run_web(args: argparse.Namespace) -> None:
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, _signal_handler)
 
-    log.info("SRLTCP running — open http://%s:%d", args.host, args.port)
+    log.info("SRLTCP running — open http://%s:%d", args.host, web_port)
     try:
         await stop_event.wait()
     except KeyboardInterrupt:

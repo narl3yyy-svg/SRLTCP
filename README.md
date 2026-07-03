@@ -1,7 +1,7 @@
 # SRLTCP
 
 [![Checks](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/checks.yml/badge.svg)](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/checks.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
@@ -330,7 +330,7 @@ pytest tests/ -v                # unit tests only
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GPL v3 — see [LICENSE](LICENSE).
 
 ## Acknowledgments
 

@@ -131,6 +131,7 @@ class MessagingBackend(
 
         if self.tcp_transport:
             await self.tcp_transport.start()
+            self.config.tcp_port = self.tcp_transport.port
         if self.serial_transport:
             try:
                 await self.serial_transport.start()

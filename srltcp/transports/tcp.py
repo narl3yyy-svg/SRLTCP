@@ -8,6 +8,7 @@ from typing import Any
 
 from srltcp.transports.base import Connection, Transport, TransportEvent, TransportPeer
 from srltcp.utils.logging import get_logger
+from srltcp.utils.ports import bind_udp_port, start_tcp_server
 
 log = get_logger(__name__)
 
@@ -57,14 +58,16 @@ class TCPTransport(Transport):
             await self._emit_event(TransportEvent(kind="connected", peer=peer))
             log.info("TCP peer connected: %s (%s)", peer_id[:8], address)
 
-        self._server = await asyncio.start_server(_handle, self.host, self.port)
+        self._server, self.port = await start_tcp_server(_handle, self.host, self.port)
         log.info("TCP transport listening on %s:%d", self.host, self.port)
 
         loop = asyncio.get_running_loop()
         self._discovery_protocol = _DiscoveryProtocol(self)
-        self._discovery_transport, _ = await loop.create_datagram_endpoint(
+        self._discovery_transport, self.discovery_port = await bind_udp_port(
+            loop,
             lambda: self._discovery_protocol,
-            local_addr=("0.0.0.0", self.discovery_port),
+            "0.0.0.0",
+            self.discovery_port,
         )
         log.info("UDP discovery on port %d", self.discovery_port)
 
