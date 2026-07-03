@@ -1,5 +1,16 @@
 # SRLTCP Release Notes
 
+## v0.1.12 (2026-07-03)
+
+### Fixes
+- **File transfers** — compressed chunk flag honored on receive; serial uses 8 KiB chunks; unique incoming paths
+- **Transfer dock** — slim progress bar + MB/s only; auto-hides on complete/cancel/fail
+- **Images in chat** — preview on sender and receiver during/after transfer; **Save as…** download link
+- **Chat header** — TCP / SERIAL badge on active peer connection
+- **Copy/Delete** — actions anchored on the message bubble (not opposite side)
+- **Trusted contacts** — right-click opens contact menu (⋮ button removed)
+- **Android APK** — foreground `SRLTCPService`, server-ready signal before WebView load
+
 ## v0.1.11 (2026-07-03)
 
 ### Fixes

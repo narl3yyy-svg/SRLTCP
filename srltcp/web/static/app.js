@@ -122,6 +122,18 @@
     return !!(link && link.handshake_complete);
   }
 
+  function activeLinkForPeer(hashId) {
+    return (state._lastLinks || []).find(
+      (l) => l.hash_id === hashId && l.handshake_complete
+    );
+  }
+
+  function activeLinkTransport(hashId) {
+    const link = activeLinkForPeer(hashId);
+    if (link?.transport) return link.transport;
+    return peerTransport(hashId);
+  }
+
   function syncLinksFromStatus(links) {
     state._lastLinks = links || [];
     (links || []).forEach((l) => {
@@ -174,6 +186,20 @@
           break;
         case "link_up":
           state.links[data.hash_id] = true;
+          if (data.transport) {
+            state._lastLinks = state._lastLinks || [];
+            const existing = state._lastLinks.find((l) => l.hash_id === data.hash_id);
+            if (existing) {
+              existing.handshake_complete = true;
+              existing.transport = data.transport;
+            } else {
+              state._lastLinks.push({
+                hash_id: data.hash_id,
+                handshake_complete: true,
+                transport: data.transport,
+              });
+            }
+          }
           loadPeers();
           if (state.selectedPeer === data.hash_id) {
             refreshPeerStatus(data.hash_id);
@@ -205,11 +231,10 @@
         case "transfer_complete":
           state.transfers[data.id] = data;
           updateTransferDock(data);
-          renderTransfers();
           if (state.selectedPeer) updateChatTransfer(data);
           if (type === "transfer_complete") {
-            toast(`Transfer complete: ${data.filename}`);
-            hideTransferDockIfDone(data.id);
+            toast(`Transfer complete: ${data.filename || "file"}`);
+            setTimeout(() => hideTransferDockIfDone(data.id), 600);
           }
           break;
         case "transport_event":
@@ -398,9 +423,25 @@
     return null;
   }
 
+  function updateChatTransportBadge(hashId, linked) {
+    const badge = $("#chat-peer-transport");
+    if (!badge) return;
+    if (!linked || !hashId) {
+      badge.classList.add("hidden");
+      badge.setAttribute("aria-hidden", "true");
+      return;
+    }
+    const transport = activeLinkTransport(hashId);
+    const label = transport === "serial" ? "SERIAL" : "TCP";
+    badge.textContent = label;
+    badge.className = `transport-badge header-badge ${transport}`;
+    badge.removeAttribute("aria-hidden");
+  }
+
   function refreshPeerStatus(hashId) {
     const linked = isPeerLinked(hashId);
     const latency = formatLatency(hashId);
+    updateChatTransportBadge(hashId, linked);
     if (linked && latency) {
       updatePeerStatus(`Encrypted · Online · ${latency}`);
       $(".status-dot").className = "status-dot online";
@@ -933,9 +974,6 @@
         const meta = `${transportBadge(p.transport)}<span class="contact-endpoint">${escapeHtml(endpoint)}${escapeHtml(metricsStr)}</span>`;
         const trustBtn = state.peerTab === "discovered" && !trustedIds.has(p.hash_id)
           ? `<button type="button" class="contact-trust" data-trust="${p.hash_id}">Trust</button>` : "";
-        const menuBtn = state.peerTab === "trusted"
-          ? `<button type="button" class="contact-menu-btn" data-menu="${p.hash_id}" data-name="${escapeHtml(p.name)}" title="Contact options" aria-label="Contact options">⋮</button>`
-          : "";
         return `<button class="contact${active}" data-hash="${p.hash_id}" data-name="${escapeHtml(p.name)}">
           <div class="avatar" style="background:${hashColor(p.hash_id)}22;color:${hashColor(p.hash_id)};border-color:${hashColor(p.hash_id)}44">
             ${initials(p.name)}
@@ -944,7 +982,7 @@
             <div class="contact-name">${escapeHtml(p.name)}</div>
             <div class="contact-preview">${meta}</div>
           </div>
-          <div class="contact-meta">${trustBtn}${menuBtn}${linked ? "●" : ""}</div>
+          <div class="contact-meta">${trustBtn}${linked ? "●" : ""}</div>
         </button>`;
       })
       .join("");
@@ -955,17 +993,16 @@
         selectPeer(btn.dataset.hash, btn.dataset.name);
         closeSidebarMobile();
       });
+      btn.addEventListener("contextmenu", (ev) => {
+        if (state.peerTab !== "trusted") return;
+        ev.preventDefault();
+        openContactMenu(btn.dataset.hash, btn.dataset.name, btn);
+      });
     });
     el.querySelectorAll(".contact-trust").forEach((btn) => {
       btn.addEventListener("click", (ev) => {
         ev.stopPropagation();
         trustPeer(btn.dataset.trust);
-      });
-    });
-    el.querySelectorAll(".contact-menu-btn").forEach((btn) => {
-      btn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        openContactMenu(btn.dataset.menu, btn.dataset.name, btn);
       });
     });
   }
@@ -1007,17 +1044,29 @@
     const filename = meta.filename || m.text || "file";
     const speedStr = speed ? ` · ${Number(speed).toFixed(2)} MB/s` : "";
     const fileUrl = tid ? `/api/transfers/${encodeURIComponent(tid)}/file` : "";
+    const downloadUrl = fileUrl ? `${fileUrl}?download=1` : "";
     const cancelled = stateLabel === "cancelled";
     const failed = stateLabel === "failed";
     const stateClass = cancelled ? " cancelled" : failed ? " failed" : "";
+    const canPreviewImage = m.msg_type === "image" && fileUrl
+      && (out || stateLabel === "complete" || stateLabel === "transferring");
 
-    if (m.msg_type === "image" && (stateLabel === "complete" || pct >= 100) && fileUrl) {
-      return `<div class="file-bubble image-bubble">
+    if (canPreviewImage) {
+      const progressLine = stateLabel === "complete"
+        ? `${formatBytes(size)} · complete`
+        : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr}`;
+      return `<div class="file-bubble image-bubble${stateClass}" data-transfer="${escapeHtml(tid)}">
         <a href="${fileUrl}" target="_blank" rel="noopener">
           <img src="${fileUrl}" alt="${escapeHtml(filename)}" class="chat-image" loading="lazy" />
         </a>
         <div class="file-name">${escapeHtml(filename)}</div>
-        <div class="file-progress-meta">${formatBytes(size)} · complete</div>
+        <div class="file-progress-meta">${cancelled ? "Transfer cancelled" : progressLine}</div>
+        ${stateLabel !== "complete" && !cancelled && !failed
+          ? `<div class="progress-track chat-progress"><div class="progress-fill" style="width:${pct}%"></div></div>`
+          : ""}
+        ${stateLabel === "complete" && downloadUrl
+          ? `<a class="file-download" href="${downloadUrl}" download="${escapeHtml(filename)}">Save as…</a>`
+          : ""}
       </div>`;
     }
 
@@ -1031,7 +1080,9 @@
             : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr} · ${stateLabel}`
         }</div>
         <div class="progress-track chat-progress"><div class="progress-fill" style="width:${cancelled || failed ? 100 : pct}%"></div></div>
-        ${stateLabel === "complete" && fileUrl ? `<a class="file-download" href="${fileUrl}" target="_blank" rel="noopener">Download</a>` : ""}
+        ${stateLabel === "complete" && downloadUrl
+          ? `<a class="file-download" href="${downloadUrl}" download="${escapeHtml(filename)}">Save as…</a>`
+          : ""}
       </div>
     </div>`;
   }
@@ -1080,8 +1131,8 @@
             <button type="button" class="bubble-action danger" data-del-msg="${escapeHtml(m.id)}" title="Delete">Delete</button>
           </div>`;
       html += `<div class="bubble-row ${out ? "out" : "in"}" data-msg-id="${escapeHtml(m.id)}">
-        ${actions}
         <div class="bubble ${out ? "out" : "in"} ${m.msg_type === "image" ? "image" : ""}">
+          ${actions}
           ${body}
           <div class="bubble-meta">
             <span>${formatTime(m.timestamp)}</span>
@@ -1213,29 +1264,26 @@
     const dock = $("#transfer-dock");
     if (!dock || !data) return;
     const active = ["transferring", "accepted", "offered"].includes(data.state);
-    const cancelled = data.state === "cancelled";
-    if (!active && !cancelled) {
+    const done = ["complete", "failed", "cancelled", "rejected"].includes(data.state);
+    if (done) {
+      hideTransferDockIfDone(data.id);
+      if (data.state === "cancelled") {
+        toast(`Transfer cancelled: ${data.filename || "file"}`);
+      }
+      return;
+    }
+    if (!active) {
       hideTransferDockIfDone(data.id);
       return;
     }
     dock.classList.remove("hidden");
-    dock.classList.toggle("cancelled", cancelled);
     const pct = data.size ? Math.min(100, Math.round((data.offset / data.size) * 100)) : 0;
-    const speed = data.speed_mbps ? `${Number(data.speed_mbps).toFixed(2)} MB/s` : "";
-    $("#transfer-dock-title").textContent = cancelled
-      ? `${data.filename || "Transfer"} — cancelled`
-      : (data.filename || "Transfer");
-    $("#transfer-dock-meta").textContent = cancelled
-      ? "Transfer was cancelled on both sides"
-      : `${pct}% · ${formatBytes(data.offset)} / ${formatBytes(data.size)}${speed ? ` · ${speed}` : ""}`;
-    $("#transfer-dock-fill").style.width = `${cancelled ? 100 : pct}%`;
+    const speedEl = $("#transfer-dock-speed");
+    const speed = data.speed_mbps ? Number(data.speed_mbps).toFixed(2) : "0.00";
+    if (speedEl) speedEl.textContent = `${speed} MB/s`;
+    const fill = $("#transfer-dock-fill");
+    if (fill) fill.style.width = `${pct}%`;
     dock.dataset.transferId = data.id;
-    const cancelBtn = $("#transfer-dock-cancel");
-    if (cancelBtn) cancelBtn.classList.toggle("hidden", cancelled);
-    if (cancelled) {
-      setTimeout(() => hideTransferDockIfDone(data.id), 4000);
-      toast(`Transfer cancelled: ${data.filename || "file"}`);
-    }
   }
 
   function hideTransferDockIfDone(transferId) {
@@ -1393,8 +1441,6 @@
       $("#folder-modal").classList.add("open");
       return;
     }
-    const menuBtn = e.target.closest(".contact-menu-btn");
-    if (menuBtn) return;
     if (!e.target.closest("#contact-menu")) closeContactMenu();
   });
 

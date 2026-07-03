@@ -10,7 +10,13 @@ from typing import TYPE_CHECKING
 
 import zstandard as zstd
 
-from srltcp.core.messaging.constants import CHUNK_SEND_DELAY, CHUNK_SIZE, COMPRESS_THRESHOLD
+from srltcp.core.messaging.constants import (
+    CHUNK_SEND_DELAY,
+    CHUNK_SIZE,
+    COMPRESS_THRESHOLD,
+    SERIAL_CHUNK_DELAY,
+    SERIAL_CHUNK_SIZE,
+)
 from srltcp.core.messaging.models import FileTransfer, TransferState
 from srltcp.core.protocol.messages import (
     Flags,
@@ -21,7 +27,7 @@ from srltcp.core.protocol.messages import (
     pack_file_chunk,
     unpack_file_chunk,
 )
-from srltcp.utils.files import ensure_dir, sha256_file, write_file_chunk
+from srltcp.utils.files import ensure_dir, safe_filename, sha256_file, write_file_chunk
 from srltcp.utils.logging import get_logger
 from srltcp.utils.platform import data_dir
 
@@ -57,6 +63,11 @@ class TransferMixin:
         if len(compressed) < len(data):
             return compressed, True
         return data, False
+
+    def _chunk_params(self: MessagingBackend, transport: str) -> tuple[int, float]:
+        if transport == "serial":
+            return SERIAL_CHUNK_SIZE, SERIAL_CHUNK_DELAY
+        return CHUNK_SIZE, CHUNK_SEND_DELAY
 
     def _maybe_decompress(self: MessagingBackend, data: bytes, compressed: bool) -> bytes:
         if not compressed:
@@ -102,7 +113,7 @@ class TransferMixin:
     async def _handle_file_offer(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
         transfer_id = data["transfer_id"]
-        dest = self._transfer_dir / data["filename"]
+        dest = self._transfer_dir / f"{transfer_id}_{safe_filename(data['filename'])}"
         transfer = FileTransfer(
             id=transfer_id,
             sender_hash=hash_id,
@@ -114,10 +125,12 @@ class TransferMixin:
             transport="tcp",
             state=TransferState.OFFERED,
         )
+        link = self.get_link(hash_id)
+        if link:
+            transfer.transport = link.transport
         self._transfers[transfer_id] = transfer
         self._incoming_paths[transfer_id] = dest
 
-        link = self.get_link(hash_id)
         if link:
             accept_body = encode_payload({"transfer_id": transfer_id, "offset": 0})
             packet = await self._encrypt_for_link(link, MessageType.FILE_ACCEPT, accept_body)
@@ -144,6 +157,8 @@ class TransferMixin:
         transfer.state = TransferState.TRANSFERRING
         transfer.offset = offset
         self._transfer_started[transfer_id] = time.time()
+        if self._on_transfer_progress:
+            await self._on_transfer_progress(transfer.to_dict())
         task = asyncio.create_task(self._send_file_chunks(hash_id, transfer))
         self._transfer_tasks[transfer_id] = task
 
@@ -160,6 +175,8 @@ class TransferMixin:
 
         import aiofiles
 
+        chunk_size, chunk_delay = self._chunk_params(transfer.transport)
+
         try:
             async with aiofiles.open(transfer.path, "rb") as f:
                 await f.seek(transfer.offset)
@@ -170,7 +187,7 @@ class TransferMixin:
                     if not link or not link.handshake_complete:
                         transfer.state = TransferState.FAILED
                         return
-                    chunk = await f.read(CHUNK_SIZE)
+                    chunk = await f.read(chunk_size)
                     if not chunk:
                         break
                     payload, compressed = self._maybe_compress(chunk)
@@ -192,8 +209,8 @@ class TransferMixin:
                     if self._on_transfer_progress:
                         await self._on_transfer_progress(transfer.to_dict())
                     await self._update_file_message(transfer.to_dict())
-                    if CHUNK_SEND_DELAY > 0:
-                        await asyncio.sleep(CHUNK_SEND_DELAY)
+                    if chunk_delay > 0:
+                        await asyncio.sleep(chunk_delay)
 
             if transfer.state == TransferState.CANCELLED:
                 return
@@ -225,23 +242,29 @@ class TransferMixin:
         finally:
             self._transfer_tasks.pop(transfer.id, None)
 
-    async def _handle_file_chunk(self: MessagingBackend, hash_id: str, body: bytes) -> None:
+    async def _handle_file_chunk(
+        self: MessagingBackend, hash_id: str, body: bytes, *, compressed: bool = False
+    ) -> None:
         link = self.get_link(hash_id)
         if not link:
             return
         try:
             decrypted = link.crypto.decrypt(body)
             transfer_id, offset, data = unpack_file_chunk(decrypted)
-        except Exception:
+        except Exception as exc:
+            log.warning("File chunk decrypt failed from %s: %s", hash_id[:8], exc)
             return
 
         transfer = self._transfers.get(transfer_id)
         if not transfer:
+            log.warning("Unknown transfer %s from %s", transfer_id, hash_id[:8])
             return
 
-        compressed = False  # flags would be on header; simplified path uses payload detection
-        with contextlib.suppress(Exception):
+        try:
             data = self._maybe_decompress(data, compressed)
+        except Exception as exc:
+            log.warning("File chunk decompress failed for %s: %s", transfer_id, exc)
+            return
 
         dest = self._incoming_paths.get(transfer_id, transfer.path)
         await write_file_chunk(dest, offset, data)

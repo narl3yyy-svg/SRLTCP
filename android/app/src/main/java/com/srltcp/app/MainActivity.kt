@@ -1,6 +1,8 @@
 package com.srltcp.app
 
 import android.annotation.SuppressLint
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -14,6 +16,7 @@ import android.net.http.SslError
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewClientCompat
 import com.chaquo.python.Python
 
@@ -37,6 +40,9 @@ class MainActivity : AppCompatActivity() {
                 showFatal("Python runtime not initialized.\nRestart the app.")
                 return
             }
+
+            val serviceIntent = Intent(this, SRLTCPService::class.java)
+            ContextCompat.startForegroundService(this, serviceIntent)
 
             val root = FrameLayout(this)
             statusView = TextView(this).apply {
@@ -92,29 +98,30 @@ class MainActivity : AppCompatActivity() {
             Thread {
                 try {
                     val py = Python.getInstance()
-                    val filesDir = applicationContext.filesDir.absolutePath
-                    py.getModule("srltcp.utils.platform")
-                        .callAttr("set_android_data_dir", filesDir)
-                    py.getModule("srltcp.app").callAttr("start_android_server")
                     var waited = 0
-                    while (waited < 45000) {
-                        try {
-                            val port = py.getModule("srltcp.app").callAttr("get_android_web_port").toInt()
-                            if (port in 1024..65535) {
-                                handler.post { statusView?.text = "Loading UI on port $port…" }
-                                break
-                            }
-                        } catch (_: Exception) { }
+                    while (waited < 60000) {
+                        val ready = py.getModule("srltcp.app")
+                            .callAttr("is_android_server_ready")
+                            .toBoolean()
+                        if (ready) {
+                            val port = py.getModule("srltcp.app")
+                                .callAttr("get_android_web_port")
+                                .toInt()
+                            handler.post { statusView?.text = "Loading UI on port $port…" }
+                            handler.post { scheduleLoad(500) }
+                            return@Thread
+                        }
                         Thread.sleep(300)
                         waited += 300
                     }
+                    handler.post {
+                        showFatal("SRLTCP server did not start within 60 seconds.")
+                    }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Server start failed", e)
-                    showFatal("Failed to start server:\n${e.message}")
+                    Log.e(TAG, "Server wait failed", e)
+                    handler.post { showFatal("Failed to reach server:\n${e.message}") }
                 }
             }.start()
-
-            scheduleLoad(3000)
         } catch (e: Exception) {
             Log.e(TAG, "onCreate failed", e)
             showFatal("App failed to start:\n${e.message}")
@@ -136,7 +143,7 @@ class MainActivity : AppCompatActivity() {
         }
         val idx = loadAttempt.coerceAtMost(ports.size - 1)
         loadAttempt++
-        if (loadAttempt > ports.size + 5) {
+        if (loadAttempt > ports.size + 8) {
             showFatal("Cannot reach SRLTCP web UI.\nTried ports: ${ports.joinToString()}")
             return
         }
@@ -148,7 +155,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun resolvePort(): Int {
         return try {
-            Python.getInstance().getModule("srltcp.app").callAttr("get_android_web_port").toInt()
+            val py = Python.getInstance()
+            if (py.getModule("srltcp.app").callAttr("is_android_server_ready").toBoolean()) {
+                py.getModule("srltcp.app").callAttr("get_android_web_port").toInt()
+            } else {
+                9876
+            }
         } catch (_: Exception) {
             9876
         }
@@ -173,6 +185,7 @@ class MainActivity : AppCompatActivity() {
         handler.removeCallbacksAndMessages(null)
         webView?.destroy()
         webView = null
+        stopService(Intent(this, SRLTCPService::class.java))
         super.onDestroy()
     }
 

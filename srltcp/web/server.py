@@ -58,10 +58,28 @@ def create_app(node: SRLTCPNode) -> web.Application:
         await broadcast_event(node, "peer_discovered", data)
 
     async def on_link(hash_id: str, name: str) -> None:
-        await broadcast_event(node, "link_up", {"hash_id": hash_id, "name": name})
+        link = node.backend.get_link(hash_id)
+        await broadcast_event(
+            node,
+            "link_up",
+            {
+                "hash_id": hash_id,
+                "name": name,
+                "transport": link.transport if link else "tcp",
+            },
+        )
 
     async def on_link_down(hash_id: str, name: str) -> None:
-        await broadcast_event(node, "link_down", {"hash_id": hash_id, "name": name})
+        link = node.backend.get_link(hash_id)
+        await broadcast_event(
+            node,
+            "link_down",
+            {
+                "hash_id": hash_id,
+                "name": name,
+                "transport": link.transport if link else "tcp",
+            },
+        )
 
     async def on_metrics(hash_id: str, metrics: dict) -> None:
         await broadcast_event(

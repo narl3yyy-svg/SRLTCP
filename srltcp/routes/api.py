@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -185,8 +186,14 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         field = await reader.next()
         if field is None or field.name != "file":
             return web.json_response({"error": "file field required"}, status=400)
-        filename = field.filename or "upload.bin"
+        from srltcp.utils.files import safe_filename
+
+        filename = safe_filename(field.filename or "upload.bin")
         dest = upload_dir / filename
+        if dest.exists():
+            stem = dest.stem
+            suffix = dest.suffix
+            dest = upload_dir / f"{stem}_{int(time.time())}{suffix}"
         with dest.open("wb") as f:
             while True:
                 chunk = await field.read_chunk()
@@ -229,7 +236,17 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                 path = incoming
             else:
                 return web.json_response({"error": "file not ready"}, status=404)
-        return web.FileResponse(path, headers={"Cache-Control": "no-store"})
+        from urllib.parse import quote
+
+        fname = transfer.filename or path.name
+        disposition = f'attachment; filename="{quote(fname)}"; filename*=UTF-8\'\'{quote(fname)}'
+        return web.FileResponse(
+            path,
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": disposition,
+            },
+        )
 
     async def create_share(request: web.Request) -> web.Response:
         data = await request.json()

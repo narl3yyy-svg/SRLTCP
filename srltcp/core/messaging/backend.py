@@ -343,7 +343,11 @@ class MessagingBackend(
         elif msg_type == MessageType.FILE_CHUNK:
             link = self.get_link_by_peer_id(peer.peer_id)
             if link:
-                await self._handle_file_chunk(link.hash_id, body)
+                await self._handle_file_chunk(
+                    link.hash_id,
+                    body,
+                    compressed=bool(flags & Flags.COMPRESSED),
+                )
         elif msg_type == MessageType.FILE_COMPLETE:
             link = self.get_link_by_peer_id(peer.peer_id)
             if link and flags & Flags.ENCRYPTED:

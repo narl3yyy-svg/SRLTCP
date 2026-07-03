@@ -19,6 +19,8 @@ from srltcp.web.server import run_web_server, shutdown_web_server
 log = get_logger(__name__)
 
 _android_web_port: dict[str, int] = {"port": WEB_PORT}
+_android_server_ready: bool = False
+_android_server_started: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -118,6 +120,8 @@ async def run_web(args: argparse.Namespace) -> None:
     settings.web_port = bound_port
     store.save(settings)
     _android_web_port["port"] = bound_port
+    global _android_server_ready
+    _android_server_ready = True
 
     log.info("SRLTCP v%s running — https://127.0.0.1:%d", __version__, bound_port)
     log.info("Press Ctrl+C to stop")
@@ -180,17 +184,27 @@ def get_android_web_port() -> int:
     return _android_web_port["port"]
 
 
+def is_android_server_ready() -> bool:
+    """True once the HTTPS site is bound (Android WebView should load after this)."""
+    return _android_server_ready
+
+
 def start_android_server() -> None:
     """Entry point for Chaquopy Android app (background thread)."""
     import os
     import threading
 
+    global _android_server_ready, _android_server_started
+    if _android_server_started:
+        return
+    _android_server_started = True
+    _android_server_ready = False
     os.environ["SRLTCP_ANDROID"] = "1"
 
     def _run() -> None:
         import sys
 
-        sys.argv = ["srltcp", "web", "--log-level", "DEBUG", "--debug"]
+        sys.argv = ["srltcp", "web", "--log-level", "INFO"]
         try:
             main()
         except Exception:

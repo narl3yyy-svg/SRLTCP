@@ -83,6 +83,7 @@
             <div class="chat-peer-name" id="chat-peer-name">Peer</div>
             <div class="chat-peer-status" id="chat-peer-status">
               <span class="status-dot"></span>
+              <span id="chat-peer-transport" class="transport-badge header-badge hidden" aria-hidden="true"></span>
               <span id="chat-peer-meta">Connecting…</span>
             </div>
           </div>
@@ -97,12 +98,11 @@
         <div class="messages" id="messages" role="log" aria-live="polite"></div>
 
         <div class="transfer-dock hidden" id="transfer-dock" aria-live="polite">
-          <div class="transfer-dock-main">
-            <div class="transfer-dock-title" id="transfer-dock-title">Transferring…</div>
-            <div class="transfer-dock-meta" id="transfer-dock-meta">0% · 0 MB/s</div>
+          <div class="transfer-dock-inner">
             <div class="progress-track transfer-dock-progress"><div class="progress-fill" id="transfer-dock-fill"></div></div>
+            <span class="transfer-dock-speed" id="transfer-dock-speed">0.00 MB/s</span>
           </div>
-          <button type="button" class="action-btn small danger" id="transfer-dock-cancel">Cancel</button>
+          <button type="button" class="transfer-dock-cancel" id="transfer-dock-cancel" title="Cancel transfer" aria-label="Cancel transfer">✕</button>
         </div>
 
         <footer class="composer">
@@ -307,7 +307,7 @@
         <span class="stat-value">—</span>
       </div>
       <div class="stat-item hidden" id="stat-clock" aria-hidden="true"></div>
-      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.11</div>
+      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.12</div>
     </footer>
 
     <div class="modal-overlay" id="folder-modal">
