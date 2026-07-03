@@ -11,8 +11,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.1.4"
+        versionCode = 5
+        versionName = "0.1.5"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -43,7 +43,11 @@ chaquopy {
         version = "3.12"
         buildPython("python3")
         pip {
-            install("aiohttp", "aiofiles", "cryptography", "pyserial", "zstandard")
+            install("aiohttp")
+            install("aiofiles")
+            install("cryptography")
+            install("pyserial")
+            install("zstandard")
         }
     }
     sourceSets {

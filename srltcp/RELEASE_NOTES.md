@@ -1,5 +1,10 @@
 # SRLTCP Release Notes
 
+## v0.1.5 (2026-07-03)
+
+### Fixes
+- **APK build** — Chaquopy 15 requires one `pip.install()` call per package
+
 ## v0.1.4 (2026-07-03)
 
 ### Fixes
