@@ -6,7 +6,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.17
+**Current version:** 0.1.18
 
 ---
 
@@ -231,9 +231,9 @@ rsync -a --delete srltcp/ android/app/src/main/python/srltcp/
 cd android && ./gradlew assembleDebug
 ```
 
-Sideload `app/build/outputs/apk/debug/SRLTCP-0.1.17.apk` (or latest from [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases)) on arm64 devices.
+Sideload `app/build/outputs/apk/debug/SRLTCP-0.1.18.apk` (or latest from [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases)) on arm64 devices.
 
-**CI builds:** Push tag `v0.1.17` (or run the **Build Android APK** workflow manually) to produce a release APK attached to GitHub Releases.
+**CI builds:** Push tag `v0.1.18` (or run the **Build Android APK** workflow manually) to produce a release APK attached to GitHub Releases.
 
 **Troubleshooting:**
 
@@ -245,7 +245,9 @@ Sideload `app/build/outputs/apk/debug/SRLTCP-0.1.17.apk` (or latest from [GitHub
 | Notification permission denied (Android 13+) | Grant when prompted, or enable in system settings — required for foreground service |
 | No peers / identities after reinstall | Uninstall clears app data; identities are stored in the app files directory |
 | USB serial not detected | USB-OTG adapter + cable; grant USB permission when device attaches |
-| Shared folder / WAN missing | Rebuild APK after `rsync`; ensure backend is **0.1.17+** (check status bar version) |
+| Shared folder / WAN missing | Rebuild APK after `rsync`; ensure backend is **0.1.18+** (check status bar version) |
+| App won't open / black screen | Install **0.1.18+**; if notification permission denied, UI still loads (server starts in-app) |
+| No discovered peers | Click **Announce TCP** on both devices; or use **Add Contact** with the other peer's hash ID |
 | WAN peer won't connect | Confirm TCP 7825 forwarded on owner; use **WAN only** mode off-LAN; verify hash ID |
 
 ```bash

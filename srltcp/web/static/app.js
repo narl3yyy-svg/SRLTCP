@@ -397,11 +397,59 @@
       body: JSON.stringify({
         hash_id: hashId,
         transport: discovered?.transport || "tcp",
+        tcp_host: discovered?.tcp_host || "",
+        tcp_port: discovered?.tcp_port || 7825,
+        public_key: discovered?.public_key || "",
       }),
     });
     toast("Peer trusted");
     state.peers = state.peers.filter((p) => p.hash_id !== hashId);
     loadPeers();
+  }
+
+  function openAddContactModal() {
+    $("#add-contact-modal")?.classList.add("open");
+    $("#add-contact-hash")?.focus();
+  }
+
+  function closeAddContactModal() {
+    $("#add-contact-modal")?.classList.remove("open");
+  }
+
+  async function saveManualContact() {
+    const hashId = ($("#add-contact-hash")?.value || "").trim().toLowerCase();
+    const name = ($("#add-contact-name")?.value || "").trim() || "Peer";
+    const transport = $("#add-contact-transport")?.value || "tcp";
+    const tcpHost = ($("#add-contact-host")?.value || "").trim();
+    const tcpPort = parseInt($("#add-contact-port")?.value || "7825", 10);
+    if (!/^[0-9a-f]{32}$/.test(hashId)) {
+      toast("Hash ID must be exactly 32 hex characters");
+      return;
+    }
+    const res = await fetch("/api/trusted", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        hash_id: hashId,
+        name,
+        transport,
+        tcp_host: tcpHost,
+        tcp_port: tcpPort,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      toast(data.error || "Failed to add contact");
+      return;
+    }
+    closeAddContactModal();
+    state.peerTab = "trusted";
+    document.querySelectorAll(".peer-tab").forEach((t) => {
+      t.classList.toggle("active", t.dataset.tab === "trusted");
+    });
+    toast(`Added ${name}`);
+    await loadPeers();
+    selectPeer(hashId, name);
   }
 
   async function deleteTrusted(hashId, name) {
@@ -1377,7 +1425,12 @@
     if (primary) {
       state.myName = primary.name;
       $("#me-name").textContent = primary.name;
-      $("#me-hash").textContent = primary.hash_id.slice(0, 16) + "…";
+      const meHash = $("#me-hash");
+      if (meHash) {
+        meHash.textContent = primary.hash_id;
+        meHash.title = "Click to copy full hash ID";
+        meHash.dataset.fullHash = primary.hash_id;
+      }
       setAvatar($("#me-avatar"), primary.name, primary.hash_id);
     }
 
@@ -1392,7 +1445,7 @@
     const seen = new Set();
     return peers.filter((p) => {
       const id = (p.hash_id || "").toLowerCase();
-      if (!id || id.length !== 64 || seen.has(id)) return false;
+      if (!id || !/^[0-9a-f]{32}$/.test(id) || seen.has(id)) return false;
       seen.add(id);
       return true;
     });
@@ -1420,7 +1473,7 @@
       el.innerHTML = `<div class="contacts-empty">
         ${state.peerTab === "trusted"
           ? "No trusted peers.<br>Trust someone from <strong>Discovered</strong>."
-          : "No peers yet.<br>Peers appear when others announce on the network."}
+          : "No peers yet.<br>Click <strong>Announce</strong> or use <strong>Add Contact</strong> with a peer hash ID."}
       </div>`;
       return;
     }
@@ -2028,6 +2081,12 @@
   }
 
   /* ── Events ── */
+  $("#btn-add-contact")?.addEventListener("click", openAddContactModal);
+  $("#add-contact-cancel")?.addEventListener("click", closeAddContactModal);
+  $("#add-contact-save")?.addEventListener("click", saveManualContact);
+  $("#add-contact-modal")?.addEventListener("click", (e) => {
+    if (e.target.id === "add-contact-modal") closeAddContactModal();
+  });
   $("#btn-announce-tcp")?.addEventListener("click", () => announceTransport("tcp"));
   $("#btn-announce-serial")?.addEventListener("click", () => announceTransport("serial"));
 
@@ -2259,6 +2318,17 @@
     }
   });
 
+  $("#me-hash")?.addEventListener("click", async () => {
+    const hash = $("#me-hash")?.dataset.fullHash || $("#me-hash")?.textContent || "";
+    if (!hash) return;
+    try {
+      await navigator.clipboard.writeText(hash);
+      toast("Hash ID copied");
+    } catch (_) {
+      toast(hash);
+    }
+  });
+
   /* ── Init ── */
   setupDragDrop();
   setupMediaPan();
@@ -2275,7 +2345,7 @@
       }
     } catch (_) { /* ignore */ }
   }, 1000);
-  setInterval(loadPeers, 30000);
+  setInterval(loadPeers, 5000);
   setInterval(pollTransfers, 2500);
   pollTransfers();
 

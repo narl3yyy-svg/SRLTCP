@@ -11,7 +11,7 @@ from typing import Any
 
 from srltcp.utils.platform import data_dir
 
-_HASH_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+_HASH_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _GENERIC_NAMES = frozenset({"peer", "trusted", "serial-peer", "tcp-peer", "unknown"})
 
 

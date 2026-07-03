@@ -66,12 +66,20 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         transport = data.get("transport")
         peer = node.add_trusted_from_discovered(hash_id, transport)
         if not peer:
+            tcp_port_raw = data.get("tcp_port", 7825)
+            try:
+                tcp_port = int(tcp_port_raw)
+            except (TypeError, ValueError):
+                return web.json_response({"error": "invalid tcp_port"}, status=400)
             try:
                 peer = node.backend.trusted.add(
                     TrustedPeer(
-                        hash_id=hash_id,
-                        name=data.get("name", "peer"),
+                        hash_id=hash_id.lower(),
+                        name=(data.get("name") or "peer").strip() or "peer",
                         transport=data.get("transport", "tcp"),
+                        public_key=data.get("public_key", ""),
+                        tcp_host=(data.get("tcp_host") or "").strip(),
+                        tcp_port=tcp_port,
                     )
                 ).to_dict()
             except ValueError as exc:

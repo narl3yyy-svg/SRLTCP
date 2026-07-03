@@ -22,7 +22,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewClientCompat
 import com.chaquo.python.Python
-import com.chaquo.python.android.AndroidPlatform
 
 class MainActivity : AppCompatActivity() {
     private var webView: WebView? = null
@@ -30,12 +29,13 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private var loadAttempt = 0
     private val fallbackPorts = intArrayOf(9876, 9877, 9878)
+    private var serverThread: Thread? = null
     private var serviceStarted = false
 
     private val requestNotificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { _ ->
-        startSrltcpService()
+        maybeStartForegroundService()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -46,105 +46,149 @@ class MainActivity : AppCompatActivity() {
         }
 
         super.onCreate(savedInstanceState)
-        try {
-            SRLTCPApplication.pythonError?.let {
-                showFatal("Python failed to start:\n$it")
-                return
-            }
-            ensurePythonStarted()
-            if (!Python.isStarted()) {
-                showFatal("Python runtime not initialized.\nRestart the app.")
-                return
-            }
 
-            val root = FrameLayout(this)
-            statusView = TextView(this).apply {
-                text = "Starting SRLTCP…"
-                setTextColor(0xFF8B93A8.toInt())
-                gravity = Gravity.CENTER
-                textSize = 14f
-            }
-            root.addView(statusView)
+        SRLTCPApplication.pythonError?.let {
+            showFatal("Python failed to start:\n$it")
+            return
+        }
 
-            webView = WebView(this).also { wv ->
-                wv.visibility = android.view.View.GONE
-                wv.settings.javaScriptEnabled = true
-                wv.settings.domStorageEnabled = true
-                wv.settings.allowFileAccess = false
-                wv.settings.databaseEnabled = true
-                wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-                wv.webViewClient = object : WebViewClientCompat() {
-                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                        return false
-                    }
+        if (!Python.isStarted()) {
+            showFatal("Python runtime not initialized.\nRestart the app.")
+            return
+        }
 
-                    override fun onPageFinished(view: WebView, url: String) {
-                        statusView?.visibility = android.view.View.GONE
-                        view.visibility = android.view.View.VISIBLE
-                    }
+        val root = FrameLayout(this)
+        statusView = TextView(this).apply {
+            text = "Starting SRLTCP…"
+            setTextColor(0xFF8B93A8.toInt())
+            gravity = Gravity.CENTER
+            textSize = 14f
+            setPadding(48, 48, 48, 48)
+        }
+        root.addView(statusView)
 
-                    override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
-                        val host = error.url.host
-                        if (host == "127.0.0.1" || host == "localhost") {
-                            handler.proceed()
-                        } else {
-                            handler.cancel()
-                        }
-                    }
+        webView = WebView(this).also { wv ->
+            wv.visibility = android.view.View.GONE
+            wv.settings.javaScriptEnabled = true
+            wv.settings.domStorageEnabled = true
+            wv.settings.allowFileAccess = false
+            wv.settings.databaseEnabled = true
+            wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+            wv.webViewClient = object : WebViewClientCompat() {
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    return false
+                }
 
-                    override fun onReceivedError(
-                        view: WebView,
-                        request: WebResourceRequest,
-                        error: WebResourceError
-                    ) {
-                        if (request.isForMainFrame) {
-                            Log.w(TAG, "WebView error: ${error.description}")
-                            scheduleLoad(2000)
-                        }
+                override fun onPageFinished(view: WebView, url: String) {
+                    statusView?.visibility = android.view.View.GONE
+                    view.visibility = android.view.View.VISIBLE
+                    maybeStartForegroundService()
+                }
+
+                override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+                    val host = error.url.host
+                    if (host == "127.0.0.1" || host == "localhost") {
+                        handler.proceed()
+                    } else {
+                        handler.cancel()
                     }
                 }
-                root.addView(wv)
+
+                override fun onReceivedError(
+                    view: WebView,
+                    request: WebResourceRequest,
+                    error: WebResourceError
+                ) {
+                    if (request.isForMainFrame) {
+                        Log.w(TAG, "WebView error: ${error.description}")
+                        scheduleLoad(2000)
+                    }
+                }
             }
-            setContentView(root)
-
-            ensureServiceThenWaitForServer()
-        } catch (e: Exception) {
-            Log.e(TAG, "onCreate failed", e)
-            showFatal("App failed to start:\n${e.message}")
+            root.addView(wv)
         }
+        setContentView(root)
+
+        startPythonServer()
+        waitForServerThenLoad()
+        requestNotificationIfNeeded()
     }
 
-    private fun ensurePythonStarted() {
-        if (Python.isStarted()) return
-        try {
-            Python.start(AndroidPlatform(applicationContext))
-            Log.i(TAG, "Python started from MainActivity fallback")
-        } catch (e: Exception) {
-            Log.e(TAG, "Python fallback start failed", e)
-            throw e
-        }
-    }
-
-    private fun ensureServiceThenWaitForServer() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.POST_NOTIFICATIONS
-                ) == PackageManager.PERMISSION_GRANTED
-            ) {
-                startSrltcpService()
-            } else {
-                requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    private fun startPythonServer() {
+        if (serverThread?.isAlive == true) return
+        serverThread = Thread {
+            try {
+                val py = Python.getInstance()
+                py.getModule("srltcp.utils.platform")
+                    .callAttr("set_android_data_dir", applicationContext.filesDir.absolutePath)
+                val appMod = py.getModule("srltcp.app")
+                if (!appMod.callAttr("is_android_server_ready").toBoolean()) {
+                    appMod.callAttr("start_android_server")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Server thread failed", e)
+                handler.post { showFatal("Server start failed:\n${e.message}") }
             }
-        } else {
-            startSrltcpService()
-        }
-        waitForServerInBackground()
+        }.apply { name = "srltcp-server"; isDaemon = false; start() }
     }
 
-    private fun startSrltcpService() {
+    private fun waitForServerThenLoad() {
+        Thread {
+            try {
+                val py = Python.getInstance()
+                var waited = 0
+                while (waited < 90000) {
+                    val ready = py.getModule("srltcp.app")
+                        .callAttr("is_android_server_ready")
+                        .toBoolean()
+                    if (ready) {
+                        val port = py.getModule("srltcp.app")
+                            .callAttr("get_android_web_port")
+                            .toInt()
+                        handler.post {
+                            statusView?.text = "Loading UI on port $port…"
+                            scheduleLoad(400)
+                        }
+                        return@Thread
+                    }
+                    Thread.sleep(250)
+                    waited += 250
+                }
+                handler.post {
+                    showFatal(
+                        "SRLTCP server did not start within 90 seconds.\n" +
+                            "Check logcat for SRLTCP tag."
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Server wait failed", e)
+                handler.post { showFatal("Failed to reach server:\n${e.message}") }
+            }
+        }.apply { name = "srltcp-wait"; start() }
+    }
+
+    private fun requestNotificationIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun maybeStartForegroundService() {
         if (serviceStarted) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
         serviceStarted = true
         try {
             val serviceIntent = Intent(this, SRLTCPService::class.java)
@@ -154,56 +198,9 @@ class MainActivity : AppCompatActivity() {
                 startService(serviceIntent)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "startForegroundService failed", e)
-            startServerDirectly()
+            Log.w(TAG, "Foreground service not started (UI still works)", e)
+            serviceStarted = false
         }
-    }
-
-    private fun startServerDirectly() {
-        Thread {
-            try {
-                val py = Python.getInstance()
-                val filesDir = applicationContext.filesDir.absolutePath
-                py.getModule("srltcp.utils.platform")
-                    .callAttr("set_android_data_dir", filesDir)
-                if (!py.getModule("srltcp.app").callAttr("is_android_server_ready").toBoolean()) {
-                    py.getModule("srltcp.app").callAttr("start_android_server")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Direct server start failed", e)
-                handler.post { showFatal("Server start failed:\n${e.message}") }
-            }
-        }.apply { name = "srltcp-direct"; start() }
-    }
-
-    private fun waitForServerInBackground() {
-        Thread {
-            try {
-                val py = Python.getInstance()
-                var waited = 0
-                while (waited < 60000) {
-                    val ready = py.getModule("srltcp.app")
-                        .callAttr("is_android_server_ready")
-                        .toBoolean()
-                    if (ready) {
-                        val port = py.getModule("srltcp.app")
-                            .callAttr("get_android_web_port")
-                            .toInt()
-                        handler.post { statusView?.text = "Loading UI on port $port…" }
-                        handler.post { scheduleLoad(500) }
-                        return@Thread
-                    }
-                    Thread.sleep(300)
-                    waited += 300
-                }
-                handler.post {
-                    showFatal("SRLTCP server did not start within 60 seconds.")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Server wait failed", e)
-                handler.post { showFatal("Failed to reach server:\n${e.message}") }
-            }
-        }.apply { name = "srltcp-wait"; start() }
     }
 
     private fun scheduleLoad(delayMs: Long) {
@@ -283,7 +280,9 @@ class MainActivity : AppCompatActivity() {
                 webView?.destroy()
             } catch (_: Exception) { /* ignore */ }
             webView = null
-            stopService(Intent(this, SRLTCPService::class.java))
+            try {
+                stopService(Intent(this, SRLTCPService::class.java))
+            } catch (_: Exception) { /* ignore */ }
         }
         super.onDestroy()
     }

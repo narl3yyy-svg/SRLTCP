@@ -146,7 +146,9 @@ body {
   color: var(--text-muted);
   margin-top: 2px;
   word-break: break-all;
+  cursor: pointer;
 }
+.me-hash:hover { color: var(--accent); }
 
 .avatar {
   width: 44px;

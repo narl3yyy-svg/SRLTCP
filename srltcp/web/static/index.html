@@ -44,6 +44,10 @@
       </div>
 
       <div class="sidebar-actions announce-actions">
+        <button class="action-btn" id="btn-add-contact" title="Add contact manually by hash ID">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+          Add Contact
+        </button>
         <button class="action-btn" id="btn-announce-tcp" title="Announce on TCP/LAN">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>
           Announce TCP
@@ -316,7 +320,7 @@
         <span class="stat-value">—</span>
       </div>
       <div class="stat-item hidden" id="stat-clock" aria-hidden="true"></div>
-      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.17</div>
+      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.18</div>
     </footer>
 
     <div class="modal-overlay" id="folder-modal">
@@ -423,6 +427,35 @@
         <h3>Release Notes</h3>
         <pre class="release-notes" id="release-notes-body"></pre>
         <button type="button" class="action-btn" id="release-close">Close</button>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="add-contact-modal">
+      <div class="modal-card">
+        <h3>Add contact manually</h3>
+        <p class="hint">Enter a peer's 32-character hash ID (from their SRLTCP profile). Optionally set LAN host/port to connect without discovery.</p>
+        <label class="field"><span>Hash ID</span>
+          <input type="text" id="add-contact-hash" placeholder="32 hex characters" autocomplete="off" spellcheck="false" />
+        </label>
+        <label class="field"><span>Display name</span>
+          <input type="text" id="add-contact-name" placeholder="Peer name" />
+        </label>
+        <label class="field"><span>Transport</span>
+          <select id="add-contact-transport">
+            <option value="tcp" selected>TCP / LAN</option>
+            <option value="serial">Serial / RF</option>
+          </select>
+        </label>
+        <label class="field"><span>LAN host (optional)</span>
+          <input type="text" id="add-contact-host" placeholder="e.g. 10.0.0.5" />
+        </label>
+        <label class="field"><span>TCP port</span>
+          <input type="number" id="add-contact-port" value="7825" min="1" max="65535" />
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="action-btn secondary" id="add-contact-cancel">Cancel</button>
+          <button type="button" class="action-btn" id="add-contact-save">Add &amp; trust</button>
+        </div>
       </div>
     </div>
 

@@ -24,8 +24,8 @@ def _announce(hash_id: str, name: str, transport: str = "tcp") -> bytes:
 def test_discovered_excludes_trusted() -> None:
     backend = MessagingBackend(NodeConfig())
     reg = backend.discovery
-    trusted_hash = "aa" * 32
-    discovered_hash = "bb" * 32
+    trusted_hash = "aa" * 16
+    discovered_hash = "bb" * 16
     reg.upsert_from_announce("10.0.0.5:1111", "tcp", _announce(trusted_hash, "trusted"))
     reg.upsert_from_announce("10.0.0.6:2222", "tcp", _announce(discovered_hash, "discovered"))
     backend.trusted.add(

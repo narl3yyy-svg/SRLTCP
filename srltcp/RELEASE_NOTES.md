@@ -1,5 +1,16 @@
 # SRLTCP Release Notes
 
+## v0.1.18 (2026-07-03)
+
+### Critical fixes
+- **Discovered peers invisible** — UI filtered 64-char hashes but real IDs are 32 hex chars; peers now appear after announce
+- **Trusted/manual contacts broken** — hash validation corrected to 32 chars (Reticulum-style identity hash)
+- **Android startup** — server starts directly from MainActivity (no longer blocked by denied notification permission); foreground service is optional keep-alive only
+
+### New features
+- **Add Contact** — manually trust a peer by hash ID with optional LAN host/port (no discovery required)
+- **Copy hash ID** — click your profile hash to copy for sharing with another peer
+
 ## v0.1.17 (2026-07-03)
 
 ### Fixes

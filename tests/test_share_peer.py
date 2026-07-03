@@ -13,7 +13,7 @@ from srltcp.core.messaging.share_peer import (
 
 
 def test_share_grant_valid_for_recipient() -> None:
-    recipient = "a" * 64
+    recipient = "a" * 32
     grant = ShareGrant(
         grant_id="abc123",
         owner_hash="b" * 64,
@@ -26,7 +26,7 @@ def test_share_grant_valid_for_recipient() -> None:
 
 
 def test_share_grant_expired() -> None:
-    recipient = "a" * 64
+    recipient = "a" * 32
     grant = ShareGrant(
         grant_id="expired",
         owner_hash="b" * 64,
@@ -38,7 +38,7 @@ def test_share_grant_expired() -> None:
 
 
 def test_share_grant_download_limit() -> None:
-    recipient = "a" * 64
+    recipient = "a" * 32
     grant = ShareGrant(
         grant_id="g1",
         owner_hash="b" * 64,
@@ -54,7 +54,7 @@ def test_share_grant_download_limit() -> None:
 
 
 def test_share_grant_revoked() -> None:
-    recipient = "a" * 64
+    recipient = "a" * 32
     grant = ShareGrant(
         grant_id="g2",
         owner_hash="b" * 64,

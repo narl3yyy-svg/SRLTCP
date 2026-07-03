@@ -10,7 +10,7 @@ from srltcp.core.trusted import TrustedPeer, TrustedStore, is_valid_hash_id
 
 
 def _hash(seed: str) -> str:
-    return (seed * 64)[:64]
+    return (seed * 32)[:32]
 
 
 def test_trusted_add_remove(tmp_path: Path) -> None:
@@ -83,6 +83,22 @@ def test_trusted_load_skips_invalid_entries(tmp_path: Path) -> None:
 
 
 def test_is_valid_hash_id() -> None:
-    assert is_valid_hash_id("a" * 64)
+    assert is_valid_hash_id("a" * 32)
     assert not is_valid_hash_id("short")
-    assert not is_valid_hash_id("g" * 64)
+    assert not is_valid_hash_id("g" * 32)
+    assert not is_valid_hash_id("a" * 64)
+
+
+def test_trusted_manual_add_with_host(tmp_path: Path) -> None:
+    store = TrustedStore(path=tmp_path / "trusted.json")
+    peer = TrustedPeer(
+        hash_id=_hash("f"),
+        name="remote-peer",
+        transport="tcp",
+        tcp_host="10.0.0.9",
+        tcp_port=7825,
+    )
+    store.add(peer)
+    saved = store.get(peer.hash_id)
+    assert saved is not None
+    assert saved.tcp_host == "10.0.0.9"

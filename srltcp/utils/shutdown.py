@@ -35,6 +35,11 @@ class GracefulShutdown:
     def register_signals(self) -> None:
         if self._registered:
             return
+        from srltcp.utils.platform import is_android
+
+        if is_android():
+            self._registered = True
+            return
         loop = asyncio.get_running_loop()
 
         def _handler(sig: signal.Signals) -> None:

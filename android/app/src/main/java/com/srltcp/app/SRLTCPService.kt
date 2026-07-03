@@ -13,60 +13,30 @@ import androidx.core.app.NotificationCompat
 import com.chaquo.python.Python
 
 /**
- * Keeps the Python SRLTCP node alive while the WebView UI is open.
+ * Keeps the Python SRLTCP node alive while the app is backgrounded.
+ * The server is started by MainActivity; this service only shows a notification.
  */
 class SRLTCPService : Service() {
-    @Volatile
-    private var serverThread: Thread? = null
-
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
-        try {
-            startForeground(NOTIFICATION_ID, buildNotification("Starting SRLTCP…"))
-        } catch (e: Exception) {
-            Log.w(TAG, "startForeground failed — running without notification", e)
-        }
-        if (serverThread?.isAlive == true) {
-            return
-        }
-        serverThread = Thread {
-            try {
-                val py = Python.getInstance()
-                val filesDir = applicationContext.filesDir.absolutePath
-                py.getModule("srltcp.utils.platform")
-                    .callAttr("set_android_data_dir", filesDir)
-                if (!py.getModule("srltcp.app").callAttr("is_android_server_ready").toBoolean()) {
-                    py.getModule("srltcp.app").callAttr("start_android_server")
-                }
-                var waited = 0
-                while (waited < 60000) {
-                    val ready = py.getModule("srltcp.app")
-                        .callAttr("is_android_server_ready")
-                        .toBoolean()
-                    if (ready) {
-                        val port = py.getModule("srltcp.app")
-                            .callAttr("get_android_web_port")
-                            .toInt()
-                        updateNotification("SRLTCP running on port $port")
-                        Log.i(TAG, "Server ready on port $port")
-                        return@Thread
-                    }
-                    Thread.sleep(300)
-                    waited += 300
-                }
-                updateNotification("SRLTCP server timeout")
-                Log.e(TAG, "Server did not become ready within 60s")
-            } catch (e: Exception) {
-                Log.e(TAG, "Server start failed", e)
-                updateNotification("SRLTCP failed to start")
+        val text = try {
+            val py = Python.getInstance()
+            if (py.getModule("srltcp.app").callAttr("is_android_server_ready").toBoolean()) {
+                val port = py.getModule("srltcp.app").callAttr("get_android_web_port").toInt()
+                "SRLTCP running on port $port"
+            } else {
+                "SRLTCP running"
             }
-        }.also { it.name = "srltcp-service"; it.start() }
-    }
-
-    override fun onDestroy() {
-        serverThread = null
-        super.onDestroy()
+        } catch (_: Exception) {
+            "SRLTCP running"
+        }
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification(text))
+        } catch (e: Exception) {
+            Log.w(TAG, "startForeground failed", e)
+            stopSelf()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -101,15 +71,6 @@ class SRLTCPService : Service() {
             .setContentIntent(launch)
             .setOngoing(true)
             .build()
-    }
-
-    private fun updateNotification(text: String) {
-        try {
-            val mgr = getSystemService(NotificationManager::class.java)
-            mgr.notify(NOTIFICATION_ID, buildNotification(text))
-        } catch (e: Exception) {
-            Log.w(TAG, "updateNotification failed", e)
-        }
     }
 
     companion object {
