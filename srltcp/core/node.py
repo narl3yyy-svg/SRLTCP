@@ -11,9 +11,9 @@ from typing import Any
 
 from srltcp import __version__
 from srltcp.core.messaging.backend import MessagingBackend, NodeConfig
-from srltcp.core.settings import SettingsStore
+from srltcp.core.settings import AppSettings
 from srltcp.core.trusted import TrustedPeer
-from srltcp.utils.files import ensure_dir, walk_directory
+from srltcp.utils.files import walk_directory
 from srltcp.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -44,56 +44,46 @@ class ShareSession:
 class SRLTCPNode:
     """Top-level node combining messaging, sharing, and relay."""
 
-    def __init__(self, config: NodeConfig, settings: SettingsStore | None = None) -> None:
+    def __init__(self, config: NodeConfig, settings: AppSettings) -> None:
         self.config = config
-        self.settings = settings or SettingsStore()
+        self.settings = settings
         self.backend = MessagingBackend(config)
         self._share_sessions: dict[str, ShareSession] = {}
         self._ws_clients: set[Any] = set()
-        self._apply_directories()
-
-    def _apply_directories(self) -> None:
-        incoming = self.settings.settings.incoming_dir()
-        shared = self.settings.settings.shared_dir()
-        ensure_dir(incoming)
-        ensure_dir(shared)
-        self.backend._incoming_dir = incoming
-        self.backend._transfer_dir = incoming
-        ensure_dir(self.backend._transfer_dir)
 
     async def start(self) -> None:
-        hours = self.settings.settings.retention_hours()
-        if hours == 0:
-            self.backend.prune_messages(0)
-        elif hours is not None:
-            self.backend.prune_messages(hours)
+        if self.settings.message_retention_hours == 0:
+            self.backend.clear_messages()
         await self.backend.start()
 
     async def stop(self) -> None:
-        if self.settings.settings.retention_hours() == 0:
-            self.backend.prune_messages(0)
+        if self.settings.message_retention_hours == 0:
+            self.backend.clear_messages()
         await self.backend.stop()
 
-    async def apply_settings(self, **kwargs: Any) -> dict[str, Any]:
-        old_announce = self.settings.settings.auto_announce
-        self.settings.update(**kwargs)
-        s = self.settings.settings
-        self.config.name = s.display_name
-        self.config.tcp_port = s.tcp_port
-        self.config.announce = s.auto_announce
-        self.config.enable_serial = s.enable_serial
-        self.config.serial_port = s.serial_port
-        self.config.serial_baud = s.serial_baud
-        self.config.relay_mode = s.relay_mode
-        self._apply_directories()
-        if s.auto_announce != old_announce:
-            await self.backend.set_auto_announce(s.auto_announce)
-        hours = s.retention_hours()
-        if hours == 0:
-            self.backend.prune_messages(0)
-        elif hours is not None:
-            self.backend.prune_messages(hours)
-        return s.to_dict()
+    async def apply_settings(self, settings: AppSettings) -> None:
+        """Hot-apply settings that don't require transport restart."""
+        old_announce = self.config.announce
+        self.settings = settings
+        self.config.name = settings.display_name
+        self.config.announce = settings.auto_announce
+        self.config.lan_ip = settings.lan_ip
+        self.config.message_retention_hours = settings.message_retention_hours
+        self.config.enable_serial = settings.enable_serial
+        self.config.serial_port = settings.serial_port
+        self.config.serial_baud = settings.serial_baud
+        incoming = str(settings.resolved_incoming_dir())
+        self.config.incoming_dir = incoming
+        if hasattr(self.backend, "_transfer_dir"):
+            self.backend._transfer_dir = Path(incoming)
+        for identity in self.backend.identities.values():
+            if identity.name != settings.display_name:
+                identity.name = settings.display_name
+                self.backend.identity_store.save(identity)
+        if settings.auto_announce != old_announce:
+            await self.backend.set_auto_announce(settings.auto_announce)
+        if settings.message_retention_hours == 0:
+            self.backend.clear_messages()
 
     def add_trusted_from_discovered(self, hash_id: str) -> dict[str, Any] | None:
         peer = self.backend.discovery.get(hash_id)
@@ -109,10 +99,11 @@ class SRLTCPNode:
         )
         return self.backend.trusted.add(trusted).to_dict()
 
-    def create_share_session(self, folder: Path, owner_hash: str) -> ShareSession:
+    def create_share_session(self, folder: Path | None, owner_hash: str) -> ShareSession:
+        root = folder or self.settings.resolved_shared_folder()
         session = ShareSession(
             id=uuid.uuid4().hex[:16],
-            path=folder.resolve(),
+            path=root.resolve(),
             token=secrets.token_urlsafe(32),
             owner_hash=owner_hash,
         )
@@ -142,17 +133,17 @@ class SRLTCPNode:
         return target
 
     def status(self) -> dict[str, Any]:
-        s = self.settings.settings
         return {
             "name": self.config.name,
-            "version": __version__,
             "relay_mode": self.config.relay_mode,
-            "auto_announce": self.config.announce,
             "identities": self.backend.get_identities(),
             "links": self.backend.list_links(),
             "peers": self.backend.get_discovered_peers(),
             "trusted": self.backend.get_trusted_peers(),
             "transfers": self.backend.list_transfers(),
-            "settings": s.to_dict(),
             "routes": self.backend.routing.all_routes() if self.config.relay_mode else [],
+            "settings": self.settings.to_dict(),
+            "web_port": self.settings.web_port,
+            "version": __version__,
+            "auto_announce": self.config.announce,
         }

@@ -2,167 +2,272 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SRLTCP</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0c0e14" />
+  <title>SRLTCP Chat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
-  <header>
-    <div class="header-left">
-      <button class="version-badge" id="version-badge" onclick="showReleaseNotes()" title="Release notes">v0.1.2</button>
-      <h1><span>SRL</span>TCP</h1>
-    </div>
-    <div class="header-right">
-      <button class="secondary" onclick="openModal('settings-modal')">Settings</button>
-      <span class="badge" id="ws-status">connecting…</span>
-    </div>
-  </header>
-  <main>
-    <section class="panel">
-      <div class="panel-header">
-        <div class="tabs">
-          <button class="tab active" data-tab="discovered" onclick="setPeerTab('discovered')">Discovered</button>
-          <button class="tab" data-tab="trusted" onclick="setPeerTab('trusted')">Trusted</button>
-        </div>
-        <button class="secondary" style="padding:0.2rem 0.5rem;font-size:0.7rem" onclick="announce()">Announce</button>
-      </div>
-      <div class="panel-body" id="peers"></div>
-    </section>
-    <section class="chat-area">
-      <div class="panel-header" id="chat-title">Select a trusted peer</div>
-      <div class="messages" id="messages"></div>
-      <div class="composer">
-        <input type="hidden" id="peer-transport" value="tcp" />
-        <input type="text" id="msg-input" placeholder="Type a message…" disabled />
-        <div class="file-input-wrap">
-          <input type="file" id="file-input" />
-          <button id="file-btn" class="secondary" disabled onclick="sendFile()">Send file</button>
-        </div>
-        <button id="send-btn" disabled onclick="sendMessage()">Send</button>
-      </div>
-    </section>
-    <section class="panel">
-      <div class="panel-header">Identity & Transfers</div>
-      <div class="panel-body">
-        <div id="identities"></div>
-        <div class="section-title">Transfers</div>
-        <div id="transfers"></div>
-        <div class="section-title">Event Log</div>
-        <div id="log"></div>
-      </div>
-    </section>
-  </main>
-
-  <!-- Settings modal -->
-  <div class="modal-overlay" id="settings-modal">
-    <div class="modal wide">
-      <div class="modal-header">
-        Settings
-        <button class="secondary" onclick="closeModal('settings-modal')">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="form-row">
-          <label>Display name</label>
-          <input type="text" id="set-name" />
-        </div>
-        <div class="section-title">Network (TCP/IP)</div>
-        <div class="form-row">
-          <label>TCP port</label>
-          <input type="number" id="set-tcp-port" />
-        </div>
-        <div class="form-row">
-          <label>Web UI port</label>
-          <input type="number" id="set-web-port" />
-        </div>
-        <div class="form-row inline">
-          <input type="checkbox" id="set-auto-announce" />
-          <label for="set-auto-announce">Auto-announce on network</label>
-        </div>
-        <div class="form-row inline">
-          <input type="checkbox" id="set-relay" />
-          <label for="set-relay">Relay mode</label>
-        </div>
-        <div class="section-title">Serial (USB / RF)</div>
-        <div class="form-row inline">
-          <input type="checkbox" id="set-enable-serial" />
-          <label for="set-enable-serial">Enable serial transport</label>
-        </div>
-        <div class="form-row">
-          <label>Serial port</label>
-          <input type="text" id="set-serial-port" placeholder="/dev/ttyUSB0" />
-        </div>
-        <div class="form-row">
-          <label>Baud rate</label>
-          <input type="number" id="set-serial-baud" value="115200" />
-        </div>
-        <div class="section-title">Folders</div>
-        <div class="form-row">
-          <label>Incoming files folder</label>
-          <div class="folder-path">
-            <input type="text" id="set-incoming" readonly placeholder="Default: ~/.srltcp/incoming" />
-            <button class="secondary" onclick="openFolderPicker('set-incoming')">Browse</button>
+  <div class="app" id="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <div class="brand-icon">SR</div>
+          <div>
+            <div class="brand-title">SRLTCP</div>
+            <div class="brand-sub" id="connection-status">Connecting…</div>
           </div>
         </div>
-        <div class="form-row">
-          <label>Shared folder</label>
-          <div class="folder-path">
-            <input type="text" id="set-shared" readonly placeholder="Default: ~/.srltcp/shared" />
-            <button class="secondary" onclick="openFolderPicker('set-shared')">Browse</button>
-          </div>
-        </div>
-        <div class="section-title">Messages</div>
-        <div class="form-row">
-          <label>Keep messages</label>
-          <select id="set-retention">
-            <option value="1d">1 day</option>
-            <option value="1w">1 week</option>
-            <option value="1m">1 month</option>
-            <option value="1y">1 year</option>
-            <option value="forever">Forever</option>
-            <option value="restart">Until restart</option>
-          </select>
+        <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        </button>
+      </div>
+
+      <div class="me-card" id="me-card">
+        <div class="avatar me-avatar" id="me-avatar">?</div>
+        <div class="me-info">
+          <div class="me-name" id="me-name">Loading…</div>
+          <div class="me-hash" id="me-hash">—</div>
         </div>
       </div>
-      <div class="modal-footer">
-        <button class="danger" onclick="restartApp()">Restart</button>
-        <button class="secondary" onclick="closeModal('settings-modal')">Cancel</button>
-        <button onclick="saveSettings()">Save</button>
+
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="search" id="peer-search" placeholder="Search conversations…" autocomplete="off" />
+      </div>
+
+      <div class="sidebar-actions">
+        <button class="action-btn" id="btn-announce">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>
+          Announce
+        </button>
+      </div>
+
+      <div class="sidebar-tabs">
+        <button type="button" class="peer-tab active" data-tab="discovered">Discovered</button>
+        <button type="button" class="peer-tab" data-tab="trusted">Trusted</button>
+      </div>
+      <div class="contacts-label" id="contacts-label">Discovered Peers</div>
+      <nav class="contacts" id="contacts" aria-label="Contacts"></nav>
+    </aside>
+
+    <!-- Main chat -->
+    <main class="chat" id="chat-panel">
+      <div class="chat-empty" id="chat-empty">
+        <div class="empty-illustration">
+          <svg viewBox="0 0 120 120" fill="none"><circle cx="60" cy="60" r="50" stroke="currentColor" stroke-width="1.5" opacity=".2"/><path d="M35 55c0-14 11-25 25-25s25 11 25 25" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".4"/><circle cx="45" cy="58" r="3" fill="currentColor" opacity=".5"/><circle cx="75" cy="58" r="3" fill="currentColor" opacity=".5"/><path d="M48 72c4 6 20 6 24 0" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".4"/></svg>
+        </div>
+        <h2>Welcome to SRLTCP</h2>
+        <p>Select a peer from the sidebar or click <strong>Announce</strong> to discover devices on your network.</p>
+        <p class="hint">All messages are end-to-end encrypted.</p>
+      </div>
+
+      <div class="chat-active hidden" id="chat-active">
+        <header class="chat-header">
+          <button class="icon-btn mobile-only" id="btn-back" aria-label="Back">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+          </button>
+          <div class="avatar peer-avatar" id="peer-avatar">?</div>
+          <div class="chat-header-info">
+            <div class="chat-peer-name" id="chat-peer-name">Peer</div>
+            <div class="chat-peer-status" id="chat-peer-status">
+              <span class="status-dot"></span>
+              <span id="chat-peer-meta">Connecting…</span>
+            </div>
+          </div>
+          <div class="chat-header-actions">
+            <button class="icon-btn" id="btn-file" title="Send file">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+            <input type="file" id="file-input" class="hidden" />
+          </div>
+        </header>
+
+        <div class="messages" id="messages" role="log" aria-live="polite"></div>
+
+        <footer class="composer">
+          <div class="composer-inner">
+            <textarea id="msg-input" rows="1" placeholder="Message…" disabled></textarea>
+            <button class="send-btn" id="send-btn" disabled aria-label="Send">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            </button>
+          </div>
+        </footer>
+      </div>
+    </main>
+
+    <!-- Settings drawer -->
+    <aside class="drawer" id="drawer" aria-hidden="true">
+      <div class="drawer-overlay" id="drawer-overlay"></div>
+      <div class="drawer-panel">
+        <header class="drawer-header">
+          <h3>Settings</h3>
+          <button class="icon-btn" id="btn-close-drawer" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </header>
+        <div class="drawer-body">
+          <form id="settings-form" class="settings-form">
+            <label class="field">
+              <span>Display name</span>
+              <input type="text" id="set-name" maxlength="64" required />
+            </label>
+            <label class="field">
+              <span>Web UI port (HTTPS)</span>
+              <input type="number" id="set-web-port" min="1024" max="65535" />
+              <small>Restart required after changing port</small>
+            </label>
+            <label class="field">
+              <span>Keep messages</span>
+              <select id="set-retention">
+                <option value="1d">1 day</option>
+                <option value="1w">1 week</option>
+                <option value="1m">1 month</option>
+                <option value="1y">1 year</option>
+                <option value="forever">Forever</option>
+                <option value="restart">Until restart</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Incoming files folder</span>
+              <div class="folder-row">
+                <input type="text" id="set-incoming" placeholder="~/.srltcp/transfers/incoming" readonly />
+                <button type="button" class="action-btn small" data-browse="set-incoming">Browse</button>
+              </div>
+            </label>
+            <label class="field">
+              <span>Default shared folder</span>
+              <div class="folder-row">
+                <input type="text" id="set-shared" placeholder="~/.srltcp/shared" readonly />
+                <button type="button" class="action-btn small" data-browse="set-shared">Browse</button>
+              </div>
+            </label>
+            <h4 class="drawer-subhead">Serial (USB / RF)</h4>
+            <label class="field checkbox-field">
+              <input type="checkbox" id="set-enable-serial" />
+              <span>Enable serial transport</span>
+            </label>
+            <label class="field">
+              <span>Serial port</span>
+              <input type="text" id="set-serial-port" placeholder="/dev/ttyUSB0" />
+            </label>
+            <label class="field">
+              <span>Baud rate</span>
+              <input type="number" id="set-serial-baud" value="115200" />
+            </label>
+            <label class="field">
+              <span>Network interface / IP</span>
+              <select id="set-lan-ip"></select>
+            </label>
+            <label class="field checkbox-field">
+              <input type="checkbox" id="set-auto-announce" />
+              <span>Auto-announce on startup</span>
+            </label>
+            <button type="submit" class="action-btn save-btn">Save settings</button>
+            <button type="button" class="action-btn danger-btn" id="btn-restart">Restart</button>
+          </form>
+          <section class="drawer-section">
+            <h4>Your Identities</h4>
+            <div id="identities"></div>
+          </section>
+          <section class="drawer-section">
+            <h4>Active Transfers</h4>
+            <div id="transfers"></div>
+          </section>
+          <section class="drawer-section">
+            <h4>Activity</h4>
+            <div class="activity-log" id="activity-log"></div>
+          </section>
+        </div>
+      </div>
+    </aside>
+
+    <!-- First-run setup -->
+    <div class="setup-overlay hidden" id="setup-overlay">
+      <div class="setup-card">
+        <div class="setup-icon">SR</div>
+        <h2>Welcome to SRLTCP</h2>
+        <p class="setup-lead">Configure your node for secure peer-to-peer chat and file transfer.</p>
+        <form id="setup-form" class="settings-form">
+          <label class="field">
+            <span>Your display name</span>
+            <input type="text" id="setup-name" maxlength="64" required placeholder="e.g. archlinux" />
+          </label>
+          <label class="field">
+            <span>HTTPS port (localhost)</span>
+            <input type="number" id="setup-web-port" value="9876" min="1024" max="65535" />
+          </label>
+          <label class="field">
+            <span>Keep messages</span>
+            <select id="setup-retention">
+              <option value="1d">1 day</option>
+              <option value="1w" selected>1 week</option>
+              <option value="1m">1 month</option>
+              <option value="1y">1 year</option>
+              <option value="forever">Forever</option>
+              <option value="restart">Until restart</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Incoming files folder</span>
+            <input type="text" id="setup-incoming" placeholder="Default: ~/.srltcp/transfers/incoming" />
+          </label>
+          <label class="field">
+            <span>Default shared folder</span>
+            <input type="text" id="setup-shared" placeholder="Default: ~/.srltcp/shared" />
+          </label>
+          <label class="field">
+            <span>Network interface / IP</span>
+            <select id="setup-lan-ip" required></select>
+          </label>
+          <label class="field checkbox-field">
+            <input type="checkbox" id="setup-auto-announce" />
+            <span>Auto-announce on LAN</span>
+          </label>
+          <button type="submit" class="action-btn save-btn">Get started</button>
+        </form>
+        <p class="setup-foot">🔒 Localhost HTTPS only · E2EE · GPL v3</p>
       </div>
     </div>
-  </div>
 
-  <!-- Folder picker -->
-  <div class="modal-overlay" id="folder-modal">
-    <div class="modal">
-      <div class="modal-header">
-        Choose folder
-        <button class="secondary" onclick="closeModal('folder-modal')">✕</button>
+    <footer class="status-bar" id="status-bar">
+      <div class="stat-item" id="stat-cpu">
+        <span class="stat-label">CPU</span>
+        <span class="stat-value">—</span>
       </div>
-      <div class="modal-body folder-browser">
-        <div class="crumb" id="folder-crumb"></div>
+      <div class="stat-item" id="stat-temp">
+        <span class="stat-label">Temp</span>
+        <span class="stat-value">—</span>
+      </div>
+      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.2</div>
+    </footer>
+
+    <div class="modal-overlay" id="folder-modal">
+      <div class="modal-card">
+        <h3>Choose folder</h3>
+        <div class="folder-crumb" id="folder-crumb"></div>
         <div id="folder-list"></div>
-      </div>
-      <div class="modal-footer">
-        <button class="secondary" onclick="closeModal('folder-modal')">Cancel</button>
-        <button onclick="selectFolder()">Select</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Release notes -->
-  <div class="modal-overlay" id="release-modal">
-    <div class="modal wide">
-      <div class="modal-header">
-        Release Notes
-        <button class="secondary" onclick="closeModal('release-modal')">✕</button>
-      </div>
-      <div class="modal-body release-notes" id="release-notes-body"></div>
-      <div class="modal-footer">
-        <button onclick="closeModal('release-modal')">Close</button>
+        <div class="modal-actions">
+          <button type="button" class="action-btn" id="folder-select">Select</button>
+          <button type="button" class="action-btn secondary" id="folder-cancel">Cancel</button>
+        </div>
       </div>
     </div>
-  </div>
 
+    <div class="modal-overlay" id="release-modal">
+      <div class="modal-card wide">
+        <h3>Release Notes</h3>
+        <pre class="release-notes" id="release-notes-body"></pre>
+        <button type="button" class="action-btn" id="release-close">Close</button>
+      </div>
+    </div>
+
+    <div class="toast-container" id="toasts"></div>
+  </div>
   <script src="/static/app.js"></script>
 </body>
 </html>

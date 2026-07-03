@@ -11,18 +11,33 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 from srltcp import __version__
+from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.core.trusted import TrustedPeer
 from srltcp.utils.folders import list_directory
+from srltcp.utils.network import list_interfaces
+from srltcp.utils.platform import data_dir
+from srltcp.utils.system_stats import system_stats
+
+RELEASE_NOTES_PATH = Path(__file__).resolve().parents[1] / "RELEASE_NOTES.md"
 
 if TYPE_CHECKING:
     from srltcp.core.node import SRLTCPNode
 
-from srltcp.utils.platform import data_dir
 
-RELEASE_NOTES_PATH = Path(__file__).resolve().parents[1] / "RELEASE_NOTES.md"
+def _validate_path(path_str: str, *, must_exist: bool = False) -> Path | None:
+    if not path_str or ".." in path_str:
+        return None
+    try:
+        p = Path(path_str).expanduser().resolve()
+    except (OSError, ValueError):
+        return None
+    if must_exist and not p.exists():
+        return None
+    return p
 
 
 def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
+    store = SettingsStore()
     upload_dir = data_dir() / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
 
@@ -45,10 +60,12 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response({"error": "hash_id required"}, status=400)
         peer = node.add_trusted_from_discovered(hash_id)
         if not peer:
-            name = data.get("name", "peer")
-            transport = data.get("transport", "tcp")
             peer = node.backend.trusted.add(
-                TrustedPeer(hash_id=hash_id, name=name, transport=transport)
+                TrustedPeer(
+                    hash_id=hash_id,
+                    name=data.get("name", "peer"),
+                    transport=data.get("transport", "tcp"),
+                )
             ).to_dict()
         return web.json_response(peer)
 
@@ -58,15 +75,15 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         return web.json_response({"removed": ok})
 
     async def messages(request: web.Request) -> web.Response:
-        limit = int(request.rel_url.query.get("limit", "200"))
+        limit = min(int(request.rel_url.query.get("limit", "200")), 1000)
         return web.json_response(node.backend.get_messages(limit=limit))
 
     async def send_message(request: web.Request) -> web.Response:
         data = await request.json()
         recipient = data.get("recipient_hash", "")
-        text = data.get("text", "")
+        text = str(data.get("text", ""))[:65536]
         transport = data.get("transport", "tcp")
-        if not recipient or not text:
+        if not recipient or not text.strip():
             return web.json_response({"error": "recipient_hash and text required"}, status=400)
         if not node.backend.is_trusted(recipient):
             return web.json_response({"error": "peer not trusted"}, status=403)
@@ -90,8 +107,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         if not hash_id:
             return web.json_response({"error": "hash_id required"}, status=400)
         await node.backend.ping_peer(hash_id)
-        metrics = node.backend.get_peer_metrics(hash_id)
-        return web.json_response(metrics)
+        return web.json_response(node.backend.get_peer_metrics(hash_id))
 
     async def announce(_request: web.Request) -> web.Response:
         transport = _request.rel_url.query.get("transport")
@@ -105,15 +121,15 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response({"error": "file field required"}, status=400)
         filename = field.filename or "upload.bin"
         dest = upload_dir / filename
-        size = 0
         with dest.open("wb") as f:
             while True:
                 chunk = await field.read_chunk()
                 if not chunk:
                     break
                 f.write(chunk)
-                size += len(chunk)
-        return web.json_response({"path": str(dest), "filename": filename, "size": size})
+        return web.json_response(
+            {"path": str(dest), "filename": filename, "size": dest.stat().st_size}
+        )
 
     async def send_file(request: web.Request) -> web.Response:
         data = await request.json()
@@ -124,8 +140,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response({"error": "recipient_hash and path required"}, status=400)
         if not node.backend.is_trusted(recipient):
             return web.json_response({"error": "peer not trusted"}, status=403)
-        path = Path(path_str)
-        if not path.exists():
+        path = _validate_path(path_str, must_exist=True)
+        if not path or not path.is_file():
             return web.json_response({"error": "file not found"}, status=404)
         result = await node.backend.send_file(recipient, path, transport=transport)
         if result:
@@ -137,10 +153,11 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
 
     async def create_share(request: web.Request) -> web.Response:
         data = await request.json()
-        folder = Path(data.get("path", ""))
+        folder_str = data.get("path", "")
         owner = data.get("owner_hash", "")
-        if not folder.is_dir():
-            return web.json_response({"error": "invalid folder"}, status=400)
+        folder = _validate_path(folder_str, must_exist=True) if folder_str else None
+        if folder_str and (not folder or not folder.is_dir()):
+            folder = node.settings.resolved_shared_folder()
         identity = node.backend.identities.get("tcp")
         owner_hash = owner or (identity.hash_id if identity else "")
         session = node.create_share_session(folder, owner_hash)
@@ -153,12 +170,30 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         )
 
     async def settings_get(_request: web.Request) -> web.Response:
-        return web.json_response(node.settings.settings.to_dict())
+        return web.json_response(node.settings.to_dict())
 
-    async def settings_put(request: web.Request) -> web.Response:
+    async def settings_post(request: web.Request) -> web.Response:
         data = await request.json()
-        updated = await node.apply_settings(**data)
-        return web.json_response(updated)
+        current = node.settings
+        updated = AppSettings.from_dict({**current.to_dict(), **data})
+        updated.apply_retention_preset()
+        preset = updated.message_retention_preset
+        if preset not in ("forever", "restart"):
+            updated.message_retention_hours = max(1, min(updated.message_retention_hours, 8760))
+        updated.web_port = max(1024, min(updated.web_port, 65535))
+
+        for field_name in ("incoming_files_dir", "shared_folder"):
+            val = getattr(updated, field_name)
+            if val:
+                p = _validate_path(val)
+                if not p:
+                    return web.json_response({"error": f"invalid {field_name}"}, status=400)
+
+        updated.setup_complete = True
+        updated.version = __version__
+        store.save(updated)
+        await node.apply_settings(updated)
+        return web.json_response(updated.to_dict())
 
     async def browse_folders(request: web.Request) -> web.Response:
         path = request.rel_url.query.get("path")
@@ -189,29 +224,11 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         node.backend.identities.pop(transport, None)
         return web.json_response({"deleted": ok})
 
-    async def identity_create(request: web.Request) -> web.Response:
-        data = await request.json()
-        transport = data.get("transport", "tcp")
-        if transport not in ("tcp", "serial"):
-            return web.json_response({"error": "invalid transport"}, status=400)
-        identity = node.backend.identity_store.load_or_create(
-            node.config.name, transport  # type: ignore[arg-type]
-        )
-        node.backend.identities[transport] = identity
-        return web.json_response(
-            {
-                "name": identity.name,
-                "hash_id": identity.hash_id,
-                "transport": identity.transport,
-                "public_key": identity.public_bytes().hex(),
-            }
-        )
-
     async def release_notes(_request: web.Request) -> web.Response:
         if RELEASE_NOTES_PATH.exists():
             text = RELEASE_NOTES_PATH.read_text(encoding="utf-8")
         else:
-            text = f"# SRLTCP {__version__}\n\nNo release notes available."
+            text = f"# SRLTCP {__version__}\n\nNo release notes."
         return web.json_response({"version": __version__, "notes": text})
 
     async def restart(_request: web.Request) -> web.Response:
@@ -223,18 +240,11 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         asyncio.create_task(_do_restart())
         return web.json_response({"restarting": True})
 
-    async def config_get(_request: web.Request) -> web.Response:
-        return web.json_response(
-            {
-                "name": node.config.name,
-                "tcp_port": node.config.tcp_port,
-                "relay_mode": node.config.relay_mode,
-                "enable_tcp": node.config.enable_tcp,
-                "enable_serial": node.config.enable_serial,
-                "auto_announce": node.config.announce,
-                "version": __version__,
-            }
-        )
+    async def interfaces(_request: web.Request) -> web.Response:
+        return web.json_response({"interfaces": list_interfaces()})
+
+    async def system(_request: web.Request) -> web.Response:
+        return web.json_response(system_stats())
 
     app.router.add_get("/api/status", status)
     app.router.add_get("/api/identities", identities)
@@ -251,12 +261,12 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_post("/api/transfer", send_file)
     app.router.add_get("/api/transfers", transfers)
     app.router.add_post("/api/share/create", create_share)
-    app.router.add_get("/api/config", config_get)
     app.router.add_get("/api/settings", settings_get)
-    app.router.add_put("/api/settings", settings_put)
+    app.router.add_post("/api/settings", settings_post)
     app.router.add_get("/api/browse", browse_folders)
-    app.router.add_post("/api/identities/{transport}", identity_create)
     app.router.add_post("/api/identities/{transport}/regenerate", identity_regenerate)
     app.router.add_delete("/api/identities/{transport}", identity_delete)
     app.router.add_get("/api/release-notes", release_notes)
     app.router.add_post("/api/restart", restart)
+    app.router.add_get("/api/interfaces", interfaces)
+    app.router.add_get("/api/system", system)

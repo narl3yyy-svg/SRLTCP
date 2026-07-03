@@ -13,6 +13,9 @@ if TYPE_CHECKING:
 
 def register_ws_routes(app: web.Application, node: SRLTCPNode) -> None:
     async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
+        host = request.host.split(":")[0].lower()
+        if host not in ("127.0.0.1", "localhost", "[::1]"):
+            raise web.HTTPForbidden()
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         node._ws_clients.add(ws)

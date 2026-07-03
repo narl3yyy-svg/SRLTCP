@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -29,12 +30,12 @@ from srltcp.core.protocol.messages import (
     encode_payload,
     parse_header,
 )
+from srltcp.core.settings import prune_messages_by_retention
 from srltcp.core.trusted import TrustedStore
 from srltcp.transports.base import Transport, TransportEvent, TransportPeer
 from srltcp.transports.serial import SerialTransport
 from srltcp.transports.tcp import TCPTransport
 from srltcp.utils.logging import get_logger
-from srltcp.utils.platform import data_dir
 
 log = get_logger(__name__)
 
@@ -52,6 +53,9 @@ class NodeConfig:
     serial_port: str = ""
     serial_baud: int = 115200
     announce: bool = False
+    lan_ip: str = ""
+    incoming_dir: str = ""
+    message_retention_hours: int = 168
 
 
 class MessagingBackend(
@@ -71,7 +75,6 @@ class MessagingBackend(
         self.trusted = TrustedStore()
         self.identities: dict[str, Identity] = {}
         self.discovery = DiscoveryRegistry()
-        self._incoming_dir = data_dir() / "incoming"
         self.tcp_transport: TCPTransport | None = None
         self.serial_transport: SerialTransport | None = None
         self._running = False
@@ -138,6 +141,7 @@ class MessagingBackend(
 
         if self.tcp_transport:
             await self.tcp_transport.start()
+            self.config.tcp_port = self.tcp_transport.port
         if self.serial_transport:
             try:
                 await self.serial_transport.start()
@@ -160,8 +164,11 @@ class MessagingBackend(
         self._running = False
         await self.stop_announce_loop()
         await self.stop_ping_loop()
-        for task in self._transfer_tasks.values():
+        tasks = list(self._transfer_tasks.values())
+        for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         if self.tcp_transport:
             await self.tcp_transport.stop()
         if self.serial_transport:
@@ -255,6 +262,9 @@ class MessagingBackend(
         if msg_type == MessageType.TEXT and link:
             await self._handle_text(peer_id, body, flags)
 
+    def is_trusted(self, hash_id: str) -> bool:
+        return self.trusted.is_trusted(hash_id)
+
     async def _handle_text(self, peer_id: str, body: bytes, flags: int) -> None:
         link = self.get_link_by_peer_id(peer_id)
         if not link or not link.handshake_complete:
@@ -278,9 +288,6 @@ class MessagingBackend(
         self._messages.append(msg)
         if self._on_message:
             await self._on_message(msg.to_dict())
-
-    def is_trusted(self, hash_id: str) -> bool:
-        return self.trusted.is_trusted(hash_id)
 
     async def send_message(
         self,
@@ -342,7 +349,13 @@ class MessagingBackend(
             for t, i in self.identities.items()
         }
 
+    def _prune_messages(self) -> None:
+        self._messages = prune_messages_by_retention(
+            self._messages, self.config.message_retention_hours
+        )
+
     def get_messages(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        self._prune_messages()
         return [m.to_dict() for m in self._messages[-limit:]]
 
     def get_discovered_peers(self) -> list[dict[str, Any]]:
@@ -351,19 +364,10 @@ class MessagingBackend(
     def get_trusted_peers(self) -> list[dict[str, Any]]:
         return [p.to_dict() for p in self.trusted.list_peers()]
 
-    def prune_messages(self, max_age_hours: int | None) -> int:
-        if max_age_hours is None:
-            return 0
-        if max_age_hours == 0:
-            removed = len(self._messages)
-            self._messages.clear()
-            return removed
-        import time
-
-        cutoff = time.time() - max_age_hours * 3600
-        before = len(self._messages)
-        self._messages = [m for m in self._messages if m.timestamp >= cutoff]
-        return before - len(self._messages)
+    def clear_messages(self) -> int:
+        count = len(self._messages)
+        self._messages.clear()
+        return count
 
     async def send_file(
         self, recipient_hash: str, path: Path, *, transport: str = "tcp"

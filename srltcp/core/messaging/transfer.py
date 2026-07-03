@@ -42,7 +42,10 @@ class TransferMixin:
         self._transfers = {}
         self._incoming_paths = {}
         self._transfer_tasks = {}
-        self._transfer_dir = getattr(self, "_incoming_dir", None) or (data_dir() / "incoming")
+        if self.config.incoming_dir:
+            self._transfer_dir = Path(self.config.incoming_dir)
+        else:
+            self._transfer_dir = data_dir() / "transfers"
         ensure_dir(self._transfer_dir)
         self._transfer_started: dict[str, float] = {}
 

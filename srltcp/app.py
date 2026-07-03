@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
-import signal
 import sys
 
 from srltcp import __version__
 from srltcp.core.messaging.backend import NodeConfig
 from srltcp.core.messaging.constants import DEFAULT_TCP_PORT, RELAY_TCP_PORT, WEB_PORT
 from srltcp.core.node import SRLTCPNode
-from srltcp.core.settings import SettingsStore
+from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.utils.logging import get_logger, setup_logging
 from srltcp.utils.platform import default_serial_port
+from srltcp.utils.shutdown import GracefulShutdown
 from srltcp.web.server import run_web_server
 
 log = get_logger(__name__)
@@ -25,20 +24,21 @@ def build_parser() -> argparse.ArgumentParser:
         prog="srltcp",
         description="SRLTCP — Secure peer-to-peer communication over Serial and TCP/IP",
     )
-    parser.add_argument("--version", action="version", version=f"srltcp {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    web = sub.add_parser("web", help="Start local web UI + P2P node")
-    web.add_argument("--name", default="", help="Display name")
-    web.add_argument("--host", default="127.0.0.1", help="Web UI bind host")
-    web.add_argument("--port", type=int, default=0, help="Web UI port")
-    web.add_argument("--tcp-port", type=int, default=0, help="TCP transport port")
-    web.add_argument("--bind", default="", help="TCP transport bind address")
+    web = sub.add_parser("web", help="Start local HTTPS web UI + P2P node")
+    web.add_argument("--name", default="", help="Display name (overrides saved settings)")
+    web.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        help=f"HTTPS web UI port (default from settings or {WEB_PORT})",
+    )
+    web.add_argument("--tcp-port", type=int, default=DEFAULT_TCP_PORT, help="TCP transport port")
+    web.add_argument("--bind", default="0.0.0.0", help="TCP transport bind address")
     web.add_argument("--serial", action="store_true", help="Enable USB serial transport")
     web.add_argument("--serial-port", default="", help="Serial device path")
     web.add_argument("--no-tcp", action="store_true", help="Disable TCP transport")
-    web.add_argument("--announce", action="store_true", help="Enable auto-announce")
-    web.add_argument("--no-announce", action="store_true", help="Disable auto-announce")
     web.add_argument("--relay", action="store_true", help="Enable relay/router mode")
     web.add_argument("--log-level", default="INFO", help="Log level")
 
@@ -61,66 +61,58 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _config_from_settings(store: SettingsStore, args: argparse.Namespace) -> NodeConfig:
-    s = store.settings
-    name = args.name or s.display_name
-    if args.name:
-        store.update(display_name=name)
-    announce = s.auto_announce
-    if args.announce:
-        announce = True
-    if args.no_announce:
-        announce = False
-    enable_serial = s.enable_serial or args.serial
-    if args.serial:
-        store.update(enable_serial=True)
+def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) -> NodeConfig:
+    name = args.name or settings.display_name
     return NodeConfig(
         name=name,
-        bind_host=args.bind or s.bind_interface,
-        tcp_port=args.tcp_port or s.tcp_port,
-        relay_mode=args.relay or s.relay_mode,
-        enable_tcp=not args.no_tcp and s.enable_tcp,
-        enable_serial=enable_serial,
-        serial_port=args.serial_port or s.serial_port or default_serial_port(),
-        serial_baud=s.serial_baud,
-        announce=announce,
+        bind_host=args.bind,
+        tcp_port=args.tcp_port,
+        relay_mode=args.relay,
+        enable_tcp=not args.no_tcp,
+        enable_serial=args.serial,
+        serial_port=args.serial_port or default_serial_port(),
+        announce=settings.auto_announce,
+        lan_ip=settings.lan_ip,
+        incoming_dir=str(settings.resolved_incoming_dir()),
+        message_retention_hours=settings.message_retention_hours,
     )
 
 
 async def run_web(args: argparse.Namespace) -> None:
     store = SettingsStore()
-    if not store.settings.setup_complete:
-        store.update(setup_complete=True, version=__version__)
-    config = _config_from_settings(store, args)
-    store.update(
-        auto_announce=config.announce,
-        display_name=config.name,
-        tcp_port=config.tcp_port,
-        relay_mode=config.relay_mode,
-    )
-    node = SRLTCPNode(config, store)
-    await node.start()
-    port = args.port or store.settings.web_port or WEB_PORT
-    runner = await run_web_server(node, host=args.host, port=port)
+    settings = store.load()
+    settings.version = __version__
 
-    stop_event = asyncio.Event()
+    web_port = args.port or settings.web_port or WEB_PORT
+    settings.web_port = web_port
+    if args.name:
+        settings.display_name = args.name
 
-    def _signal_handler() -> None:
-        stop_event.set()
+    config = _node_config_from_settings(settings, args)
+    node = SRLTCPNode(config, settings)
 
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        with contextlib.suppress(NotImplementedError):
-            loop.add_signal_handler(sig, _signal_handler)
+    shutdown = GracefulShutdown()
+    runner_holder: list = []
 
-    log.info("SRLTCP %s — open http://%s:%d", __version__, args.host, port)
-    try:
-        await stop_event.wait()
-    except KeyboardInterrupt:
-        pass
-    finally:
+    async def cleanup() -> None:
+        log.info("Cleaning up transports and web server…")
         await node.stop()
-        await runner.cleanup()
+        if runner_holder:
+            await runner_holder[0].cleanup()
+
+    shutdown.add_hook(cleanup)
+
+    await node.start()
+    runner, bound_port = await run_web_server(node, host="127.0.0.1", port=web_port)
+    runner_holder.append(runner)
+    settings.web_port = bound_port
+    store.save(settings)
+
+    log.info("SRLTCP v%s running — https://127.0.0.1:%d", __version__, bound_port)
+    log.info("Press Ctrl+C to stop")
+
+    await shutdown.wait()
+    await shutdown.run_cleanup()
 
 
 async def run_relay(args: argparse.Namespace) -> None:
@@ -133,32 +125,21 @@ async def run_relay(args: argparse.Namespace) -> None:
         enable_serial=False,
         announce=True,
     )
-    node = SRLTCPNode(config)
+    settings = AppSettings(display_name=args.name, setup_complete=True)
+    node = SRLTCPNode(config, settings)
+    shutdown = GracefulShutdown()
+    shutdown.add_hook(node.stop)
+
     await node.start()
-    log.info("Headless relay listening on %s:%d", args.bind, args.port)
-
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        with contextlib.suppress(NotImplementedError):
-            loop.add_signal_handler(sig, stop_event.set)
-
-    try:
-        await stop_event.wait()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        await node.stop()
+    log.info("Headless relay listening on %s:%d (Ctrl+C to stop)", args.bind, args.port)
+    await shutdown.wait()
+    await shutdown.run_cleanup()
 
 
 async def run_send(args: argparse.Namespace) -> None:
+    settings = AppSettings()
     config = NodeConfig(name=args.name, enable_serial=False, announce=False)
-    node = SRLTCPNode(config)
-    from srltcp.core.trusted import TrustedPeer
-
-    node.backend.trusted.add(
-        TrustedPeer(hash_id=args.recipient, name="cli-peer", transport="tcp")
-    )
+    node = SRLTCPNode(config, settings)
     await node.start()
     await node.backend.connect_to_peer(args.recipient, host=args.host, port=args.port)
     await asyncio.sleep(2)

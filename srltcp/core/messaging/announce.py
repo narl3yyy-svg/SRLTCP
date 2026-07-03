@@ -31,16 +31,14 @@ class AnnounceMixin:
                 "name": identity.name,
                 "public_key": identity.public_bytes().hex(),
                 "transport": transport,
-                "tcp_host": (
-                    self.config.bind_host
-                    if self.config.bind_host != "0.0.0.0"
-                    else self._lan_ip()
-                ),
+                "tcp_host": self._lan_ip(),
                 "tcp_port": self.config.tcp_port,
             }
         )
 
     def _lan_ip(self: MessagingBackend) -> str:
+        if self.config.lan_ip:
+            return self.config.lan_ip
         import socket
 
         try:
@@ -69,7 +67,7 @@ class AnnounceMixin:
                 await self.tcp_transport.broadcast_discovery(payload)
             elif t == "serial" and self.serial_transport:
                 await self.serial_transport.broadcast(payload)
-            log.info("Announced on %s", t)
+            log.debug("Announced on %s", t)
 
     async def start_announce_loop(self: MessagingBackend) -> None:
         await self.stop_announce_loop()

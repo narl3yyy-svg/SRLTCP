@@ -7,7 +7,7 @@ name = "srltcp"
 version = "0.1.2"
 description = "Fast, secure peer-to-peer communication and file transfer over Serial (USB) and TCP/IP"
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.12"
 authors = [{ name = "SRLTCP Contributors" }]
 keywords = ["p2p", "file-transfer", "serial", "tcp", "encryption", "relay"]
@@ -15,7 +15,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -54,7 +54,7 @@ where = ["."]
 include = ["srltcp*"]
 
 [tool.setuptools.package-data]
-srltcp = ["web/static/*"]
+srltcp = ["web/static/*", "web/static/app.css", "web/static/app.js"]
 
 [tool.ruff]
 line-length = 100

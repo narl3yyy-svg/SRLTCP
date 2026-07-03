@@ -1,7 +1,7 @@
 # SRLTCP
 
 [![Checks](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/checks.yml/badge.svg)](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/checks.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
@@ -20,10 +20,11 @@
 | **Secure messaging** | Ed25519 identity + X25519 key exchange + AES-GCM |
 | **Fast file transfer** | 4 MiB chunked streaming, zstd compression, resume support |
 | **Folder sharing** | Token-based HTTP browse/download API |
-| **Web UI** | Local aiohttp server with WebSocket live updates |
+| **Web UI** | Localhost **HTTPS-only** chat UI (default port **9876**) |
+| **Settings** | First-run wizard + persistent config (folders, retention, LAN IP) |
+| **System stats** | CPU usage & temperature in the web UI status bar |
 | **Trusted peers** | Trust-before-message security model |
-| **Ping / RTT** | Latency measurement in ms for network peers |
-| **Serial RF metrics** | Link quality % and RTT for USB/serial links |
+| **Ping / RTT** | Latency in ms; serial RF link quality % |
 | **Cross-platform** | Linux, macOS, Windows CLI + Android (Chaquopy) |
 
 ---
@@ -38,8 +39,6 @@ srltcp/
   core/
     identity.py             # Per-transport Ed25519 identities
     discovery.py            # UDP/TCP peer discovery registry
-    settings.py             # Persistent app settings
-    trusted.py              # Trusted peer list
     node.py                 # Top-level node (messaging + sharing)
     protocol/
       framing.py            # Length + CRC32 frames
@@ -50,7 +49,6 @@ srltcp/
       links.py              # Peer link map
       connect.py            # Handshake + session keys
       announce.py           # Discovery broadcasts
-      ping.py               # RTT and link quality
       queue.py              # Offline message queue
       transfer.py           # Chunked file transfer
       routing.py            # Relay routing table
@@ -68,7 +66,7 @@ srltcp/
 ```mermaid
 flowchart TB
     subgraph Node["SRLTCP Node"]
-        UI[Web UI :8743]
+        UI[Web UI HTTPS :9876]
         MB[MessagingBackend]
         ID[Identity Store]
         UI <-->|WebSocket| MB
@@ -149,6 +147,32 @@ In relay mode, the server forwards `RELAY_ENVELOPE` packets containing only:
 
 The relay **never receives session keys** and cannot decrypt message or file content.
 
+### Web UI hardening (v0.1.1+)
+
+- **HTTPS only** on `127.0.0.1` — auto-generated 4096-bit localhost certificate
+- **TLS 1.2+** with modern cipher suites; no cleartext HTTP
+- **Localhost-only binding** — refuses non-loopback Host headers
+- **Security headers** — CSP, HSTS, `X-Frame-Options: DENY`, `no-referrer`
+- **Origin validation** on POST requests and WebSocket connections
+- **Path traversal protection** on file/share APIs
+- **Constant-time** token comparison for share sessions
+
+### First-run setup
+
+On first launch, the web UI shows a setup wizard. Settings persist in `~/.srltcp/settings.json`:
+
+| Setting | Description |
+|---------|-------------|
+| Display name | Shown to peers on the network |
+| Web port | HTTPS port (default **9876**); restart to apply |
+| Message retention | Hours to keep local chat history |
+| Incoming files folder | Where received files are saved |
+| Shared folder | Default folder for browse/share |
+| LAN IP | Pinned interface for discovery & announce |
+| Auto-announce | Broadcast presence every 5 seconds |
+
+Change port from CLI: `./run.sh web --port 9999`
+
 ---
 
 ## Installation
@@ -161,7 +185,9 @@ cd SRLTCP
 ./run.sh web
 ```
 
-Open **http://127.0.0.1:8743** in your browser.
+Open **https://127.0.0.1:9876** in your browser (self-signed cert — accept once for localhost).
+
+Press **Ctrl+C** in the terminal to shut down cleanly.
 
 For USB serial on Linux, add your user to the `dialout` group:
 
@@ -215,9 +241,9 @@ Start the web UI on two machines on the same LAN:
 ./run.sh web --name "bob"
 ```
 
-1. Wait for peers to appear in **Discovered** (passive) or click **Announce** once
-2. Click **Trust** on a discovered peer
-3. Select the trusted peer and send encrypted messages
+1. Click **Announce** on both machines
+2. Select a discovered peer in the sidebar
+3. Send encrypted messages in the chat panel
 
 ### Headless relay server
 
@@ -254,16 +280,13 @@ srltcp send --recipient <hash_id> --text "Hello" --host 10.0.0.5
 ### File transfer (API)
 
 ```bash
-# Upload a file from the browser or CLI
-curl -X POST http://127.0.0.1:8743/api/upload -F "file=@/path/to/large.iso"
-
-# Send to a trusted peer (use path from upload response)
-curl -X POST http://127.0.0.1:8743/api/transfer \
+# Send a file to a connected peer
+curl -k -X POST https://127.0.0.1:9876/api/transfer \
   -H 'Content-Type: application/json' \
-  -d '{"recipient_hash":"<hash>","path":"/home/user/.srltcp/uploads/large.iso"}'
+  -d '{"recipient_hash":"<hash>","path":"/path/to/large.iso"}'
 
-# List transfers (includes progress % and MB/s)
-curl http://127.0.0.1:8743/api/transfers
+# List transfers
+curl -k https://127.0.0.1:9876/api/transfers
 ```
 
 Transfers are **resumable** — if interrupted, the receiver's partial file offset is used on resume via `FILE_RESUME`.
@@ -271,12 +294,12 @@ Transfers are **resumable** — if interrupted, the receiver's partial file offs
 ### Folder sharing
 
 ```bash
-curl -X POST http://127.0.0.1:8743/api/share/create \
+curl -k -X POST https://127.0.0.1:9876/api/share/create \
   -H 'Content-Type: application/json' \
   -d '{"path":"/home/user/shared"}'
 
 # Browse (from peer)
-curl "http://<peer-ip>:8743/api/share/<session_id>/list?token=<token>"
+curl -k "https://127.0.0.1:9876/api/share/<session_id>/list?token=<token>"
 ```
 
 ---
@@ -325,15 +348,15 @@ pytest tests/ -v                # unit tests only
 
 ## Changelog
 
-See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md) for full release notes. Click the **version badge** (top-left) in the web UI.
+See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
 
-### v0.1.2 highlights
+### v0.1.2
 
-- Fixed discovery spam and auto-announce ignoring settings
-- Trusted peers required for messaging and file send
-- Ping/RTT (ms), serial RF link quality (%)
-- File upload + progress bar with MB/s speed
-- Settings panel: serial, folders, retention, restart
+- Fixed discovery spam; auto-announce off by default with passive discovery
+- Trusted peers required for messaging and file transfer
+- Ping/RTT (ms) and serial RF link quality (%)
+- File upload via browser with progress bar and MB/s speed
+- Settings: serial transport, folder pickers, retention presets, restart
 - Identity create/regenerate/delete for TCP and serial
 
 ## Roadmap
@@ -352,7 +375,7 @@ See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md) for full release notes. C
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GPL v3 — see [LICENSE](LICENSE).
 
 ## Acknowledgments
 
