@@ -36,15 +36,15 @@ CI builds tag releases as `SRLTCP-<version>.apk` on GitHub Actions.
 ## Runtime
 
 1. `SRLTCPApplication` starts the Chaquopy Python runtime on app launch.
-2. `MainActivity` calls `set_android_data_dir(filesDir)` so identities, settings, and transfers persist under the app private files directory.
-3. A background thread runs `srltcp web --debug` (HTTPS on localhost, serial enabled when configured in settings).
+2. `MainActivity` requests `POST_NOTIFICATIONS` on Android 13+ before starting the foreground service.
+3. `SRLTCPService` sets `set_android_data_dir(filesDir)`, starts `srltcp web`, and keeps the node alive.
 4. `WebView` loads `https://127.0.0.1:<port>/` with self-signed localhost TLS accepted.
 
 ### Startup timeline
 
-- Python server thread starts immediately after data dir is set.
-- WebView load is delayed ~3s, then retries ports 9876–9878.
-- Loading screen shows until the page finishes or a fatal error is displayed.
+- Foreground service starts the Python server on a background thread.
+- WebView load begins once `is_android_server_ready()` is true (~1–5s).
+- Ports 9876–9878 are tried automatically if the default port is busy.
 
 ## USB Serial on Android
 
@@ -59,20 +59,27 @@ If no USB device is present, TCP-only mode still works over Wi‑Fi.
 ## Permissions
 
 - `INTERNET` — TCP transport and web UI
-- `USB` host — serial over USB-OTG
+- `POST_NOTIFICATIONS` — foreground service notification (Android 13+)
+- `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_DATA_SYNC` — keep node alive in background
+- USB host — serial over USB-OTG
 
 ## Troubleshooting
 
-| Symptom | Check |
-|---------|--------|
-| White screen / crash on open | Logcat tag `SRLTCP`; ensure `srltcp/` was rsync'd before build |
-| Cannot reach web UI | Server may be on 9877/9878 if 9876 is busy; app retries automatically |
-| No identities after reinstall | Data lives in app files dir; uninstall clears it |
+| Symptom | Fix |
+|---------|-----|
+| App closes immediately on open | Run `adb logcat -s SRLTCP SRLTCPService`. Ensure `srltcp/` was rsync'd before build. Grant notification permission when prompted (Android 13+). |
+| `Python runtime not initialized` | Reinstall APK; verify Chaquopy Gradle sync completed without errors. |
+| White screen / cannot reach UI | Server may be on 9877/9878; wait up to 60s. Check logcat for `Server ready on port`. |
+| Foreground service failed | App falls back to direct server start; check battery optimization is off for SRLTCP. |
+| No identities after reinstall | Data lives in app files dir; uninstall clears it. |
+| Serial not detected | USB-OTG adapter + cable; enable USB host in device settings if applicable. |
+| WebView SSL errors | Only `127.0.0.1` / `localhost` self-signed certs are accepted by design. |
 
 ## Debug
 
 ```bash
-adb logcat -s SRLTCP
+adb logcat -s SRLTCP SRLTCPService
+adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
 Enable WebView debugging in debug builds (`WebView.setWebContentsDebuggingEnabled`).

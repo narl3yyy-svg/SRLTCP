@@ -19,14 +19,20 @@ class SRLTCPService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Starting SRLTCP…"))
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification("Starting SRLTCP…"))
+        } catch (e: Exception) {
+            Log.w(TAG, "startForeground failed — running without notification", e)
+        }
         Thread {
             try {
                 val py = Python.getInstance()
                 val filesDir = applicationContext.filesDir.absolutePath
                 py.getModule("srltcp.utils.platform")
                     .callAttr("set_android_data_dir", filesDir)
-                py.getModule("srltcp.app").callAttr("start_android_server")
+                if (!py.getModule("srltcp.app").callAttr("is_android_server_ready").toBoolean()) {
+                    py.getModule("srltcp.app").callAttr("start_android_server")
+                }
                 var waited = 0
                 while (waited < 60000) {
                     val ready = py.getModule("srltcp.app")
@@ -87,8 +93,12 @@ class SRLTCPService : Service() {
     }
 
     private fun updateNotification(text: String) {
-        val mgr = getSystemService(NotificationManager::class.java)
-        mgr.notify(NOTIFICATION_ID, buildNotification(text))
+        try {
+            val mgr = getSystemService(NotificationManager::class.java)
+            mgr.notify(NOTIFICATION_ID, buildNotification(text))
+        } catch (e: Exception) {
+            Log.w(TAG, "updateNotification failed", e)
+        }
     }
 
     companion object {

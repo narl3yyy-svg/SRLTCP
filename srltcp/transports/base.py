@@ -102,6 +102,7 @@ class Connection:
         self._on_frame: FrameHandler | None = None
         self._on_close: Callable[[TransportPeer], Awaitable[None]] | None = None
         self._closed = False
+        self._send_lock = asyncio.Lock()
 
     def set_frame_handler(self, handler: FrameHandler) -> None:
         self._on_frame = handler
@@ -132,8 +133,9 @@ class Connection:
 
     async def send(self, payload: bytes) -> None:
         frame = FrameWriter.write(payload)
-        self.writer.write(frame)
-        await self.writer.drain()
+        async with self._send_lock:
+            self.writer.write(frame)
+            await self.writer.drain()
 
     async def close(self) -> None:
         if self._closed:

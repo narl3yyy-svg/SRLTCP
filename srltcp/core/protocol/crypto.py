@@ -29,7 +29,7 @@ def identity_hash(public_key_bytes: bytes) -> str:
     return digest[:32]
 
 
-def derive_session_key(shared_secret: bytes, salt: bytes, info: bytes = b"srltcp-v1") -> bytes:
+def derive_session_key(shared_secret: bytes, salt: bytes, info: bytes) -> bytes:
     return HKDF(
         algorithm=hashes.SHA256(),
         length=KEY_SIZE,

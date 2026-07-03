@@ -33,8 +33,11 @@ class PingMixin:
         async def _loop() -> None:
             while self._running:
                 for link in self.list_links():
-                    if link.get("handshake_complete"):
-                        await self.ping_peer(link["hash_id"])
+                    hash_id = link.get("hash_id", "")
+                    if link.get("handshake_complete") and not self.has_active_transfer_for(
+                        hash_id
+                    ):
+                        await self.ping_peer(hash_id)
                 await asyncio.sleep(PING_INTERVAL)
 
         self._ping_tasks.append(asyncio.create_task(_loop()))

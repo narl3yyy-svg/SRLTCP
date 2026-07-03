@@ -27,7 +27,7 @@ from srltcp.core.protocol.messages import (
     pack_file_chunk,
     unpack_file_chunk,
 )
-from srltcp.utils.files import ensure_dir, safe_filename, sha256_file, write_file_chunk
+from srltcp.utils.files import ensure_dir, fsync_file, safe_filename, sha256_file, write_file_chunk
 from srltcp.utils.logging import get_logger
 from srltcp.utils.platform import data_dir
 
@@ -55,8 +55,10 @@ class TransferMixin:
         ensure_dir(self._transfer_dir)
         self._transfer_started: dict[str, float] = {}
 
-    def _maybe_compress(self: MessagingBackend, data: bytes) -> tuple[bytes, bool]:
-        if len(data) < COMPRESS_THRESHOLD:
+    def _maybe_compress(
+        self: MessagingBackend, data: bytes, *, transport: str = "tcp"
+    ) -> tuple[bytes, bool]:
+        if transport == "serial" or len(data) < COMPRESS_THRESHOLD:
             return data, False
         cctx = zstd.ZstdCompressor(level=3)
         compressed = cctx.compress(data)
@@ -96,13 +98,14 @@ class TransferMixin:
             sha256=file_hash,
         )
         self._transfers[transfer.id] = transfer
+        chunk_size, _ = self._chunk_params(link.transport)
         body = encode_payload(
             {
                 "transfer_id": transfer.id,
                 "filename": transfer.filename,
                 "size": transfer.size,
                 "sha256": transfer.sha256,
-                "chunk_size": CHUNK_SIZE,
+                "chunk_size": chunk_size,
             }
         )
         packet = await self._encrypt_for_link(link, MessageType.FILE_OFFER, body)
@@ -114,10 +117,14 @@ class TransferMixin:
         data = decode_payload(body)
         transfer_id = data["transfer_id"]
         dest = self._transfer_dir / f"{transfer_id}_{safe_filename(data['filename'])}"
+        identity_hash = ""
+        link = self.get_link(hash_id)
+        if link:
+            identity_hash = self._identity_for_transport(link.transport).hash_id
         transfer = FileTransfer(
             id=transfer_id,
             sender_hash=hash_id,
-            recipient_hash=self.config.name,  # placeholder, updated by backend
+            recipient_hash=identity_hash,
             filename=data["filename"],
             path=dest,
             size=int(data["size"]),
@@ -125,7 +132,6 @@ class TransferMixin:
             transport="tcp",
             state=TransferState.OFFERED,
         )
-        link = self.get_link(hash_id)
         if link:
             transfer.transport = link.transport
         self._transfers[transfer_id] = transfer
@@ -185,12 +191,28 @@ class TransferMixin:
                         return
                     link = self.get_link(hash_id)
                     if not link or not link.handshake_complete:
-                        transfer.state = TransferState.FAILED
-                        return
+                        for _ in range(40):
+                            await asyncio.sleep(0.25)
+                            if transfer.state == TransferState.CANCELLED:
+                                return
+                            link = self.get_link(hash_id)
+                            if link and link.handshake_complete:
+                                break
+                        if not link or not link.handshake_complete:
+                            log.warning(
+                                "Link lost during transfer %s at %d/%d",
+                                transfer.id,
+                                transfer.offset,
+                                transfer.size,
+                            )
+                            transfer.state = TransferState.FAILED
+                            return
                     chunk = await f.read(chunk_size)
                     if not chunk:
                         break
-                    payload, compressed = self._maybe_compress(chunk)
+                    payload, compressed = self._maybe_compress(
+                        chunk, transport=transfer.transport
+                    )
                     raw = pack_file_chunk(transfer.id, transfer.offset, payload)
                     flags = Flags.ENCRYPTED | Flags.E2EE
                     if compressed:
@@ -284,6 +306,7 @@ class TransferMixin:
         if not transfer:
             return
         dest = self._incoming_paths.get(transfer_id, transfer.path)
+        await fsync_file(dest)
         actual = await sha256_file(dest)
         if actual != data.get("sha256", transfer.sha256):
             transfer.state = TransferState.FAILED

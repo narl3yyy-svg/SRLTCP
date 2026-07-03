@@ -53,14 +53,24 @@ async def read_file_chunk(path: Path, offset: int, length: int) -> bytes:
         return data
 
 
-async def write_file_chunk(path: Path, offset: int, data: bytes) -> None:
+async def write_file_chunk(path: Path, offset: int, data: bytes, *, fsync: bool = False) -> None:
+    """Write a chunk at offset. Fsync is optional — callers fsync on transfer complete."""
     ensure_dir(path.parent)
-    async with aiofiles.open(path, "rb+" if path.exists() else "wb") as f:
-        if not path.exists():
-            await f.truncate(max(offset + len(data), 0))
+    existed = path.exists()
+    async with aiofiles.open(path, "r+b" if existed else "w+b") as f:
+        end = offset + len(data)
+        current = path.stat().st_size if existed else 0
+        if end > current:
+            await f.truncate(end)
         await f.seek(offset)
         await f.write(data)
         await f.flush()
+        if fsync:
+            await aiofiles.os.fsync(f.fileno())
+
+
+async def fsync_file(path: Path) -> None:
+    async with aiofiles.open(path, "rb") as f:
         await aiofiles.os.fsync(f.fileno())
 
 

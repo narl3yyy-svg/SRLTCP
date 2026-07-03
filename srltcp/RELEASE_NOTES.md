@@ -1,5 +1,30 @@
 # SRLTCP Release Notes
 
+## v0.1.14 (2026-07-03)
+
+### Fixes
+- **File transfers** — removed per-chunk `fsync` (major cause of stalls/disconnects on large files); fsync on complete only; file chunks processed asynchronously so the read loop stays responsive; serialized TCP sends via connection lock
+- **Handshake** — client polls link status after connect; 15s server-side handshake wait; skip post-handshake ping during active transfers
+- **HKDF** — `derive_session_key()` now requires explicit `info` (no legacy `srltcp-v1` default)
+- **Media** — `Accept-Ranges: bytes` on transfer file endpoint for video seeking during partial downloads
+
+### UI
+- **Message actions** — copy (clipboard icon) and delete (trash icon) on text bubbles
+- **Transfer dock** — auto-hides when idle; polls `/api/transfers`
+- **Media in chat** — image/video preview, lightbox, download links with correct MIME types
+
+### Android
+- Foreground service + notification permission flow; server-ready wait before WebView; graceful FGS fallback
+
+## v0.1.13 (2026-07-03)
+
+### Fixes
+- **File transfers** — ping suppressed during active transfers; link_down deferred while transferring; 10s link-wait retry mid-transfer; no compression on serial; forced reconnect blocked during transfer
+- **Transfer dock** — auto-hides when no active transfers; polls `/api/transfers` for accurate state
+- **Media in chat** — images and videos preview during transfer; click opens lightbox; Download link on all file types
+- **Message actions** — copy (clipboard icon) and delete (trash icon) on text bubbles
+- **Android APK** — `POST_NOTIFICATIONS` requested before foreground service; graceful fallback if FGS fails; service not stopped on background
+
 ## v0.1.12 (2026-07-03)
 
 ### Fixes

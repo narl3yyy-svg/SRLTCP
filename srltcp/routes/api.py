@@ -139,7 +139,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                 hash_id, host=host, port=port, transport=transport, force=force
             )
             if ok:
-                await node.backend.wait_for_handshake(hash_id, timeout=12.0)
+                await node.backend.wait_for_handshake(hash_id, timeout=15.0)
         except (KeyError, RuntimeError, OSError) as exc:
             return web.json_response(
                 {"connected": False, "error": str(exc), "handshake_complete": False},
@@ -224,6 +224,25 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     async def transfers(_request: web.Request) -> web.Response:
         return web.json_response(node.backend.list_transfers())
 
+    def _mime_for_filename(name: str) -> str:
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        return {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "gif": "image/gif",
+            "webp": "image/webp",
+            "bmp": "image/bmp",
+            "svg": "image/svg+xml",
+            "mp4": "video/mp4",
+            "webm": "video/webm",
+            "mov": "video/quicktime",
+            "mkv": "video/x-matroska",
+            "avi": "video/x-msvideo",
+            "m4v": "video/mp4",
+            "ogv": "video/ogg",
+        }.get(ext, "application/octet-stream")
+
     async def transfer_file(request: web.Request) -> web.Response:
         transfer_id = request.match_info.get("transfer_id", "")
         transfer = node.backend._transfers.get(transfer_id)
@@ -234,17 +253,25 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             incoming = node.backend._incoming_paths.get(transfer_id)
             if incoming and incoming.is_file():
                 path = incoming
+            elif path.exists() and path.stat().st_size > 0:
+                pass
             else:
                 return web.json_response({"error": "file not ready"}, status=404)
         from urllib.parse import quote
 
         fname = transfer.filename or path.name
-        disposition = f'attachment; filename="{quote(fname)}"; filename*=UTF-8\'\'{quote(fname)}'
+        download = request.rel_url.query.get("download") in ("1", "true", "yes")
+        disp_type = "attachment" if download else "inline"
+        disposition = (
+            f'{disp_type}; filename="{quote(fname)}"; filename*=UTF-8\'\'{quote(fname)}'
+        )
         return web.FileResponse(
             path,
             headers={
+                "Accept-Ranges": "bytes",
                 "Cache-Control": "no-store",
                 "Content-Disposition": disposition,
+                "Content-Type": _mime_for_filename(fname),
             },
         )
 

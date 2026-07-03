@@ -288,9 +288,16 @@ class MessagingBackend(
                 self._pending_handshakes.pop(link_hash, None)
                 if self.config.relay_mode:
                     self.routing.remove_for_peer(event.peer.peer_id)
-                if self._on_link_down:
+                transfer_active = self.has_active_transfer_for(link_hash)
+                if transfer_active:
+                    log.info(
+                        "Suppressing link_down for %s — file transfer in progress",
+                        link_hash[:8],
+                    )
+                elif self._on_link_down:
                     await self._on_link_down(link_hash, link_name)
-                self._schedule_reconnect(link_hash)
+                if not transfer_active:
+                    self._schedule_reconnect(link_hash)
         if self._on_event:
             await self._on_event(
                 {
@@ -343,11 +350,22 @@ class MessagingBackend(
         elif msg_type == MessageType.FILE_CHUNK:
             link = self.get_link_by_peer_id(peer.peer_id)
             if link:
-                await self._handle_file_chunk(
-                    link.hash_id,
-                    body,
-                    compressed=bool(flags & Flags.COMPRESSED),
-                )
+                hash_id = link.hash_id
+                compressed = bool(flags & Flags.COMPRESSED)
+
+                async def _process_chunk() -> None:
+                    try:
+                        await self._handle_file_chunk(
+                            hash_id, body, compressed=compressed
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "File chunk handler failed from %s: %s",
+                            hash_id[:8],
+                            exc,
+                        )
+
+                asyncio.create_task(_process_chunk())
         elif msg_type == MessageType.FILE_COMPLETE:
             link = self.get_link_by_peer_id(peer.peer_id)
             if link and flags & Flags.ENCRYPTED:
@@ -529,8 +547,10 @@ class MessagingBackend(
 
     def _file_msg_type(self, filename: str) -> str:
         ext = Path(filename).suffix.lower()
-        if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"):
+        if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"):
             return "image"
+        if ext in (".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v", ".ogv"):
+            return "video"
         return "file"
 
     async def _append_file_message(

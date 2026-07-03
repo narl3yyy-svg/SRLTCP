@@ -515,7 +515,24 @@ body {
   border-radius: 8px;
   object-fit: contain;
 }
-.image-bubble { flex-direction: column; }
+.chat-video {
+  display: block;
+  max-width: 100%;
+  max-height: 280px;
+  border-radius: 8px;
+  background: #000;
+}
+.image-bubble, .video-bubble { flex-direction: column; }
+.media-preview-btn {
+  display: block;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+  width: 100%;
+  text-align: left;
+}
+.video-bubble .media-preview-btn { cursor: pointer; }
 .file-download {
   display: inline-block;
   margin-top: 0.35rem;
@@ -763,9 +780,65 @@ body {
   color: var(--text-secondary);
   cursor: pointer;
 }
+.bubble-action.icon-only {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.bubble-action.icon-only svg { width: 13px; height: 13px; }
 .bubble-action:hover { color: var(--text); background: var(--surface-hover); }
 .bubble-action.danger { color: #f07178; border-color: rgba(240, 113, 120, 0.35); }
 .bubble-action.danger:hover { background: rgba(240, 113, 120, 0.12); }
+
+#media-lightbox.open { display: flex; }
+.media-lightbox-panel {
+  position: relative;
+  max-width: min(92vw, 1200px);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+.media-lightbox-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-height: calc(92vh - 4rem);
+  overflow: auto;
+}
+.lightbox-image {
+  max-width: 100%;
+  max-height: calc(92vh - 5rem);
+  object-fit: contain;
+  border-radius: 8px;
+}
+.lightbox-video {
+  max-width: 100%;
+  max-height: calc(92vh - 5rem);
+  border-radius: 8px;
+  background: #000;
+}
+.media-lightbox-close {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  border: none;
+  background: rgba(0,0,0,0.5);
+  color: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 2;
+}
+.media-lightbox-download { margin-top: 0.25rem; }
 
 .network-legend {
   display: flex;

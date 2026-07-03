@@ -125,6 +125,12 @@ class ConnectMixin:
                     existing = None
 
         if existing and force:
+            if self.has_active_transfer_for(hash_id):
+                log.info(
+                    "Skipping forced reconnect for %s — transfer active",
+                    hash_id[:8],
+                )
+                return existing.handshake_complete
             await self._teardown_link(hash_id)
 
         peer_name = (
@@ -238,7 +244,8 @@ class ConnectMixin:
         if link:
             link.peer_name = remote_name
         self._cancel_reconnect(remote_hash)
-        await self.ping_peer(remote_hash)
+        if not self.has_active_transfer_for(remote_hash):
+            await self.ping_peer(remote_hash)
         if self._on_link_up:
             await self._on_link_up(remote_hash, remote_name)
         if self._on_peer_metrics:

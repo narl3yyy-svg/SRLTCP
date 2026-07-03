@@ -6,7 +6,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.12
+**Current version:** 0.1.14
 
 ---
 
@@ -18,7 +18,7 @@
 | **P2P mode** | Direct encrypted links between peers on LAN or serial cable |
 | **Relay mode** | Optional headless server forwards opaque E2EE envelopes |
 | **Secure messaging** | Ed25519 identity + X25519 key exchange + AES-GCM |
-| **Fast file transfer** | 4 MiB chunked streaming, zstd compression, resume support |
+| **Fast file transfer** | Chunked streaming (256 KiB TCP / 8 KiB serial), zstd on TCP, resume support |
 | **Folder sharing** | Token-based HTTP browse/download API |
 | **Web UI** | Localhost **HTTPS-only** chat UI (default port **9876**) |
 | **Settings** | First-run wizard + persistent config (folders, retention, LAN IP) |
@@ -220,14 +220,31 @@ srltcp web
 
 ### Android (Chaquopy)
 
-See [android/README.md](android/README.md). Build the APK with Android Studio + Gradle:
+See [android/README.md](android/README.md). **Always rsync the Python package before building:**
 
 ```bash
-cd android
-./gradlew assembleDebug
+mkdir -p android/app/src/main/python
+rsync -a --delete srltcp/ android/app/src/main/python/srltcp/
+cd android && ./gradlew assembleDebug
 ```
 
-Sideload `app-debug.apk` on arm64 devices with USB-OTG support.
+Sideload `app/build/outputs/apk/debug/app-debug.apk` on arm64 devices.
+
+**Troubleshooting:**
+
+| Symptom | What to do |
+|---------|------------|
+| App closes on launch | `adb logcat -s SRLTCP SRLTCPService` — ensure `srltcp/` was rsync'd before build |
+| `Python runtime not initialized` | Reinstall APK; re-sync Gradle / Chaquopy in Android Studio |
+| White screen / UI never loads | Wait up to 60s; check logcat for `Server ready on port`; app tries ports 9876–9878 |
+| Notification permission denied (Android 13+) | Grant when prompted, or enable in system settings — required for foreground service |
+| No peers / identities after reinstall | Uninstall clears app data; identities are stored in the app files directory |
+| USB serial not detected | USB-OTG adapter + cable; grant USB permission when device attaches |
+
+```bash
+adb logcat -s SRLTCP SRLTCPService
+adb shell am start -n com.srltcp.app/.MainActivity
+```
 
 ---
 
@@ -295,6 +312,8 @@ curl -k https://127.0.0.1:9876/api/transfers
 
 Transfers are **resumable** — if interrupted, the receiver's partial file offset is used on resume via `FILE_RESUME`.
 
+In the web UI, images and videos preview in chat during transfer. Click to enlarge in a lightbox; use **Download** to save the file. The transfer dock (progress bar above the composer) hides automatically when no transfers are active. Both peers must run **v0.1.14+** for best file-transfer stability.
+
 ### Folder sharing
 
 ```bash
@@ -312,7 +331,7 @@ curl -k "https://127.0.0.1:9876/api/share/<session_id>/list?token=<token>"
 
 | Setting | Value | Rationale |
 |---------|-------|-----------|
-| Chunk size | 4 MiB | Maximizes throughput on gigabit LAN |
+| Chunk size | 256 KiB TCP / 8 KiB serial | Balances throughput and connection stability |
 | Compression | zstd level 3, ≥ 64 KiB | Fast ratio for text/logs; skips already-compressed data |
 | Frame CRC | CRC32 | Cheap integrity check per frame |
 | Async I/O | aiofiles + asyncio | Non-blocking disk and network |
@@ -353,6 +372,12 @@ pytest tests/ -v                # unit tests only
 ## Changelog
 
 See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
+
+### v0.1.14
+
+- Stable large file transfers (no per-chunk fsync, async chunk handling, send lock)
+- Media lightbox, copy/delete icons, transfer dock auto-hide, handshake polling
+- HKDF explicit info strings; Android foreground service fixes
 
 ### v0.1.10
 
