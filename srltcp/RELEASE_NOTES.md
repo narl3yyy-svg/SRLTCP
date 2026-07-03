@@ -1,5 +1,21 @@
 # SRLTCP Release Notes
 
+## v0.1.8 (2026-07-03)
+
+### Fixes
+- **LAN discovery** — UDP announce broadcasts to all interface subnet addresses (not only 255.255.255.255); 3-packet burst on manual announce
+- **Serial announce** — uses `MessageType.ANNOUNCE` framing so peers on the RF link can decode discovery
+- **Discovered peers** — TCP and serial identities listed separately with endpoint (IP:port or serial device)
+- **Log spam** — quiet access logger suppresses `/api/system`, `/api/status`, `/api/peers` polling noise
+- **UI polling** — reduced background fetch frequency; settings form no longer reloads interfaces on every status tick
+- **Default baud** — 57600 (was 115200)
+- **Android APK** — crash guards, WebView compat client, non-daemon server thread, app icon, output as `SRLTCP-0.1.8.apk`
+
+### New
+- **Timezone & clock** — timezone picker in settings; live clock in status bar
+- **Setup browse** — folder browse buttons on first-run wizard (same as settings)
+- **Network map** — settings → Network map visualizes self, peers, and active links
+
 ## v0.1.7 (2026-07-03)
 
 ### Fixes

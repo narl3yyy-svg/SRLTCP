@@ -17,7 +17,7 @@ from srltcp.utils.folders import list_directory
 from srltcp.utils.network import list_interfaces
 from srltcp.utils.platform import data_dir
 from srltcp.utils.serial_ports import baud_rates, list_serial_ports
-from srltcp.utils.system_stats import system_stats
+from srltcp.utils.system_stats import list_timezones, system_stats
 
 RELEASE_NOTES_PATH = Path(__file__).resolve().parents[1] / "RELEASE_NOTES.md"
 
@@ -284,7 +284,68 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         return web.json_response({"interfaces": list_interfaces()})
 
     async def system(_request: web.Request) -> web.Response:
-        return web.json_response(system_stats())
+        return web.json_response(system_stats(timezone=node.settings.timezone))
+
+    async def timezones(_request: web.Request) -> web.Response:
+        return web.json_response({"timezones": list_timezones()})
+
+    async def network_view(_request: web.Request) -> web.Response:
+        identities = node.backend.get_identities()
+        discovered = node.backend.get_discovered_peers()
+        trusted = node.backend.get_trusted_peers()
+        links = node.backend.list_links()
+        nodes = []
+        edges = []
+        for transport, ident in identities.items():
+            nodes.append(
+                {
+                    "id": ident["hash_id"],
+                    "label": ident["name"],
+                    "role": "self",
+                    "transport": transport,
+                }
+            )
+        trusted_ids = {p["hash_id"] for p in trusted}
+        seen: set[str] = set()
+        for peer in discovered + trusted:
+            pid = peer["hash_id"]
+            if pid in seen:
+                continue
+            seen.add(pid)
+            nodes.append(
+                {
+                    "id": pid,
+                    "label": peer.get("name", pid[:8]),
+                    "role": "trusted" if pid in trusted_ids else "discovered",
+                    "transport": peer.get("transport", "tcp"),
+                    "address": peer.get("tcp_host") or peer.get("address", ""),
+                }
+            )
+        for link in links:
+            if not link.get("handshake_complete"):
+                continue
+            transport = link.get("transport", "tcp")
+            local_hash = identities.get(transport, {}).get("hash_id", "")
+            if not local_hash and identities:
+                local_hash = next(iter(identities.values()))["hash_id"]
+            edges.append(
+                {
+                    "from": local_hash,
+                    "to": link["hash_id"],
+                    "transport": transport,
+                    "state": "up",
+                }
+            )
+        return web.json_response(
+            {
+                "nodes": nodes,
+                "edges": edges,
+                "identities": identities,
+                "discovered": discovered,
+                "trusted": trusted,
+                "links": links,
+            }
+        )
 
     app.router.add_get("/api/status", status)
     app.router.add_get("/api/identities", identities)
@@ -314,3 +375,5 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_post("/api/restart", restart)
     app.router.add_get("/api/interfaces", interfaces)
     app.router.add_get("/api/system", system)
+    app.router.add_get("/api/timezones", timezones)
+    app.router.add_get("/api/network", network_view)

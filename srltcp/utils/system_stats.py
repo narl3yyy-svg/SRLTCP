@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 _prev_cpu: tuple[int, int] | None = None
 _prev_time: float = 0.0
@@ -78,8 +80,37 @@ def cpu_temperature_c() -> float | None:
     return round(sum(temps) / len(temps), 1)
 
 
-def system_stats() -> dict[str, Any]:
+def local_time_info(timezone: str = "") -> dict[str, Any]:
+    """Return local clock info for the status bar and settings."""
+    tz_name = timezone.strip()
+    if not tz_name:
+        tz_name = str(datetime.now().astimezone().tzinfo or "UTC")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = datetime.now().astimezone().tzinfo or ZoneInfo("UTC")
+        tz_name = str(tz)
+    now = datetime.now(tz)
+    return {
+        "timezone": tz_name,
+        "local_time": now.strftime("%H:%M:%S"),
+        "local_date": now.strftime("%Y-%m-%d"),
+        "utc_offset": now.strftime("%z"),
+    }
+
+
+def list_timezones() -> list[str]:
+    try:
+        from zoneinfo import available_timezones
+
+        return sorted(available_timezones())
+    except Exception:
+        return ["UTC"]
+
+
+def system_stats(*, timezone: str = "") -> dict[str, Any]:
     return {
         "cpu_percent": cpu_usage_percent(),
         "cpu_temp_c": cpu_temperature_c(),
+        **local_time_info(timezone),
     }

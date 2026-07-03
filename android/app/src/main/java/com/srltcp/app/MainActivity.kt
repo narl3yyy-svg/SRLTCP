@@ -4,17 +4,21 @@ import android.annotation.SuppressLint
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.net.http.SslError
+import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.webkit.WebViewClientCompat
 import com.chaquo.python.Python
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var webView: WebView
+    private var webView: WebView? = null
     private val handler = Handler(Looper.getMainLooper())
     private var loadAttempt = 0
     private val fallbackPorts = intArrayOf(9876, 9877, 9878)
@@ -22,47 +26,61 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        webView = WebView(this)
-        webView.settings.javaScriptEnabled = true
-        webView.settings.domStorageEnabled = true
-        webView.settings.allowFileAccess = false
-        webView.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                return false
+        try {
+            if (!Python.isStarted()) {
+                showFatal("Python runtime not initialized")
+                return
             }
 
-            override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
-                val host = error.url.host
-                if (host == "127.0.0.1" || host == "localhost") {
-                    handler.proceed()
-                } else {
-                    handler.cancel()
+            val root = FrameLayout(this)
+            webView = WebView(this).also { wv ->
+                wv.settings.javaScriptEnabled = true
+                wv.settings.domStorageEnabled = true
+                wv.settings.allowFileAccess = false
+                wv.settings.databaseEnabled = true
+                WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+                wv.webViewClient = object : WebViewClientCompat() {
+                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                        return false
+                    }
+
+                    override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+                        val host = error.url.host
+                        if (host == "127.0.0.1" || host == "localhost") {
+                            handler.proceed()
+                        } else {
+                            handler.cancel()
+                        }
+                    }
+
+                    override fun onReceivedError(
+                        view: WebView,
+                        request: WebResourceRequest,
+                        error: WebResourceError
+                    ) {
+                        if (request.isForMainFrame) {
+                            scheduleLoad(1500)
+                        }
+                    }
                 }
+                root.addView(wv)
             }
+            setContentView(root)
 
-            override fun onReceivedError(
-                view: WebView,
-                request: WebResourceRequest,
-                error: WebResourceError
-            ) {
-                if (request.isForMainFrame) {
-                    scheduleLoad(1500)
+            Thread {
+                try {
+                    Python.getInstance().getModule("srltcp.app").callAttr("start_android_server")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Server start failed", e)
+                    showFatal("Failed to start server: ${e.message}")
                 }
-            }
+            }.start()
+
+            scheduleLoad(4000)
+        } catch (e: Exception) {
+            Log.e(TAG, "onCreate failed", e)
+            showFatal("App failed to start: ${e.message}")
         }
-
-        setContentView(webView)
-
-        Thread {
-            try {
-                Python.getInstance().getModule("srltcp.app").callAttr("start_android_server")
-            } catch (_: Exception) {
-                showError("Failed to start Python server")
-            }
-        }.start()
-
-        scheduleLoad(3000)
     }
 
     private fun scheduleLoad(delayMs: Long) {
@@ -71,6 +89,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadWebUi() {
+        val wv = webView ?: return
         val port = resolvePort()
         val ports = if (loadAttempt == 0) {
             intArrayOf(port) + fallbackPorts.filter { it != port }.toIntArray()
@@ -79,36 +98,42 @@ class MainActivity : AppCompatActivity() {
         }
         val idx = loadAttempt.coerceAtMost(ports.size - 1)
         loadAttempt++
-        if (loadAttempt > ports.size + 2) {
-            showError("Cannot reach SRLTCP web UI. Try reinstalling the app.")
+        if (loadAttempt > ports.size + 3) {
+            showFatal("Cannot reach SRLTCP web UI on ports ${ports.joinToString()}")
             return
         }
-        webView.loadUrl("https://127.0.0.1:${ports[idx]}/")
+        wv.loadUrl("https://127.0.0.1:${ports[idx]}/")
     }
 
     private fun resolvePort(): Int {
         return try {
-            val py = Python.getInstance()
-            py.getModule("srltcp.app").callAttr("get_android_web_port").toInt()
+            Python.getInstance().getModule("srltcp.app").callAttr("get_android_web_port").toInt()
         } catch (_: Exception) {
             9876
         }
     }
 
-    private fun showError(message: String) {
+    private fun showFatal(message: String) {
         handler.post {
-            webView.loadData(
-                "<html><body style='font-family:sans-serif;padding:24px;background:#0c0e14;color:#eee'>" +
-                    "<h2>SRLTCP</h2><p>$message</p></body></html>",
-                "text/html",
-                "UTF-8"
-            )
+            val tv = TextView(this).apply {
+                text = "SRLTCP\n\n$message"
+                setTextColor(0xFFEEEEEE.toInt())
+                setBackgroundColor(0xFF0C0E14.toInt())
+                setPadding(48, 48, 48, 48)
+                textSize = 16f
+            }
+            setContentView(tv)
         }
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        webView.destroy()
+        webView?.destroy()
+        webView = null
         super.onDestroy()
+    }
+
+    companion object {
+        private const val TAG = "SRLTCP"
     }
 }

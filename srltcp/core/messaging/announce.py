@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from srltcp.core.protocol.messages import encode_payload
+from srltcp.core.protocol.messages import MessageType, build_header, encode_payload
 from srltcp.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -50,8 +50,22 @@ class AnnounceMixin:
         except Exception:
             return "127.0.0.1"
 
+    async def _send_announce(self: MessagingBackend, transport_name: str) -> None:
+        payload = self.build_announce_payload(transport_name)
+        if transport_name == "tcp" and self.tcp_transport:
+            self.tcp_transport.set_announce_payload(payload)
+            await self.tcp_transport.broadcast_discovery(payload)
+        elif transport_name == "serial" and self.serial_transport:
+            packet = build_header(MessageType.ANNOUNCE, body=payload)
+            peers = self.serial_transport.peers()
+            if peers:
+                await self.serial_transport.send(peers[0].peer_id, packet)
+            else:
+                await self.serial_transport.broadcast(packet)
+        log.info("Announced on %s", transport_name)
+
     async def announce(self: MessagingBackend, transport: str | None = None) -> None:
-        transports = []
+        transports: list[str] = []
         if transport:
             transports = [transport]
         else:
@@ -61,13 +75,9 @@ class AnnounceMixin:
                 transports.append("serial")
 
         for t in transports:
-            payload = self.build_announce_payload(t)
-            if t == "tcp" and self.tcp_transport:
-                self.tcp_transport.set_announce_payload(payload)
-                await self.tcp_transport.broadcast_discovery(payload)
-            elif t == "serial" and self.serial_transport:
-                await self.serial_transport.broadcast(payload)
-            log.debug("Announced on %s", t)
+            for _ in range(3):
+                await self._send_announce(t)
+                await asyncio.sleep(0.12)
 
     async def start_announce_loop(self: MessagingBackend) -> None:
         await self.stop_announce_loop()
@@ -104,5 +114,5 @@ class AnnounceMixin:
             if peer and peer.hash_id in own_hashes:
                 self.discovery.remove(peer.hash_id)
             return
-        if is_new and self._on_peer_discovered:
+        if self._on_peer_discovered:
             await self._on_peer_discovered(peer.to_dict())

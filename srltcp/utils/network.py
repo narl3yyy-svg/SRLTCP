@@ -2,8 +2,24 @@
 
 from __future__ import annotations
 
+import ipaddress
 import socket
 from typing import Any
+
+
+def broadcast_targets(prefix_len: int = 24) -> list[str]:
+    """Return UDP broadcast addresses for LAN discovery."""
+    targets: set[str] = {"255.255.255.255"}
+    for iface in list_interfaces():
+        ip = iface.get("ip", "")
+        if not ip or ip.startswith("127."):
+            continue
+        try:
+            net = ipaddress.ip_network(f"{ip}/{prefix_len}", strict=False)
+            targets.add(str(net.broadcast_address))
+        except ValueError:
+            continue
+    return sorted(targets)
 
 
 def list_interfaces() -> list[dict[str, Any]]:

@@ -8,6 +8,7 @@ from typing import Any
 
 from srltcp.transports.base import Connection, Transport, TransportEvent, TransportPeer
 from srltcp.utils.logging import get_logger
+from srltcp.utils.network import broadcast_targets
 from srltcp.utils.ports import bind_udp_port, start_tcp_server
 
 log = get_logger(__name__)
@@ -135,12 +136,16 @@ class TCPTransport(Transport):
         self._connections[new_id] = conn
 
     async def broadcast_discovery(self, payload: bytes) -> None:
-        if not self._discovery_transport or not self._discovery_protocol:
+        if not self._discovery_transport:
             return
+        import socket as sock_mod
+
         sock = self._discovery_transport.get_extra_info("socket")
         if sock:
-            sock.setsockopt(__import__("socket").SOL_SOCKET, __import__("socket").SO_BROADCAST, 1)
-        self._discovery_transport.sendto(payload, ("255.255.255.255", self.discovery_port))
+            sock.setsockopt(sock_mod.SOL_SOCKET, sock_mod.SO_BROADCAST, 1)
+            sock.setsockopt(sock_mod.SOL_SOCKET, sock_mod.SO_REUSEADDR, 1)
+        for target in broadcast_targets():
+            self._discovery_transport.sendto(payload, (target, self.discovery_port))
 
 
 class _DiscoveryProtocol(asyncio.DatagramProtocol):

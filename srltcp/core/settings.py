@@ -39,10 +39,12 @@ class AppSettings:
     auto_announce: bool = False
     enable_serial: bool = False
     serial_port: str = ""
-    serial_baud: int = 115200
+    serial_baud: int = 57600
     lan_ip: str = ""
     bind_interface: str = ""
-    version: str = "0.1.7"
+    timezone: str = ""
+    show_clock: bool = True
+    version: str = "0.1.8"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

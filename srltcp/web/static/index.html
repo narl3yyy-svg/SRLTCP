@@ -168,10 +168,19 @@
               <span>Network interface / IP</span>
               <select id="set-lan-ip"></select>
             </label>
+            <label class="field">
+              <span>Timezone</span>
+              <select id="set-timezone"></select>
+            </label>
+            <label class="field checkbox-field">
+              <input type="checkbox" id="set-show-clock" checked />
+              <span>Show clock in status bar</span>
+            </label>
             <label class="field checkbox-field">
               <input type="checkbox" id="set-auto-announce" />
               <span>Auto-announce on startup</span>
             </label>
+            <button type="button" class="action-btn" id="btn-network-viz">Network map</button>
             <button type="submit" class="action-btn save-btn">Save settings</button>
             <button type="button" class="action-btn danger-btn" id="btn-restart">Restart</button>
           </form>
@@ -219,11 +228,17 @@
           </label>
           <label class="field">
             <span>Incoming files folder</span>
-            <input type="text" id="setup-incoming" placeholder="Default: ~/.srltcp/transfers/incoming" />
+            <div class="folder-row">
+              <input type="text" id="setup-incoming" placeholder="Default: ~/.srltcp/transfers/incoming" readonly />
+              <button type="button" class="action-btn small" data-browse="setup-incoming">Browse</button>
+            </div>
           </label>
           <label class="field">
             <span>Default shared folder</span>
-            <input type="text" id="setup-shared" placeholder="Default: ~/.srltcp/shared" />
+            <div class="folder-row">
+              <input type="text" id="setup-shared" placeholder="Default: ~/.srltcp/shared" readonly />
+              <button type="button" class="action-btn small" data-browse="setup-shared">Browse</button>
+            </div>
           </label>
           <label class="field">
             <span>Network interface / IP</span>
@@ -248,7 +263,11 @@
         <span class="stat-label">Temp</span>
         <span class="stat-value">—</span>
       </div>
-      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.7</div>
+      <div class="stat-item" id="stat-clock">
+        <span class="stat-label">Time</span>
+        <span class="stat-value">—</span>
+      </div>
+      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.8</div>
     </footer>
 
     <div class="modal-overlay" id="folder-modal">
@@ -259,6 +278,18 @@
         <div class="modal-actions">
           <button type="button" class="action-btn" id="folder-select">Select</button>
           <button type="button" class="action-btn secondary" id="folder-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="network-modal">
+      <div class="modal-card wide">
+        <h3>Network map</h3>
+        <p class="hint">Your node (center) and discovered/trusted peers. Lines show active encrypted links.</p>
+        <canvas id="network-canvas" width="640" height="360" class="network-canvas"></canvas>
+        <div class="modal-actions">
+          <button type="button" class="action-btn" id="network-refresh">Refresh</button>
+          <button type="button" class="action-btn secondary" id="network-close">Close</button>
         </div>
       </div>
     </div>

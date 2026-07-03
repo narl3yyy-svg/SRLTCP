@@ -11,8 +11,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.1.7"
+        versionCode = 8
+        versionName = "0.1.8"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -54,5 +54,21 @@ chaquopy {
 
 dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.webkit:webkit:1.11.0")
     implementation("com.google.android.material:material:1.12.0")
+}
+
+tasks.register("renameDebugApk") {
+    dependsOn("assembleDebug")
+    doLast {
+        val outDir = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
+        val version = android.defaultConfig.versionName
+        outDir.listFiles()
+            ?.filter { it.isFile && it.extension == "apk" && !it.name.startsWith("SRLTCP-") }
+            ?.forEach { src ->
+                val dest = File(outDir, "SRLTCP-$version.apk")
+                if (dest.exists()) dest.delete()
+                src.renameTo(dest)
+            }
+    }
 }

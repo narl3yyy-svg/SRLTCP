@@ -188,7 +188,7 @@ def start_android_server() -> None:
         except Exception:
             log.exception("Android server failed")
 
-    threading.Thread(target=_run, name="srltcp-server", daemon=True).start()
+    threading.Thread(target=_run, name="srltcp-server", daemon=False).start()
 
 
 def main() -> None:

@@ -292,7 +292,9 @@ class MessagingBackend(
             log.debug("Invalid packet from %s", peer.peer_id[:8])
             return
 
-        if msg_type == MessageType.HANDSHAKE:
+        if msg_type == MessageType.ANNOUNCE:
+            await self._handle_discovered(peer.address, peer.transport, body)
+        elif msg_type == MessageType.HANDSHAKE:
             await self._handle_handshake(peer.peer_id, body, initiator=False)
         elif msg_type == MessageType.HANDSHAKE_ACK:
             await self._handle_handshake_ack(peer.peer_id, body)

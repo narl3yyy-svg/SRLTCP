@@ -20,6 +20,9 @@
     interfaces: [],
     transfers: {},
     messageCache: [],
+    settingsFormDirty: false,
+    interfacesLoaded: false,
+    timezones: [],
   };
 
   const COLORS = [
@@ -156,6 +159,7 @@
           break;
         case "peer_discovered":
           loadPeers();
+          renderContacts();
           break;
         case "link_up":
           state.links[data.hash_id] = true;
@@ -427,7 +431,7 @@
       ).join("");
     } catch (_) {
       portEl.innerHTML = `<option value="${escapeHtml(selectedPort)}">${escapeHtml(selectedPort || "—")}</option>`;
-      baudEl.innerHTML = `<option value="115200">115200</option>`;
+      baudEl.innerHTML = `<option value="57600">57600</option>`;
     }
   }
 
@@ -452,8 +456,17 @@
     $("#set-shared").value = settings.shared_folder || "";
     $("#set-auto-announce").checked = !!settings.auto_announce;
     if ($("#set-enable-serial")) $("#set-enable-serial").checked = !!settings.enable_serial;
-    loadSerialSettings(settings.serial_port || "", settings.serial_baud || 115200);
-    loadInterfaces($("#set-lan-ip"), settings.lan_ip || "");
+    loadSerialSettings(settings.serial_port || "", settings.serial_baud || 57600);
+    if ($("#set-timezone")) {
+      loadTimezones($("#set-timezone"), settings.timezone || "");
+    }
+    if ($("#set-show-clock")) {
+      $("#set-show-clock").checked = settings.show_clock !== false;
+    }
+    if ($("#drawer").classList.contains("open") || !state.interfacesLoaded) {
+      loadInterfaces($("#set-lan-ip"), settings.lan_ip || "");
+      state.interfacesLoaded = true;
+    }
   }
 
   async function saveSettings(formData, complete) {
@@ -484,12 +497,34 @@
     }
   }
 
+  async function loadTimezones(selectEl, selectedTz) {
+    if (!selectEl) return;
+    if (!state.timezones.length) {
+      try {
+        const res = await fetch("/api/timezones");
+        const data = await res.json();
+        state.timezones = data.timezones || [];
+      } catch (_) {
+        state.timezones = ["UTC"];
+      }
+    }
+    const current = selectedTz || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const options = state.timezones.includes(current)
+      ? state.timezones
+      : [current, ...state.timezones];
+    selectEl.innerHTML = options.map((tz) =>
+      `<option value="${escapeHtml(tz)}" ${tz === selectedTz ? "selected" : ""}>${escapeHtml(tz)}</option>`
+    ).join("");
+    if (!selectedTz) selectEl.value = current;
+  }
+
   async function pollSystemStats() {
     try {
       const res = await fetch("/api/system");
       const data = await res.json();
       const cpuEl = $("#stat-cpu .stat-value");
       const tempEl = $("#stat-temp .stat-value");
+      const clockEl = $("#stat-clock .stat-value");
       if (data.cpu_percent != null) {
         cpuEl.textContent = `${data.cpu_percent}%`;
         cpuEl.className = "stat-value" + (data.cpu_percent > 80 ? " hot" : data.cpu_percent > 50 ? " warn" : "");
@@ -498,7 +533,93 @@
         tempEl.textContent = `${data.cpu_temp_c}°C`;
         tempEl.className = "stat-value" + (data.cpu_temp_c > 85 ? " hot" : data.cpu_temp_c > 70 ? " warn" : "");
       }
+      if (clockEl && (state.settings.show_clock !== false)) {
+        clockEl.textContent = data.local_time || "—";
+        $("#stat-clock .stat-label").textContent = data.timezone?.split("/").pop() || "Time";
+      } else if (clockEl) {
+        clockEl.textContent = "—";
+      }
     } catch (_) { /* ignore */ }
+  }
+
+  function peerEndpoint(peer) {
+    if (peer.transport === "tcp" && peer.tcp_host) {
+      return `${peer.tcp_host}:${peer.tcp_port || 7825}`;
+    }
+    if (peer.transport === "serial" && peer.address) {
+      return peer.address;
+    }
+    return peer.hash_id.slice(0, 12) + "…";
+  }
+
+  async function renderNetworkGraph() {
+    const canvas = $("#network-canvas");
+    if (!canvas) return;
+    const res = await fetch("/api/network");
+    const data = await res.json();
+    const ctx = canvas.getContext("2d");
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "#0c0e14";
+    ctx.fillRect(0, 0, w, h);
+
+    const nodes = data.nodes || [];
+    const edges = data.edges || [];
+    const centerX = w / 2;
+    const centerY = h / 2;
+    const radius = Math.min(w, h) * 0.34;
+    const positions = {};
+
+    nodes.forEach((n, i) => {
+      if (n.role === "self") {
+        const selfNodes = nodes.filter((x) => x.role === "self");
+        const idx = selfNodes.indexOf(n);
+        const angle = (idx / Math.max(selfNodes.length, 1)) * Math.PI * 2 - Math.PI / 2;
+        positions[n.id] = {
+          x: centerX + Math.cos(angle) * 48,
+          y: centerY + Math.sin(angle) * 48,
+        };
+      }
+    });
+
+    const others = nodes.filter((n) => n.role !== "self");
+    others.forEach((n, i) => {
+      const angle = (i / Math.max(others.length, 1)) * Math.PI * 2 - Math.PI / 2;
+      positions[n.id] = {
+        x: centerX + Math.cos(angle) * radius,
+        y: centerY + Math.sin(angle) * radius,
+      };
+    });
+
+    edges.forEach((e) => {
+      const a = positions[e.from];
+      const b = positions[e.to];
+      if (!a || !b) return;
+      ctx.strokeStyle = e.transport === "serial" ? "#3ecf8e" : "#5b8def";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    });
+
+    nodes.forEach((n) => {
+      const p = positions[n.id];
+      if (!p) return;
+      const color = n.role === "self" ? "#5b8def" : n.role === "trusted" ? "#3ecf8e" : "#f5a623";
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, n.role === "self" ? 18 : 14, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#e8ecf4";
+      ctx.font = "11px DM Sans, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(n.label.slice(0, 14), p.x, p.y + 32);
+      ctx.fillStyle = "#8b95a8";
+      ctx.font = "9px JetBrains Mono, monospace";
+      ctx.fillText(n.transport.toUpperCase(), p.x, p.y + 44);
+    });
   }
 
   function renderStatus(data) {
@@ -510,7 +631,9 @@
     if (data.version) $("#stat-version").textContent = `v${data.version}`;
 
     if (state.settings && Object.keys(state.settings).length) {
-      fillSettingsForm(state.settings);
+      if ($("#drawer").classList.contains("open") || state.settingsFormDirty) {
+        fillSettingsForm(state.settings);
+      }
       showSetupIfNeeded(state.settings);
     }
 
@@ -585,13 +708,16 @@
         if (rtt != null) metrics.push(`${Math.round(rtt)}ms`);
         const lq = lm.link_quality_pct ?? p.link_quality_pct;
         if (p.transport === "serial" && lq != null) metrics.push(`${lq}%`);
+        const linked = isPeerLinked(p.hash_id);
         if (linked && !metrics.length) metrics.push("online");
-        const meta = metrics.length ? metrics.join(" · ") : `${p.transport.toUpperCase()} · ${p.hash_id.slice(0, 10)}…`;
+        const endpoint = peerEndpoint(p);
+        const meta = metrics.length
+          ? `${p.transport.toUpperCase()} · ${endpoint} · ${metrics.join(" · ")}`
+          : `${p.transport.toUpperCase()} · ${endpoint}`;
         const trustBtn = state.peerTab === "discovered" && !trustedIds.has(p.hash_id)
           ? `<button type="button" class="contact-trust" data-trust="${p.hash_id}">Trust</button>` : "";
         const deleteBtn = state.peerTab === "trusted"
           ? `<button type="button" class="contact-delete" data-delete="${p.hash_id}" data-name="${escapeHtml(p.name)}" title="Remove contact">×</button>` : "";
-        const linked = isPeerLinked(p.hash_id);
         return `<button class="contact${active}" data-hash="${p.hash_id}" data-name="${escapeHtml(p.name)}">
           <div class="avatar" style="background:${hashColor(p.hash_id)}22;color:${hashColor(p.hash_id)};border-color:${hashColor(p.hash_id)}44">
             ${initials(p.name)}
@@ -788,8 +914,10 @@
   function openDrawer() {
     $("#drawer").classList.add("open");
     $("#drawer").setAttribute("aria-hidden", "false");
+    state.settingsFormDirty = true;
     const s = state.settings || {};
-    loadSerialSettings(s.serial_port || "", s.serial_baud || 115200);
+    fillSettingsForm(s);
+    loadSerialSettings(s.serial_port || "", s.serial_baud || 57600);
   }
 
   function closeDrawer() {
@@ -856,7 +984,9 @@
       auto_announce: $(`#${prefix}-auto-announce`)?.checked || false,
       enable_serial: $("#set-enable-serial")?.checked || false,
       serial_port: $("#set-serial-port")?.value || "",
-      serial_baud: parseInt($("#set-serial-baud")?.value || "115200", 10),
+      serial_baud: parseInt($("#set-serial-baud")?.value || "57600", 10),
+      timezone: $("#set-timezone")?.value || "",
+      show_clock: $("#set-show-clock")?.checked !== false,
     };
   }
 
@@ -930,6 +1060,13 @@
   $("#folder-cancel")?.addEventListener("click", () => $("#folder-modal").classList.remove("open"));
   $("#release-close")?.addEventListener("click", () => $("#release-modal").classList.remove("open"));
 
+  $("#btn-network-viz")?.addEventListener("click", async () => {
+    $("#network-modal").classList.add("open");
+    await renderNetworkGraph();
+  });
+  $("#network-close")?.addEventListener("click", () => $("#network-modal").classList.remove("open"));
+  $("#network-refresh")?.addEventListener("click", () => renderNetworkGraph());
+
   $("#identities")?.addEventListener("click", async (e) => {
     const regen = e.target.closest("[data-regen]");
     const del = e.target.closest("[data-del-id]");
@@ -946,15 +1083,8 @@
   /* ── Init ── */
   connectWs();
   pollSystemStats();
-  setInterval(pollSystemStats, 2000);
-  setInterval(loadPeers, 15000);
-  setInterval(async () => {
-    try {
-      const data = await (await fetch("/api/status")).json();
-      syncLinksFromStatus(data.links || []);
-      if (state.selectedPeer) refreshPeerStatus(state.selectedPeer);
-    } catch (_) { /* ignore */ }
-  }, 5000);
+  setInterval(pollSystemStats, 10000);
+  setInterval(loadPeers, 30000);
 
   fetch("/api/settings")
     .then((r) => r.json())

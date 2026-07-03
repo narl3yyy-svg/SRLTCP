@@ -14,6 +14,7 @@ from srltcp.routes.ws import broadcast_event, register_ws_routes
 from srltcp.utils.logging import get_logger
 from srltcp.utils.ports import start_web_site
 from srltcp.utils.tls import create_ssl_context
+from srltcp.web.access_log import QuietAccessLogger
 from srltcp.web.security import quiet_access_log, security_middleware
 
 log = get_logger(__name__)
@@ -100,7 +101,11 @@ async def run_web_server(
 
     ssl_ctx = create_ssl_context()
     app = create_app(node)
-    runner = web.AppRunner(app, access_log_format='%a %t "%r" %s %b')
+    runner = web.AppRunner(
+        app,
+        access_log_class=QuietAccessLogger,
+        access_log_format='%a %t "%r" %s %b',
+    )
     await runner.setup()
     site, bound_port = await start_web_site(
         runner, host if host != "localhost" else "127.0.0.1", port, ssl_context=ssl_ctx

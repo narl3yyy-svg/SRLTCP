@@ -481,6 +481,15 @@ body {
   margin-right: 2px;
 }
 .contact-delete:hover { color: var(--danger); }
+.network-canvas {
+  width: 100%;
+  max-width: 640px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: block;
+  margin: 0.75rem 0;
+  background: #0c0e14;
+}
 
 /* ── Composer ── */
 .composer {

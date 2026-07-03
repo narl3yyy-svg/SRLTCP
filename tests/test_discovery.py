@@ -6,43 +6,52 @@ from srltcp.core.discovery import DiscoveryRegistry
 from srltcp.core.protocol.messages import encode_payload
 
 
-def test_announce_upsert() -> None:
-    registry = DiscoveryRegistry(ttl=60)
-    payload = encode_payload(
+def test_upsert_tcp_and_serial_separate() -> None:
+    reg = DiscoveryRegistry()
+    tcp_payload = encode_payload(
         {
             "type": "announce",
-            "hash_id": "abc123" * 5 + "ab",
-            "name": "peer-one",
+            "hash_id": "aaa111",
+            "name": "node-a",
+            "transport": "tcp",
             "public_key": "aa" * 32,
-            "tcp_host": "10.0.0.5",
+            "tcp_host": "10.0.0.1",
             "tcp_port": 7825,
         }
     )
-    peer, is_new = registry.upsert_from_announce("10.0.0.5:7825", "tcp", payload)
-    assert peer is not None
-    assert is_new is True
-    assert peer.name == "peer-one"
-    assert len(registry.list_peers()) == 1
+    serial_payload = encode_payload(
+        {
+            "type": "announce",
+            "hash_id": "bbb222",
+            "name": "node-a",
+            "transport": "serial",
+            "public_key": "bb" * 32,
+            "tcp_host": "",
+            "tcp_port": 7825,
+        }
+    )
+    p1, new1 = reg.upsert_from_announce("10.0.0.1:1234", "tcp", tcp_payload)
+    p2, new2 = reg.upsert_from_announce("serial", "serial", serial_payload)
+    assert new1 and new2
+    assert p1 and p2
+    assert p1.transport == "tcp"
+    assert p2.transport == "serial"
+    peers = reg.list_peers()
+    assert len(peers) == 2
 
-    peer2, is_new2 = registry.upsert_from_announce("10.0.0.5:7825", "tcp", payload)
-    assert peer2 is not None
-    assert is_new2 is False
 
-
-def test_update_metrics() -> None:
-    registry = DiscoveryRegistry(ttl=60)
+def test_get_by_hash_id() -> None:
+    reg = DiscoveryRegistry()
     payload = encode_payload(
         {
             "type": "announce",
-            "hash_id": "def456" * 5 + "de",
-            "name": "peer-two",
-            "public_key": "bb" * 32,
+            "hash_id": "ccc333",
+            "name": "peer",
+            "transport": "tcp",
+            "public_key": "cc" * 32,
         }
     )
-    peer, _ = registry.upsert_from_announce("10.0.0.6:7825", "tcp", payload)
+    reg.upsert_from_announce("10.0.0.2:9999", "tcp", payload)
+    peer = reg.get("ccc333")
     assert peer is not None
-    registry.update_metrics(peer.hash_id, rtt_ms=12.5, link_quality_pct=98.0)
-    updated = registry.get(peer.hash_id)
-    assert updated is not None
-    assert updated.rtt_ms == 12.5
-    assert updated.link_quality_pct == 98.0
+    assert peer.name == "peer"

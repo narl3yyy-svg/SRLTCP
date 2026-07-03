@@ -42,7 +42,7 @@ class DiscoveredPeer:
 class DiscoveryRegistry:
     """Track discovered peers with TTL expiry."""
 
-    def __init__(self, ttl: float = 60.0) -> None:
+    def __init__(self, ttl: float = 120.0) -> None:
         self._peers: dict[str, DiscoveredPeer] = {}
         self.ttl = ttl
 
@@ -58,12 +58,14 @@ class DiscoveryRegistry:
         hash_id = data.get("hash_id", "")
         if not hash_id:
             return None, False
-        is_new = hash_id not in self._peers
-        existing = self._peers.get(hash_id)
+        ann_transport = str(data.get("transport", transport))
+        peer_key = f"{ann_transport}:{hash_id}"
+        is_new = peer_key not in self._peers
+        existing = self._peers.get(peer_key)
         peer = DiscoveredPeer(
             hash_id=hash_id,
             name=data.get("name", "unknown"),
-            transport=transport,
+            transport=ann_transport,
             address=address,
             public_key=data.get("public_key", ""),
             tcp_host=data.get("tcp_host", ""),
@@ -73,8 +75,17 @@ class DiscoveryRegistry:
             link_quality_pct=existing.link_quality_pct if existing else None,
             metadata=data,
         )
-        self._peers[hash_id] = peer
+        self._peers[peer_key] = peer
         return peer, is_new
+
+    def _find_key(self, hash_id: str, transport: str | None = None) -> str | None:
+        if transport:
+            key = f"{transport}:{hash_id}"
+            return key if key in self._peers else None
+        for key in self._peers:
+            if key.endswith(f":{hash_id}"):
+                return key
+        return None
 
     def update_metrics(
         self,
@@ -83,7 +94,10 @@ class DiscoveryRegistry:
         rtt_ms: float | None = None,
         link_quality_pct: float | None = None,
     ) -> None:
-        peer = self._peers.get(hash_id)
+        key = self._find_key(hash_id)
+        if not key:
+            return
+        peer = self._peers.get(key)
         if not peer:
             return
         if rtt_ms is not None:
@@ -91,10 +105,13 @@ class DiscoveryRegistry:
         if link_quality_pct is not None:
             peer.link_quality_pct = link_quality_pct
 
-    def get(self, hash_id: str) -> DiscoveredPeer | None:
-        peer = self._peers.get(hash_id)
+    def get(self, hash_id: str, transport: str | None = None) -> DiscoveredPeer | None:
+        key = self._find_key(hash_id, transport)
+        if not key:
+            return None
+        peer = self._peers.get(key)
         if peer and time.time() - peer.last_seen > self.ttl:
-            del self._peers[hash_id]
+            del self._peers[key]
             return None
         return peer
 
@@ -102,14 +119,16 @@ class DiscoveryRegistry:
         now = time.time()
         alive: list[DiscoveredPeer] = []
         expired: list[str] = []
-        for hash_id, peer in self._peers.items():
+        for key, peer in self._peers.items():
             if now - peer.last_seen > self.ttl:
-                expired.append(hash_id)
+                expired.append(key)
             else:
                 alive.append(peer)
-        for hash_id in expired:
-            del self._peers[hash_id]
-        return sorted(alive, key=lambda p: p.name.lower())
+        for key in expired:
+            del self._peers[key]
+        return sorted(alive, key=lambda p: (p.name.lower(), p.transport))
 
     def remove(self, hash_id: str) -> None:
-        self._peers.pop(hash_id, None)
+        for key in list(self._peers):
+            if key.endswith(f":{hash_id}"):
+                del self._peers[key]
