@@ -19,6 +19,7 @@ class TrustedPeer:
     public_key: str = ""
     tcp_host: str = ""
     tcp_port: int = 7825
+    blocked: bool = False
     added_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
@@ -36,6 +37,7 @@ class TrustedStore:
             return
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         for item in raw.get("peers", []):
+            item = {k: v for k, v in item.items() if k in TrustedPeer.__dataclass_fields__}
             peer = TrustedPeer(**item)
             self._peers[peer.hash_id] = peer
 
@@ -45,7 +47,8 @@ class TrustedStore:
         self.path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def is_trusted(self, hash_id: str) -> bool:
-        return hash_id in self._peers
+        peer = self._peers.get(hash_id)
+        return bool(peer and not peer.blocked)
 
     def add(self, peer: TrustedPeer) -> TrustedPeer:
         self._peers[peer.hash_id] = peer
@@ -64,3 +67,20 @@ class TrustedStore:
 
     def get(self, hash_id: str) -> TrustedPeer | None:
         return self._peers.get(hash_id)
+
+    def update(
+        self,
+        hash_id: str,
+        *,
+        name: str | None = None,
+        blocked: bool | None = None,
+    ) -> TrustedPeer | None:
+        peer = self._peers.get(hash_id)
+        if not peer:
+            return None
+        if name is not None:
+            peer.name = name.strip() or peer.name
+        if blocked is not None:
+            peer.blocked = blocked
+        self.save()
+        return peer

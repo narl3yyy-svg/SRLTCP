@@ -63,6 +63,9 @@ class PeerLinkMixin:
         return None
 
     def register_link(self: MessagingBackend, link: PeerLink) -> None:
+        old = self._links.get(link.hash_id)
+        if old and old.transport_peer_id != link.transport_peer_id:
+            self._peer_id_to_hash.pop(old.transport_peer_id, None)
         self._links[link.hash_id] = link
         self._peer_id_to_hash[link.transport_peer_id] = link.hash_id
 
@@ -70,6 +73,17 @@ class PeerLinkMixin:
         link = self._links.pop(hash_id, None)
         if link:
             self._peer_id_to_hash.pop(link.transport_peer_id, None)
+
+    def remove_link_for_peer(self: MessagingBackend, peer_id: str) -> str | None:
+        """Remove link only if peer_id is still the active transport peer. Returns hash_id."""
+        link = self.get_link_by_peer_id(peer_id)
+        if not link or link.transport_peer_id != peer_id:
+            return None
+        current = self.get_link(link.hash_id)
+        if not current or current.transport_peer_id != peer_id:
+            return None
+        self.remove_link(link.hash_id)
+        return link.hash_id
 
     def list_links(self: MessagingBackend) -> list[dict[str, Any]]:
         return [link.to_dict() for link in self._links.values()]

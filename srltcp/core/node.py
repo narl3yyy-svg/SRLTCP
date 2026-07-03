@@ -97,8 +97,12 @@ class SRLTCPNode:
         if settings.message_retention_hours == 0:
             self.backend.clear_messages()
 
-    def add_trusted_from_discovered(self, hash_id: str) -> dict[str, Any] | None:
-        peer = self.backend.discovery.get(hash_id)
+    def add_trusted_from_discovered(
+        self, hash_id: str, transport: str | None = None
+    ) -> dict[str, Any] | None:
+        peer = self.backend.discovery.get(hash_id, transport) or self.backend.discovery.get(
+            hash_id
+        )
         if not peer:
             return None
         trusted = TrustedPeer(
@@ -109,7 +113,9 @@ class SRLTCPNode:
             tcp_host=peer.tcp_host,
             tcp_port=peer.tcp_port,
         )
-        return self.backend.trusted.add(trusted).to_dict()
+        result = self.backend.trusted.add(trusted).to_dict()
+        self.backend.discovery.remove(hash_id)
+        return result
 
     def create_share_session(self, folder: Path | None, owner_hash: str) -> ShareSession:
         root = folder or self.settings.resolved_shared_folder()

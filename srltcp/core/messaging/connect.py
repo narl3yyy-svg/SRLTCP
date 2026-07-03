@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from srltcp.core.messaging.links import PeerLink
@@ -22,6 +23,7 @@ class ConnectMixin:
 
     def _init_connect(self: MessagingBackend) -> None:
         self._pending_handshakes = {}
+        self._connect_locks: dict[str, asyncio.Lock] = {}
 
     async def _teardown_link(self: MessagingBackend, hash_id: str) -> None:
         link = self.get_link(hash_id)
@@ -44,10 +46,28 @@ class ConnectMixin:
         force: bool = False,
     ) -> bool:
         """Dial a peer by hash (uses discovery registry for address)."""
-        discovered = self.discovery.get(hash_id)
+        lock = self._connect_locks.setdefault(hash_id, asyncio.Lock())
+        async with lock:
+            return await self._connect_to_peer_locked(
+                hash_id, host=host, port=port, transport=transport, force=force
+            )
+
+    async def _connect_to_peer_locked(
+        self: MessagingBackend,
+        hash_id: str,
+        *,
+        host: str | None = None,
+        port: int | None = None,
+        transport: str = "tcp",
+        force: bool = False,
+    ) -> bool:
+        discovered = self.discovery.get(hash_id, transport) or self.discovery.get(hash_id)
         trusted = self.trusted.get(hash_id)
         if not discovered and not trusted and not host:
             log.warning("Peer %s not in discovery registry", hash_id[:8])
+            return False
+        if trusted and trusted.blocked:
+            log.warning("Peer %s is blocked", hash_id[:8])
             return False
 
         existing = self.get_link(hash_id)
@@ -55,41 +75,62 @@ class ConnectMixin:
             await self.ping_peer(hash_id)
             return True
 
-        if existing:
+        if existing and force:
             await self._teardown_link(hash_id)
 
-        target_host = host or (
-            (discovered.tcp_host if discovered else "")
-            or (trusted.tcp_host if trusted else "")
+        peer_name = (
+            (discovered.name if discovered else "")
+            or (trusted.name if trusted else "")
         )
-        target_port = port or (
-            (discovered.tcp_port if discovered else None)
-            or (trusted.tcp_port if trusted else None)
-            or self.config.tcp_port
+        pub_hex = (discovered.public_key if discovered else "") or (
+            trusted.public_key if trusted else ""
         )
+        pub_bytes = bytes.fromhex(pub_hex) if pub_hex else b"\x00" * 32
 
         if transport == "tcp" and self.tcp_transport:
+            target_host = host or (
+                (discovered.tcp_host if discovered else "")
+                or (trusted.tcp_host if trusted else "")
+            )
+            target_port = port or (
+                (discovered.tcp_port if discovered else None)
+                or (trusted.tcp_port if trusted else None)
+                or self.config.tcp_port
+            )
             if not target_host:
                 log.warning("No host for peer %s", hash_id[:8])
                 return False
             peer_id = await self.tcp_transport.connect(target_host, target_port)
-            pub_hex = ""
-            if discovered:
-                pub_hex = discovered.public_key
-            elif trusted:
-                pub_hex = trusted.public_key
-            pub_bytes = bytes.fromhex(pub_hex) if pub_hex else b"\x00" * 32
             link = PeerLink(
                 hash_id=hash_id,
                 transport_peer_id=peer_id,
                 transport="tcp",
                 address=f"{target_host}:{target_port}",
                 public_key=pub_bytes,
-                peer_name=(discovered.name if discovered else trusted.name if trusted else ""),
+                peer_name=peer_name,
             )
             self.register_link(link)
             await self._initiate_handshake(hash_id)
             return True
+
+        if transport == "serial" and self.serial_transport:
+            peers = self.serial_transport.peers()
+            if not peers:
+                log.warning("Serial transport has no peer for %s", hash_id[:8])
+                return False
+            serial_peer = peers[0]
+            link = PeerLink(
+                hash_id=hash_id,
+                transport_peer_id=serial_peer.peer_id,
+                transport="serial",
+                address=serial_peer.address,
+                public_key=pub_bytes,
+                peer_name=peer_name,
+            )
+            self.register_link(link)
+            await self._initiate_handshake(hash_id)
+            return True
+
         return False
 
     async def disconnect_peer(self: MessagingBackend, hash_id: str) -> bool:
@@ -125,6 +166,9 @@ class ConnectMixin:
         from_ack: bool = False,
     ) -> None:
         link = self.get_link(remote_hash)
+        if link and link.handshake_complete:
+            link.peer_name = remote_name
+            return
         if link:
             link.peer_name = remote_name
         await self.ping_peer(remote_hash)
@@ -151,12 +195,18 @@ class ConnectMixin:
         remote_name = data.get("name", "")
 
         link = self.get_link_by_peer_id(peer_id)
+        existing = self.get_link(remote_hash)
+        if existing and existing.handshake_complete and existing.transport_peer_id != peer_id:
+            if self.tcp_transport:
+                await self.tcp_transport.disconnect(peer_id)
+            return
         if not link:
+            transport = existing.transport if existing else "tcp"
             link = PeerLink(
                 hash_id=remote_hash,
                 transport_peer_id=peer_id,
-                transport="tcp",
-                address="",
+                transport=transport,
+                address=existing.address if existing else "",
                 public_key=remote_pub,
                 peer_name=remote_name,
             )

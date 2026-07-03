@@ -23,6 +23,8 @@
     settingsFormDirty: false,
     interfacesLoaded: false,
     timezones: [],
+    contactMenuTarget: null,
+    connectPending: new Map(),
   };
 
   const COLORS = [
@@ -169,8 +171,8 @@
             $("#msg-input").disabled = false;
             $("#send-btn").disabled = false;
           }
-          toast(`Connected to ${data.name}`);
-          logActivity(`Link up: ${data.name}`);
+          toast(`Connected to ${data.name || data.hash_id?.slice(0, 8)}`);
+          logActivity(`Link up: ${data.name || data.hash_id?.slice(0, 8)}`);
           break;
         case "link_down":
           delete state.links[data.hash_id];
@@ -178,8 +180,8 @@
           loadPeers();
           if (state.selectedPeer === data.hash_id) {
             refreshPeerStatus(data.hash_id);
-            connectPeer(data.hash_id, true);
           }
+          toast(`Disconnected from ${data.name || data.hash_id?.slice(0, 8)}`);
           logActivity(`Link down: ${data.name || data.hash_id?.slice(0, 8)}`);
           break;
         case "peer_metrics":
@@ -222,18 +224,24 @@
   }
 
   async function trustPeer(hashId) {
+    const discovered = state.peers.find((p) => p.hash_id === hashId);
     await fetch("/api/trusted", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hash_id: hashId }),
+      body: JSON.stringify({
+        hash_id: hashId,
+        transport: discovered?.transport || "tcp",
+      }),
     });
     toast("Peer trusted");
+    state.peers = state.peers.filter((p) => p.hash_id !== hashId);
     loadPeers();
   }
 
   async function deleteTrusted(hashId, name) {
     if (!confirm(`Remove ${name} from trusted contacts?`)) return;
-    await fetch(`/api/trusted/${encodeURIComponent(hashId)}`, { method: "DELETE" });
+    closeContactMenu();
+    state.trusted = state.trusted.filter((p) => p.hash_id !== hashId);
     delete state.links[hashId];
     delete state.linkMetrics[hashId];
     if (state.selectedPeer === hashId) {
@@ -241,8 +249,98 @@
       $("#chat-active").classList.add("hidden");
       $("#chat-empty").classList.remove("hidden");
     }
+    renderContacts();
+    const res = await fetch(`/api/trusted/${encodeURIComponent(hashId)}`, { method: "DELETE" });
+    if (!res.ok) {
+      toast("Failed to remove contact");
+      loadPeers();
+      return;
+    }
     toast("Contact removed");
     loadPeers();
+  }
+
+  async function clearChatHistory(hashId) {
+    closeContactMenu();
+    const res = await fetch(`/api/trusted/${encodeURIComponent(hashId)}/clear-chat`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      toast("Failed to clear chat");
+      return;
+    }
+    const data = await res.json();
+    toast(`Cleared ${data.cleared || 0} message(s)`);
+    if (state.selectedPeer === hashId) loadMessages();
+  }
+
+  async function renameContact(hashId, currentName) {
+    closeContactMenu();
+    const name = prompt("Rename contact:", currentName);
+    if (!name || name.trim() === currentName) return;
+    const res = await fetch(`/api/trusted/${encodeURIComponent(hashId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    if (!res.ok) {
+      toast("Rename failed");
+      return;
+    }
+    toast("Contact renamed");
+    if (state.selectedPeer === hashId) {
+      state.selectedName = name.trim();
+      $("#chat-peer-name").textContent = name.trim();
+    }
+    loadPeers();
+  }
+
+  async function blockContact(hashId, name) {
+    closeContactMenu();
+    if (!confirm(`Block ${name}? They cannot message you until unblocked.`)) return;
+    const res = await fetch(`/api/trusted/${encodeURIComponent(hashId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blocked: true }),
+    });
+    if (!res.ok) {
+      toast("Block failed");
+      return;
+    }
+    delete state.links[hashId];
+    delete state.linkMetrics[hashId];
+    toast(`${name} blocked`);
+    loadPeers();
+  }
+
+  function applyClockVisibility() {
+    const show = state.settings.show_clock !== false;
+    $("#header-clock-row")?.classList.toggle("hidden", !show);
+    $("#stat-clock")?.classList.toggle("hidden", !show);
+  }
+
+  function closeContactMenu() {
+    const menu = $("#contact-menu");
+    if (!menu) return;
+    menu.classList.add("hidden");
+    menu.setAttribute("aria-hidden", "true");
+    state.contactMenuTarget = null;
+  }
+
+  function openContactMenu(hashId, name, anchor) {
+    const menu = $("#contact-menu");
+    if (!menu) return;
+    state.contactMenuTarget = { hashId, name };
+    const rect = anchor.getBoundingClientRect();
+    menu.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 180)}px`;
+    menu.style.left = `${Math.max(8, rect.left - 140)}px`;
+    menu.classList.remove("hidden");
+    menu.setAttribute("aria-hidden", "false");
+    const peer = state.trusted.find((p) => p.hash_id === hashId);
+    const blockBtn = menu.querySelector('[data-action="block"]');
+    if (blockBtn) {
+      blockBtn.textContent = peer?.blocked ? "Unblock contact" : "Block contact";
+    }
   }
 
   async function pingPeer(hashId) {
@@ -305,30 +403,45 @@
     $("#send-btn").disabled = !hashId;
   }
 
-  async function connectPeer(hashId, force = true) {
+  async function connectPeer(hashId, force = false) {
+    if (!hashId) return;
     if (isPeerLinked(hashId) && !force) {
       refreshPeerStatus(hashId);
       return;
     }
-    updatePeerStatus("Handshaking…");
-    $(".status-dot").className = "status-dot pending";
-    logActivity(`Connecting to ${hashId.slice(0, 12)}…`);
-    const transport = peerTransport(hashId);
-    const res = await fetch("/api/connect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hash_id: hashId, transport, force }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (data.handshake_complete) {
-      state.links[hashId] = true;
-      if (data.rtt_ms != null) {
-        state.linkMetrics[hashId] = { rtt_ms: data.rtt_ms };
+    if (state.connectPending.has(hashId)) {
+      return state.connectPending.get(hashId);
+    }
+    const run = (async () => {
+      if (state.selectedPeer === hashId) {
+        updatePeerStatus("Handshaking…");
+        $(".status-dot").className = "status-dot pending";
       }
-      refreshPeerStatus(hashId);
-    } else if (!data.connected) {
-      updatePeerStatus("Connection failed");
-      toast("Could not connect to peer");
+      logActivity(`Connecting to ${hashId.slice(0, 12)}…`);
+      const transport = peerTransport(hashId);
+      const res = await fetch("/api/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hash_id: hashId, transport, force }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.handshake_complete) {
+        state.links[hashId] = true;
+        if (data.rtt_ms != null) {
+          state.linkMetrics[hashId] = { rtt_ms: data.rtt_ms };
+        }
+        if (state.selectedPeer === hashId) refreshPeerStatus(hashId);
+      } else if (!data.connected && state.selectedPeer === hashId) {
+        updatePeerStatus("Connection failed");
+        toast("Could not connect to peer");
+      }
+      return data;
+    })();
+    state.connectPending.set(hashId, run);
+    try {
+      return await run;
+    } finally {
+      state.connectPending.delete(hashId);
     }
   }
 
@@ -463,6 +576,7 @@
     if ($("#set-show-clock")) {
       $("#set-show-clock").checked = settings.show_clock !== false;
     }
+    applyClockVisibility();
     if ($("#drawer").classList.contains("open") || !state.interfacesLoaded) {
       loadInterfaces($("#set-lan-ip"), settings.lan_ip || "");
       state.interfacesLoaded = true;
@@ -524,7 +638,7 @@
       const data = await res.json();
       const cpuEl = $("#stat-cpu .stat-value");
       const tempEl = $("#stat-temp .stat-value");
-      const clockEl = $("#stat-clock .stat-value");
+      const headerClock = $("#header-clock");
       if (data.cpu_percent != null) {
         cpuEl.textContent = `${data.cpu_percent}%`;
         cpuEl.className = "stat-value" + (data.cpu_percent > 80 ? " hot" : data.cpu_percent > 50 ? " warn" : "");
@@ -533,11 +647,8 @@
         tempEl.textContent = `${data.cpu_temp_c}°C`;
         tempEl.className = "stat-value" + (data.cpu_temp_c > 85 ? " hot" : data.cpu_temp_c > 70 ? " warn" : "");
       }
-      if (clockEl && (state.settings.show_clock !== false)) {
-        clockEl.textContent = data.local_time || "—";
-        $("#stat-clock .stat-label").textContent = data.timezone?.split("/").pop() || "Time";
-      } else if (clockEl) {
-        clockEl.textContent = "—";
+      if (state.settings.show_clock !== false && data.local_time) {
+        if (headerClock) headerClock.textContent = data.local_time;
       }
     } catch (_) { /* ignore */ }
   }
@@ -596,12 +707,21 @@
       const a = positions[e.from];
       const b = positions[e.to];
       if (!a || !b) return;
-      ctx.strokeStyle = e.transport === "serial" ? "#3ecf8e" : "#5b8def";
-      ctx.lineWidth = 2;
+      const discovered = e.state === "discovered";
+      ctx.strokeStyle = discovered
+        ? "#8b95a8"
+        : e.transport === "serial"
+          ? "#3ecf8e"
+          : "#5b8def";
+      ctx.lineWidth = discovered ? 1.5 : 2;
+      ctx.setLineDash(discovered ? [6, 5] : []);
+      ctx.globalAlpha = discovered ? 0.5 : 1;
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
     });
 
     nodes.forEach((n) => {
@@ -635,6 +755,7 @@
         fillSettingsForm(state.settings);
       }
       showSetupIfNeeded(state.settings);
+      applyClockVisibility();
     }
 
     const idHtml = Object.entries(ids)
@@ -677,8 +798,10 @@
 
   function renderContacts() {
     const q = state.search.toLowerCase();
-    const list = state.peerTab === "trusted" ? state.trusted : state.peers;
     const trustedIds = new Set(state.trusted.map((p) => p.hash_id));
+    const list = state.peerTab === "trusted"
+      ? state.trusted
+      : state.peers.filter((p) => !trustedIds.has(p.hash_id));
     const filtered = list.filter(
       (p) =>
         !q ||
@@ -716,8 +839,9 @@
           : `${p.transport.toUpperCase()} · ${endpoint}`;
         const trustBtn = state.peerTab === "discovered" && !trustedIds.has(p.hash_id)
           ? `<button type="button" class="contact-trust" data-trust="${p.hash_id}">Trust</button>` : "";
-        const deleteBtn = state.peerTab === "trusted"
-          ? `<button type="button" class="contact-delete" data-delete="${p.hash_id}" data-name="${escapeHtml(p.name)}" title="Remove contact">×</button>` : "";
+        const menuBtn = state.peerTab === "trusted"
+          ? `<button type="button" class="contact-menu-btn" data-menu="${p.hash_id}" data-name="${escapeHtml(p.name)}" title="Contact options" aria-label="Contact options">⋮</button>`
+          : "";
         return `<button class="contact${active}" data-hash="${p.hash_id}" data-name="${escapeHtml(p.name)}">
           <div class="avatar" style="background:${hashColor(p.hash_id)}22;color:${hashColor(p.hash_id)};border-color:${hashColor(p.hash_id)}44">
             ${initials(p.name)}
@@ -726,7 +850,7 @@
             <div class="contact-name">${escapeHtml(p.name)}</div>
             <div class="contact-preview">${meta}</div>
           </div>
-          <div class="contact-meta">${trustBtn}${deleteBtn}${linked ? "●" : ""}</div>
+          <div class="contact-meta">${trustBtn}${menuBtn}${linked ? "●" : ""}</div>
         </button>`;
       })
       .join("");
@@ -744,10 +868,10 @@
         trustPeer(btn.dataset.trust);
       });
     });
-    el.querySelectorAll(".contact-delete").forEach((btn) => {
+    el.querySelectorAll(".contact-menu-btn").forEach((btn) => {
       btn.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        deleteTrusted(btn.dataset.delete, btn.dataset.name);
+        openContactMenu(btn.dataset.menu, btn.dataset.name, btn);
       });
     });
   }
@@ -770,7 +894,7 @@
 
     renderContacts();
     loadMessages();
-    connectPeer(hashId);
+    if (!isPeerLinked(hashId)) connectPeer(hashId, false);
   }
 
   function updatePeerStatus(text) {
@@ -1044,12 +1168,52 @@
     setTimeout(() => location.reload(), 3000);
   });
 
-  document.querySelectorAll("[data-browse]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      state.folderTarget = btn.dataset.browse;
+  document.addEventListener("click", (e) => {
+    const browseBtn = e.target.closest("[data-browse]");
+    if (browseBtn) {
+      e.preventDefault();
+      state.folderTarget = browseBtn.dataset.browse;
       browseFolder(null);
       $("#folder-modal").classList.add("open");
-    });
+      return;
+    }
+    const menuBtn = e.target.closest(".contact-menu-btn");
+    if (menuBtn) return;
+    if (!e.target.closest("#contact-menu")) closeContactMenu();
+  });
+
+  $("#contact-menu")?.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-action]");
+    if (!btn || !state.contactMenuTarget) return;
+    const { hashId, name } = state.contactMenuTarget;
+    const peer = state.trusted.find((p) => p.hash_id === hashId);
+    switch (btn.dataset.action) {
+      case "clear-chat":
+        await clearChatHistory(hashId);
+        break;
+      case "rename":
+        await renameContact(hashId, name);
+        break;
+      case "block":
+        if (peer?.blocked) {
+          closeContactMenu();
+          await fetch(`/api/trusted/${encodeURIComponent(hashId)}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ blocked: false }),
+          });
+          toast(`${name} unblocked`);
+          loadPeers();
+        } else {
+          await blockContact(hashId, name);
+        }
+        break;
+      case "delete":
+        await deleteTrusted(hashId, name);
+        break;
+      default:
+        break;
+    }
   });
 
   $("#folder-select")?.addEventListener("click", () => {
@@ -1084,11 +1248,26 @@
   connectWs();
   pollSystemStats();
   setInterval(pollSystemStats, 10000);
+  setInterval(async () => {
+    if (state.settings.show_clock === false) return;
+    try {
+      const res = await fetch("/api/system");
+      const data = await res.json();
+      if (data.local_time && $("#header-clock")) {
+        $("#header-clock").textContent = data.local_time;
+      }
+    } catch (_) { /* ignore */ }
+  }, 1000);
   setInterval(loadPeers, 30000);
 
   fetch("/api/settings")
     .then((r) => r.json())
-    .then((s) => { state.settings = s; showSetupIfNeeded(s); fillSettingsForm(s); })
+    .then((s) => {
+      state.settings = s;
+      showSetupIfNeeded(s);
+      fillSettingsForm(s);
+      applyClockVisibility();
+    })
     .catch(() => {});
 
   fetch("/api/status")

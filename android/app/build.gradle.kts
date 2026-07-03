@@ -11,8 +11,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.1.8"
+        versionCode = 9
+        versionName = "0.1.9"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -35,6 +35,10 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 }
 

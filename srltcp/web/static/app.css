@@ -65,6 +65,23 @@ body {
   overflow: hidden;
 }
 
+.header-clock-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.45rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(12, 14, 20, 0.6);
+}
+
+.header-clock {
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--success);
+}
+
 .sidebar-header {
   display: flex;
   align-items: center;
@@ -721,7 +738,7 @@ body {
   bottom: 1.5rem;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 200;
+  z-index: 460;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -921,6 +938,45 @@ body {
   cursor: pointer;
   margin-right: 4px;
 }
+.contact-menu-btn {
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.contact-menu-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.contact-menu {
+  position: fixed;
+  z-index: 500;
+  min-width: 180px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.contact-menu-item {
+  text-align: left;
+  padding: 0.5rem 0.65rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.contact-menu-item:hover { background: var(--surface-hover); }
+.contact-menu-item.danger { color: var(--danger); }
 .folder-row {
   display: flex;
   gap: 0.4rem;
@@ -941,7 +997,7 @@ body {
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.65);
-  z-index: 200;
+  z-index: 450;
   align-items: center;
   justify-content: center;
   padding: 1rem;

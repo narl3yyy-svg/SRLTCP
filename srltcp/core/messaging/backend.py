@@ -263,11 +263,12 @@ class MessagingBackend(
         if event.kind == "discovered" and event.data and event.peer:
             await self._handle_discovered(event.peer.address, "tcp", event.data)
         elif event.kind == "disconnected" and event.peer:
-            link = self.get_link_by_peer_id(event.peer.peer_id)
-            if link:
-                link_hash = link.hash_id
-                link_name = link.peer_name
-                self.remove_link(link_hash)
+            stale = self.get_link_by_peer_id(event.peer.peer_id)
+            link_name = stale.peer_name if stale else ""
+            link_hash = self.remove_link_for_peer(event.peer.peer_id)
+            if link_hash:
+                if stale and not link_name:
+                    link_name = stale.peer_name
                 self._pending_handshakes.pop(link_hash, None)
                 if self.config.relay_mode:
                     self.routing.remove_for_peer(event.peer.peer_id)
@@ -348,7 +349,17 @@ class MessagingBackend(
             await self._handle_text(peer_id, body, flags)
 
     def is_trusted(self, hash_id: str) -> bool:
-        return self.trusted.is_trusted(hash_id)
+        peer = self.trusted.get(hash_id)
+        return bool(peer and not peer.blocked)
+
+    def clear_messages_for_peer(self, hash_id: str) -> int:
+        before = len(self._messages)
+        self._messages = [
+            m
+            for m in self._messages
+            if m.sender_hash != hash_id and m.recipient_hash != hash_id
+        ]
+        return before - len(self._messages)
 
     async def _handle_text(self, peer_id: str, body: bytes, flags: int) -> None:
         link = self.get_link_by_peer_id(peer_id)
@@ -446,10 +457,13 @@ class MessagingBackend(
     def get_discovered_peers(self) -> list[dict[str, Any]]:
         own_hashes = {i.hash_id for i in self.identities.values()}
         own_keys = {i.public_bytes().hex() for i in self.identities.values()}
+        trusted_hashes = {t.hash_id for t in self.trusted.list_peers()}
         peers = []
         for p in self.discovery.list_peers():
             if p.hash_id in own_hashes or p.public_key in own_keys:
                 self.discovery.remove(p.hash_id)
+                continue
+            if p.hash_id in trusted_hashes:
                 continue
             d = p.to_dict()
             link = self.get_link(p.hash_id)

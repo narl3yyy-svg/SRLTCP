@@ -12,13 +12,6 @@ class SRLTCPApplication : Application() {
             if (!Python.isStarted()) {
                 Python.start(AndroidPlatform(this))
             }
-            Thread {
-                try {
-                    Python.getInstance().getModule("srltcp.app")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Python module preload failed", e)
-                }
-            }.start()
         } catch (e: Exception) {
             Log.e(TAG, "Python.start failed", e)
         }

@@ -59,7 +59,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         hash_id = data.get("hash_id", "")
         if not hash_id:
             return web.json_response({"error": "hash_id required"}, status=400)
-        peer = node.add_trusted_from_discovered(hash_id)
+        transport = data.get("transport")
+        peer = node.add_trusted_from_discovered(hash_id, transport)
         if not peer:
             peer = node.backend.trusted.add(
                 TrustedPeer(
@@ -70,11 +71,35 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             ).to_dict()
         return web.json_response(peer)
 
+    async def trusted_update(request: web.Request) -> web.Response:
+        hash_id = request.match_info.get("hash_id", "")
+        data = await request.json()
+        name = data.get("name")
+        blocked = data.get("blocked")
+        if name is None and blocked is None:
+            return web.json_response({"error": "name or blocked required"}, status=400)
+        peer = node.backend.trusted.update(
+            hash_id, name=name if name is not None else None, blocked=blocked
+        )
+        if not peer:
+            return web.json_response({"error": "peer not found"}, status=404)
+        if blocked is True:
+            await node.backend.disconnect_peer(hash_id)
+        return web.json_response(peer.to_dict())
+
+    async def trusted_clear_chat(request: web.Request) -> web.Response:
+        hash_id = request.match_info.get("hash_id", "")
+        if not node.backend.trusted.get(hash_id):
+            return web.json_response({"error": "peer not found"}, status=404)
+        removed = node.backend.clear_messages_for_peer(hash_id)
+        return web.json_response({"cleared": removed})
+
     async def trusted_remove(request: web.Request) -> web.Response:
         hash_id = request.match_info.get("hash_id", "")
         await node.backend.disconnect_peer(hash_id)
+        node.backend.discovery.remove(hash_id)
         ok = node.backend.trusted.remove(hash_id)
-        return web.json_response({"removed": ok})
+        return web.json_response({"removed": ok, "hash_id": hash_id})
 
     async def messages(request: web.Request) -> web.Response:
         limit = min(int(request.rel_url.query.get("limit", "200")), 1000)
@@ -100,7 +125,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         host = data.get("host")
         port = data.get("port")
         transport = data.get("transport", "tcp")
-        force = bool(data.get("force", True))
+        force = bool(data.get("force", False))
         ok = await node.backend.connect_to_peer(
             hash_id, host=host, port=port, transport=transport, force=force
         )
@@ -307,11 +332,14 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             )
         trusted_ids = {p["hash_id"] for p in trusted}
         seen: set[str] = set()
+        node_ids: set[str] = {ident["hash_id"] for ident in identities.values()}
+
         for peer in discovered + trusted:
             pid = peer["hash_id"]
             if pid in seen:
                 continue
             seen.add(pid)
+            node_ids.add(pid)
             nodes.append(
                 {
                     "id": pid,
@@ -321,6 +349,40 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                     "address": peer.get("tcp_host") or peer.get("address", ""),
                 }
             )
+
+        linked_hashes = {
+            link["hash_id"] for link in links if link.get("handshake_complete")
+        }
+        for link in links:
+            pid = link.get("hash_id", "")
+            if pid and pid not in seen:
+                seen.add(pid)
+                node_ids.add(pid)
+                nodes.append(
+                    {
+                        "id": pid,
+                        "label": link.get("peer_name") or pid[:8],
+                        "role": "linked",
+                        "transport": link.get("transport", "tcp"),
+                        "address": link.get("address", ""),
+                    }
+                )
+
+        for ident in identities.values():
+            local_hash = ident["hash_id"]
+            for peer in discovered:
+                pid = peer["hash_id"]
+                if pid in linked_hashes:
+                    continue
+                edges.append(
+                    {
+                        "from": local_hash,
+                        "to": pid,
+                        "transport": peer.get("transport", "tcp"),
+                        "state": "discovered",
+                    }
+                )
+
         for link in links:
             if not link.get("handshake_complete"):
                 continue
@@ -328,10 +390,13 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             local_hash = identities.get(transport, {}).get("hash_id", "")
             if not local_hash and identities:
                 local_hash = next(iter(identities.values()))["hash_id"]
+            remote = link.get("hash_id", "")
+            if not local_hash or not remote:
+                continue
             edges.append(
                 {
                     "from": local_hash,
-                    "to": link["hash_id"],
+                    "to": remote,
                     "transport": transport,
                     "state": "up",
                 }
@@ -352,6 +417,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_get("/api/peers", peers)
     app.router.add_get("/api/trusted", trusted_list)
     app.router.add_post("/api/trusted", trusted_add)
+    app.router.add_patch("/api/trusted/{hash_id}", trusted_update)
+    app.router.add_post("/api/trusted/{hash_id}/clear-chat", trusted_clear_chat)
     app.router.add_delete("/api/trusted/{hash_id}", trusted_remove)
     app.router.add_get("/api/messages", messages)
     app.router.add_post("/api/messages", send_message)

@@ -15,3 +15,24 @@ def test_trusted_add_remove(tmp_path: Path) -> None:
     assert len(store.list_peers()) == 1
     assert store.remove(peer.hash_id)
     assert not store.is_trusted(peer.hash_id)
+
+
+def test_trusted_blocked_not_trusted(tmp_path: Path) -> None:
+    store = TrustedStore(path=tmp_path / "trusted.json")
+    peer = TrustedPeer(hash_id="def" * 10 + "de", name="bob", transport="tcp", blocked=True)
+    store.add(peer)
+    assert peer.hash_id in store._peers
+    assert not store.is_trusted(peer.hash_id)
+
+
+def test_trusted_update_rename_and_block(tmp_path: Path) -> None:
+    store = TrustedStore(path=tmp_path / "trusted.json")
+    peer = TrustedPeer(hash_id="ghi" * 10 + "gh", name="carol", transport="serial")
+    store.add(peer)
+    updated = store.update(peer.hash_id, name="Carol S", blocked=True)
+    assert updated is not None
+    assert updated.name == "Carol S"
+    assert updated.blocked is True
+    assert not store.is_trusted(peer.hash_id)
+    store.update(peer.hash_id, blocked=False)
+    assert store.is_trusted(peer.hash_id)

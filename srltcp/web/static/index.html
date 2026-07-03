@@ -14,6 +14,9 @@
   <div class="app" id="app">
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
+      <div class="header-clock-row hidden" id="header-clock-row">
+        <time id="header-clock" class="header-clock">—</time>
+      </div>
       <div class="sidebar-header">
         <div class="brand">
           <div class="brand-icon">SR</div>
@@ -267,7 +270,7 @@
         <span class="stat-label">Time</span>
         <span class="stat-value">—</span>
       </div>
-      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.8</div>
+      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.9</div>
     </footer>
 
     <div class="modal-overlay" id="folder-modal">
@@ -300,6 +303,13 @@
         <pre class="release-notes" id="release-notes-body"></pre>
         <button type="button" class="action-btn" id="release-close">Close</button>
       </div>
+    </div>
+
+    <div class="contact-menu hidden" id="contact-menu" role="menu" aria-hidden="true">
+      <button type="button" class="contact-menu-item" data-action="clear-chat">Clear chat history</button>
+      <button type="button" class="contact-menu-item" data-action="rename">Rename contact</button>
+      <button type="button" class="contact-menu-item" data-action="block">Block contact</button>
+      <button type="button" class="contact-menu-item danger" data-action="delete">Delete contact</button>
     </div>
 
     <div class="toast-container" id="toasts"></div>

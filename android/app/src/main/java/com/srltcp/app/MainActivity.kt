@@ -69,14 +69,24 @@ class MainActivity : AppCompatActivity() {
 
             Thread {
                 try {
-                    Python.getInstance().getModule("srltcp.app").callAttr("start_android_server")
+                    val py = Python.getInstance()
+                    py.getModule("srltcp.app").callAttr("start_android_server")
+                    var waited = 0
+                    while (waited < 30000) {
+                        try {
+                            val port = py.getModule("srltcp.app").callAttr("get_android_web_port").toInt()
+                            if (port > 0) break
+                        } catch (_: Exception) { }
+                        Thread.sleep(250)
+                        waited += 250
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Server start failed", e)
                     showFatal("Failed to start server: ${e.message}")
                 }
             }.start()
 
-            scheduleLoad(4000)
+            scheduleLoad(2500)
         } catch (e: Exception) {
             Log.e(TAG, "onCreate failed", e)
             showFatal("App failed to start: ${e.message}")

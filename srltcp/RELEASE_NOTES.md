@@ -1,5 +1,24 @@
 # SRLTCP Release Notes
 
+## v0.1.9 (2026-07-03)
+
+### Fixes
+- **Connection storm** — per-peer connect lock, duplicate TCP handshakes rejected, `force=false` by default; UI no longer auto-reconnects on every `link_down`
+- **Link teardown** — only the active transport peer removes a link; stale disconnect events ignored
+- **Setup folder browse** — browse modal z-index above setup overlay; delegated click handlers for setup wizard buttons
+- **Trusted list** — deleting a contact updates UI immediately; trusted peers hidden from Discovered tab
+- **Network map** — shows active links and dashed lines to discovered peers; includes linked nodes missing from discovery
+- **Serial connect** — outbound dial path for serial transport in `connect_to_peer`
+- **Status clock** — “Show clock” setting hides clock; time shown at top of sidebar (time only, timezone in settings)
+- **Contact menu** — ⋮ submenu: clear chat, rename, block/unblock, delete
+- **Peer notifications** — toast when remote peer connects or disconnects
+- **Android APK** — `extractNativeLibs`, `buildConfig`, server-ready wait before WebView load; output as `SRLTCP-0.1.9.apk`
+
+### API
+- `PATCH /api/trusted/{hash_id}` — rename or block/unblock
+- `POST /api/trusted/{hash_id}/clear-chat` — remove chat history for a contact
+- `POST /api/connect` — `force` defaults to `false`
+
 ## v0.1.8 (2026-07-03)
 
 ### Fixes

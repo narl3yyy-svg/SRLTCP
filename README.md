@@ -6,7 +6,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.6
+**Current version:** 0.1.9
 
 ---
 
@@ -170,6 +170,8 @@ On first launch, the web UI shows a setup wizard. Settings persist in `~/.srltcp
 | Shared folder | Default folder for browse/share |
 | LAN IP | Pinned interface for discovery & announce |
 | Auto-announce | Broadcast presence every 5 seconds |
+| Timezone | Region for the status clock (time shown at top of sidebar) |
+| Show clock | Toggle live clock in the UI |
 
 Change port from CLI: `./run.sh web --port 9999`
 
@@ -349,6 +351,13 @@ pytest tests/ -v                # unit tests only
 ## Changelog
 
 See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
+
+### v0.1.9
+
+- Fixed connection storms and unstable reconnect loops; serial outbound connect
+- Setup folder browse works above the wizard overlay; trusted peers hidden from Discovered
+- Network map shows links; contact ⋮ menu (clear chat, rename, block, delete)
+- Clock at top of sidebar (time only); timezone in settings; Android APK stability fixes
 
 ### v0.1.4
 
