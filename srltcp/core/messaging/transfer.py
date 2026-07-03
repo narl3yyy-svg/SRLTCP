@@ -123,8 +123,16 @@ class TransferMixin:
             packet = await self._encrypt_for_link(link, MessageType.FILE_ACCEPT, accept_body)
             await self._send_raw(link.transport_peer_id, link.transport, packet)
             transfer.state = TransferState.ACCEPTED
+            transfer.recipient_hash = self._identity_for_transport(link.transport).hash_id
             if self._on_file_offer:
                 await self._on_file_offer(transfer.to_dict())
+            await self._append_file_message(
+                sender_hash=hash_id,
+                recipient_hash=transfer.recipient_hash,
+                transport=link.transport,
+                transfer=transfer.to_dict(),
+                direction="in",
+            )
 
     async def _handle_file_accept(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
@@ -177,6 +185,7 @@ class TransferMixin:
                     transfer.speed_mbps = (transfer.offset / elapsed) / (1024 * 1024)
                     if self._on_transfer_progress:
                         await self._on_transfer_progress(transfer.to_dict())
+                    await self._update_file_message(transfer.to_dict())
 
             complete_body = encode_payload(
                 {"transfer_id": transfer.id, "sha256": transfer.sha256}
@@ -187,6 +196,7 @@ class TransferMixin:
             log.info("Transfer complete: %s", transfer.filename)
             if self._on_transfer_complete:
                 await self._on_transfer_complete(transfer.to_dict())
+            await self._update_file_message(transfer.to_dict())
         except Exception as exc:
             log.exception("Transfer failed: %s", exc)
             transfer.state = TransferState.FAILED
@@ -218,6 +228,7 @@ class TransferMixin:
         transfer.speed_mbps = (transfer.offset / elapsed) / (1024 * 1024)
         if self._on_transfer_progress:
             await self._on_transfer_progress(transfer.to_dict())
+        await self._update_file_message(transfer.to_dict())
 
     async def _handle_file_complete(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
@@ -234,6 +245,7 @@ class TransferMixin:
         transfer.state = TransferState.COMPLETE
         if self._on_transfer_complete:
             await self._on_transfer_complete(transfer.to_dict())
+        await self._update_file_message(transfer.to_dict())
 
     async def resume_transfer(self: MessagingBackend, transfer_id: str) -> bool:
         transfer = self._transfers.get(transfer_id)

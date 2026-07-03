@@ -59,6 +59,9 @@ def create_app(node: SRLTCPNode) -> web.Application:
     async def on_link(hash_id: str, name: str) -> None:
         await broadcast_event(node, "link_up", {"hash_id": hash_id, "name": name})
 
+    async def on_link_down(hash_id: str, name: str) -> None:
+        await broadcast_event(node, "link_down", {"hash_id": hash_id, "name": name})
+
     async def on_metrics(hash_id: str, metrics: dict) -> None:
         await broadcast_event(
             node, "peer_metrics", {"hash_id": hash_id, **metrics}
@@ -77,6 +80,7 @@ def create_app(node: SRLTCPNode) -> web.Application:
         on_message=on_message,
         on_peer_discovered=on_peer,
         on_link_up=on_link,
+        on_link_down=on_link_down,
         on_peer_metrics=on_metrics,
         on_transfer_progress=on_progress,
         on_transfer_complete=on_complete,

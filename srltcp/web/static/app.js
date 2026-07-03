@@ -18,6 +18,8 @@
     search: "",
     settings: {},
     interfaces: [],
+    transfers: {},
+    messageCache: [],
   };
 
   const COLORS = [
@@ -91,6 +93,42 @@
     return Object.values(state.myHashes).includes(senderHash);
   }
 
+  function peerByHash(hashId) {
+    return state.trusted.find((p) => p.hash_id === hashId)
+      || state.peers.find((p) => p.hash_id === hashId);
+  }
+
+  function peerTransport(hashId) {
+    return peerByHash(hashId)?.transport || "tcp";
+  }
+
+  function isPeerLinked(hashId) {
+    if (state.links[hashId]) return true;
+    const link = (state._lastLinks || []).find((l) => l.hash_id === hashId);
+    return !!(link && link.handshake_complete);
+  }
+
+  function syncLinksFromStatus(links) {
+    state._lastLinks = links || [];
+    (links || []).forEach((l) => {
+      state.links[l.hash_id] = l.handshake_complete;
+      if (l.rtt_ms != null) {
+        state.linkMetrics[l.hash_id] = {
+          rtt_ms: l.rtt_ms,
+          link_quality_pct: l.link_quality_pct,
+        };
+      }
+    });
+  }
+
+  function formatBytes(n) {
+    if (!n) return "0 B";
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+
   /* ── WebSocket ── */
   function connectWs() {
     const host = location.host || "127.0.0.1:9876";
@@ -122,9 +160,23 @@
         case "link_up":
           state.links[data.hash_id] = true;
           loadPeers();
-          if (state.selectedPeer === data.hash_id) refreshPeerStatus(data.hash_id);
+          if (state.selectedPeer === data.hash_id) {
+            refreshPeerStatus(data.hash_id);
+            $("#msg-input").disabled = false;
+            $("#send-btn").disabled = false;
+          }
           toast(`Connected to ${data.name}`);
           logActivity(`Link up: ${data.name}`);
+          break;
+        case "link_down":
+          delete state.links[data.hash_id];
+          delete state.linkMetrics[data.hash_id];
+          loadPeers();
+          if (state.selectedPeer === data.hash_id) {
+            refreshPeerStatus(data.hash_id);
+            connectPeer(data.hash_id, true);
+          }
+          logActivity(`Link down: ${data.name || data.hash_id?.slice(0, 8)}`);
           break;
         case "peer_metrics":
           state.linkMetrics[data.hash_id] = {
@@ -136,18 +188,17 @@
           break;
         case "transfer_progress":
         case "transfer_complete":
+          state.transfers[data.id] = data;
           renderTransfers();
+          if (state.selectedPeer) updateChatTransfer(data);
           if (type === "transfer_complete") toast(`Transfer complete: ${data.filename}`);
           break;
         case "transport_event":
-          logActivity(`Transport: ${data.kind}`);
-          if (data.kind === "disconnected") {
-            Object.keys(state.links).forEach((id) => {
-              if (!state._lastLinks?.find((l) => l.hash_id === id && l.handshake_complete)) {
-                delete state.links[id];
-              }
-            });
-            if (state.selectedPeer) refreshPeerStatus(state.selectedPeer);
+          logActivity(`Transport: ${data.kind}${data.hash_id ? ` (${data.hash_id.slice(0, 8)})` : ""}`);
+          if (data.kind === "disconnected" && data.hash_id) {
+            delete state.links[data.hash_id];
+            delete state.linkMetrics[data.hash_id];
+            if (state.selectedPeer === data.hash_id) refreshPeerStatus(data.hash_id);
             loadPeers();
           }
           break;
@@ -176,6 +227,20 @@
     loadPeers();
   }
 
+  async function deleteTrusted(hashId, name) {
+    if (!confirm(`Remove ${name} from trusted contacts?`)) return;
+    await fetch(`/api/trusted/${encodeURIComponent(hashId)}`, { method: "DELETE" });
+    delete state.links[hashId];
+    delete state.linkMetrics[hashId];
+    if (state.selectedPeer === hashId) {
+      state.selectedPeer = null;
+      $("#chat-active").classList.add("hidden");
+      $("#chat-empty").classList.remove("hidden");
+    }
+    toast("Contact removed");
+    loadPeers();
+  }
+
   async function pingPeer(hashId) {
     const res = await fetch("/api/ping", {
       method: "POST",
@@ -200,10 +265,14 @@
     renderMessages(filtered);
   }
 
-  async function announce() {
-    await fetch("/api/announce", { method: "POST" });
-    toast("Announced on all transports");
-    logActivity("Announced presence");
+  async function announceTransport(transport) {
+    const res = await fetch(`/api/announce?transport=${transport}`, { method: "POST" });
+    if (!res.ok) {
+      toast(`Announce ${transport.toUpperCase()} failed`);
+      return;
+    }
+    toast(`Announced on ${transport.toUpperCase()}`);
+    logActivity(`Announced on ${transport}`);
     setTimeout(loadPeers, 800);
   }
 
@@ -216,7 +285,7 @@
   }
 
   function refreshPeerStatus(hashId) {
-    const linked = state.links[hashId];
+    const linked = isPeerLinked(hashId);
     const latency = formatLatency(hashId);
     if (linked && latency) {
       updatePeerStatus(`Encrypted · Online · ${latency}`);
@@ -228,16 +297,23 @@
       updatePeerStatus("Handshaking…");
       $(".status-dot").className = "status-dot pending";
     }
+    $("#msg-input").disabled = !hashId;
+    $("#send-btn").disabled = !hashId;
   }
 
   async function connectPeer(hashId, force = true) {
+    if (isPeerLinked(hashId) && !force) {
+      refreshPeerStatus(hashId);
+      return;
+    }
     updatePeerStatus("Handshaking…");
     $(".status-dot").className = "status-dot pending";
     logActivity(`Connecting to ${hashId.slice(0, 12)}…`);
+    const transport = peerTransport(hashId);
     const res = await fetch("/api/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hash_id: hashId, transport: "tcp", force }),
+      body: JSON.stringify({ hash_id: hashId, transport, force }),
     });
     const data = await res.json().catch(() => ({}));
     if (data.handshake_complete) {
@@ -273,19 +349,33 @@
     input.value = "";
     autoResize(input);
 
-    await fetch("/api/messages", {
+    const res = await fetch("/api/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         recipient_hash: state.selectedPeer,
         text,
-        transport: "tcp",
+        transport: peerTransport(state.selectedPeer),
       }),
     });
+    if (!res.ok) {
+      toast("Message failed — reconnecting…");
+      await connectPeer(state.selectedPeer, true);
+    } else {
+      loadMessages();
+    }
   }
 
   async function sendFile(file) {
     if (!state.selectedPeer || !file) return;
+    if (!isPeerLinked(state.selectedPeer)) {
+      toast("Not connected — handshaking…");
+      await connectPeer(state.selectedPeer, true);
+      if (!isPeerLinked(state.selectedPeer)) {
+        toast("Cannot send file — peer not connected");
+        return;
+      }
+    }
     toast(`Uploading ${file.name}…`);
     const form = new FormData();
     form.append("file", file);
@@ -298,7 +388,7 @@
       body: JSON.stringify({
         recipient_hash: state.selectedPeer,
         path: uploaded.path,
-        transport: "tcp",
+        transport: peerTransport(state.selectedPeer),
       }),
     });
     if (!res.ok) {
@@ -306,6 +396,7 @@
       toast(err.error || "File send failed");
     } else {
       toast(`Sending ${file.name}…`);
+      loadMessages();
     }
     renderTransfers();
   }
@@ -441,6 +532,12 @@
 
     $("#identities").innerHTML = idHtml || '<div class="empty-hint">No identities</div>';
 
+    const serialBtn = $("#btn-announce-serial");
+    if (serialBtn) {
+      serialBtn.disabled = !ids.serial;
+      serialBtn.title = ids.serial ? "Announce on serial/RF" : "Enable serial in settings first";
+    }
+
     if (primary) {
       state.myName = primary.name;
       $("#me-name").textContent = primary.name;
@@ -448,16 +545,7 @@
       setAvatar($("#me-avatar"), primary.name, primary.hash_id);
     }
 
-    state._lastLinks = data.links || [];
-    (data.links || []).forEach((l) => {
-      state.links[l.hash_id] = l.handshake_complete;
-      if (l.rtt_ms != null) {
-        state.linkMetrics[l.hash_id] = {
-          rtt_ms: l.rtt_ms,
-          link_quality_pct: l.link_quality_pct,
-        };
-      }
-    });
+    syncLinksFromStatus(data.links || []);
 
     loadPeers();
     if (state.selectedPeer) refreshPeerStatus(state.selectedPeer);
@@ -497,11 +585,13 @@
         if (rtt != null) metrics.push(`${Math.round(rtt)}ms`);
         const lq = lm.link_quality_pct ?? p.link_quality_pct;
         if (p.transport === "serial" && lq != null) metrics.push(`${lq}%`);
-        const linked = state.links[p.hash_id];
         if (linked && !metrics.length) metrics.push("online");
         const meta = metrics.length ? metrics.join(" · ") : `${p.transport.toUpperCase()} · ${p.hash_id.slice(0, 10)}…`;
         const trustBtn = state.peerTab === "discovered" && !trustedIds.has(p.hash_id)
           ? `<button type="button" class="contact-trust" data-trust="${p.hash_id}">Trust</button>` : "";
+        const deleteBtn = state.peerTab === "trusted"
+          ? `<button type="button" class="contact-delete" data-delete="${p.hash_id}" data-name="${escapeHtml(p.name)}" title="Remove contact">×</button>` : "";
+        const linked = isPeerLinked(p.hash_id);
         return `<button class="contact${active}" data-hash="${p.hash_id}" data-name="${escapeHtml(p.name)}">
           <div class="avatar" style="background:${hashColor(p.hash_id)}22;color:${hashColor(p.hash_id)};border-color:${hashColor(p.hash_id)}44">
             ${initials(p.name)}
@@ -510,7 +600,7 @@
             <div class="contact-name">${escapeHtml(p.name)}</div>
             <div class="contact-preview">${meta}</div>
           </div>
-          <div class="contact-meta">${trustBtn}${linked ? "●" : ""}</div>
+          <div class="contact-meta">${trustBtn}${deleteBtn}${linked ? "●" : ""}</div>
         </button>`;
       })
       .join("");
@@ -526,6 +616,12 @@
       btn.addEventListener("click", (ev) => {
         ev.stopPropagation();
         trustPeer(btn.dataset.trust);
+      });
+    });
+    el.querySelectorAll(".contact-delete").forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        deleteTrusted(btn.dataset.delete, btn.dataset.name);
       });
     });
   }
@@ -555,8 +651,43 @@
     $("#chat-peer-meta").textContent = text;
   }
 
+  function renderFileBubble(m, out) {
+    const meta = m.metadata || {};
+    const tid = meta.transfer_id || "";
+    const live = state.transfers[tid] || meta;
+    const size = live.size || meta.size || 0;
+    const offset = live.offset || meta.offset || 0;
+    const pct = size ? Math.min(100, Math.round((offset / size) * 100)) : 0;
+    const speed = live.speed_mbps || meta.speed_mbps;
+    const stateLabel = live.state || meta.state || "transferring";
+    const filename = meta.filename || m.text || "file";
+    const speedStr = speed ? ` · ${Number(speed).toFixed(2)} MB/s` : "";
+    const fileUrl = tid ? `/api/transfers/${encodeURIComponent(tid)}/file` : "";
+
+    if (m.msg_type === "image" && (stateLabel === "complete" || pct >= 100) && fileUrl) {
+      return `<div class="file-bubble image-bubble">
+        <a href="${fileUrl}" target="_blank" rel="noopener">
+          <img src="${fileUrl}" alt="${escapeHtml(filename)}" class="chat-image" loading="lazy" />
+        </a>
+        <div class="file-name">${escapeHtml(filename)}</div>
+        <div class="file-progress-meta">${formatBytes(size)} · complete</div>
+      </div>`;
+    }
+
+    return `<div class="file-bubble" data-transfer="${escapeHtml(tid)}">
+      <div class="file-icon">📎</div>
+      <div class="file-info">
+        <div class="file-name">${escapeHtml(filename)}</div>
+        <div class="file-progress-meta">${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr} · ${stateLabel}</div>
+        <div class="progress-track chat-progress"><div class="progress-fill" style="width:${pct}%"></div></div>
+        ${stateLabel === "complete" && fileUrl ? `<a class="file-download" href="${fileUrl}" target="_blank" rel="noopener">Download</a>` : ""}
+      </div>
+    </div>`;
+  }
+
   function renderMessages(msgs) {
     const el = $("#messages");
+    state.messageCache = msgs;
     let lastDate = "";
     let html = "";
 
@@ -567,9 +698,12 @@
         lastDate = date;
       }
       const out = isOutgoing(m.sender_hash);
-      html += `<div class="bubble-row ${out ? "out" : "in"}">
-        <div class="bubble ${out ? "out" : "in"}">
-          ${escapeHtml(m.text)}
+      const body = (m.msg_type === "file" || m.msg_type === "image")
+        ? renderFileBubble(m, out)
+        : escapeHtml(m.text);
+      html += `<div class="bubble-row ${out ? "out" : "in"}" data-msg-id="${escapeHtml(m.id)}">
+        <div class="bubble ${out ? "out" : "in"} ${m.msg_type === "image" ? "image" : ""}">
+          ${body}
           <div class="bubble-meta">
             <span>${formatTime(m.timestamp)}</span>
             <span class="bubble-status ${m.status}"></span>
@@ -582,19 +716,44 @@
     el.scrollTop = el.scrollHeight;
   }
 
+  function updateChatTransfer(data) {
+    if (!data.id) return;
+    state.transfers[data.id] = data;
+    const peer = state.selectedPeer;
+    if (!peer) return;
+    const relevant = data.sender_hash === peer || data.recipient_hash === peer;
+    if (!relevant) return;
+    const idx = state.messageCache.findIndex((m) => m.metadata?.transfer_id === data.id);
+    if (idx >= 0) {
+      state.messageCache[idx].metadata = { ...state.messageCache[idx].metadata, ...data };
+      renderMessages(state.messageCache);
+    } else {
+      loadMessages();
+    }
+  }
+
   function onNewMessage(m) {
-    if (
-      state.selectedPeer &&
-      m.sender_hash !== state.selectedPeer &&
-      m.recipient_hash !== state.selectedPeer
-    ) {
+    const forPeer = state.selectedPeer
+      && (m.sender_hash === state.selectedPeer || m.recipient_hash === state.selectedPeer);
+
+    if (!forPeer) {
       if (!isOutgoing(m.sender_hash)) toast(`New message from peer`);
       return;
     }
 
-    if (state.selectedPeer) {
-      loadMessages();
+    if (m.msg_type === "file" || m.msg_type === "image") {
+      const idx = state.messageCache.findIndex((x) => x.id === m.id);
+      if (idx >= 0) {
+        state.messageCache[idx] = m;
+        if (m.metadata?.transfer_id) state.transfers[m.metadata.transfer_id] = m.metadata;
+        renderMessages(state.messageCache);
+      } else {
+        loadMessages();
+      }
+      return;
     }
+
+    loadMessages();
   }
 
   async function renderTransfers() {
@@ -643,7 +802,8 @@
   }
 
   /* ── Events ── */
-  $("#btn-announce").addEventListener("click", announce);
+  $("#btn-announce-tcp")?.addEventListener("click", () => announceTransport("tcp"));
+  $("#btn-announce-serial")?.addEventListener("click", () => announceTransport("serial"));
 
   $("#btn-settings").addEventListener("click", openDrawer);
   $("#btn-close-drawer").addEventListener("click", closeDrawer);
@@ -788,6 +948,13 @@
   pollSystemStats();
   setInterval(pollSystemStats, 2000);
   setInterval(loadPeers, 15000);
+  setInterval(async () => {
+    try {
+      const data = await (await fetch("/api/status")).json();
+      syncLinksFromStatus(data.links || []);
+      if (state.selectedPeer) refreshPeerStatus(state.selectedPeer);
+    } catch (_) { /* ignore */ }
+  }, 5000);
 
   fetch("/api/settings")
     .then((r) => r.json())

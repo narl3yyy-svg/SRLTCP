@@ -52,6 +52,7 @@ class TCPTransport(Transport):
             peer = TransportPeer(peer_id=peer_id, address=address, transport="tcp")
             conn = Connection(peer, reader, writer)
             conn.set_frame_handler(self._handle_frame)
+            conn.set_close_handler(self._on_connection_closed)
             self._connections[peer_id] = conn
             self._peer_by_writer_id[id(writer)] = peer_id
             await conn.start_reading()
@@ -90,17 +91,14 @@ class TCPTransport(Transport):
     async def _handle_frame(self, peer: TransportPeer, payload: bytes) -> None:
         await self._emit_frame(peer, payload)
 
-    async def _on_disconnect(self, peer_id: str) -> None:
-        conn = self._connections.pop(peer_id, None)
-        if conn:
-            peer = conn.peer
-            await self._emit_event(TransportEvent(kind="disconnected", peer=peer))
+    async def _on_connection_closed(self, peer: TransportPeer) -> None:
+        self._connections.pop(peer.peer_id, None)
+        await self._emit_event(TransportEvent(kind="disconnected", peer=peer))
 
     async def disconnect(self, peer_id: str) -> None:
         conn = self._connections.pop(peer_id, None)
         if conn:
             await conn.close()
-            await self._emit_event(TransportEvent(kind="disconnected", peer=conn.peer))
 
     async def connect(self, host: str, port: int) -> str:
         reader, writer = await asyncio.open_connection(host, port)
@@ -109,6 +107,7 @@ class TCPTransport(Transport):
         peer = TransportPeer(peer_id=peer_id, address=address, transport="tcp")
         conn = Connection(peer, reader, writer)
         conn.set_frame_handler(self._handle_frame)
+        conn.set_close_handler(self._on_connection_closed)
         self._connections[peer_id] = conn
         await conn.start_reading()
         await self._emit_event(TransportEvent(kind="connected", peer=peer))

@@ -5,6 +5,7 @@
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
     <application
+        android:name=".SRLTCPApplication"
         android:allowBackup="false"
         android:label="SRLTCP"
         android:usesCleartextTraffic="false"

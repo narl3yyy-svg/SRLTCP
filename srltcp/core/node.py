@@ -93,6 +93,7 @@ class SRLTCPNode:
                 self.backend.identity_store.save(identity)
         if settings.auto_announce != old_announce:
             await self.backend.set_auto_announce(settings.auto_announce)
+        await self.backend.apply_serial_transport()
         if settings.message_retention_hours == 0:
             self.backend.clear_messages()
 

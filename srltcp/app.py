@@ -18,6 +18,8 @@ from srltcp.web.server import run_web_server, shutdown_web_server
 
 log = get_logger(__name__)
 
+_android_web_port: dict[str, int] = {"port": WEB_PORT}
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -69,8 +71,9 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         tcp_port=args.tcp_port,
         relay_mode=args.relay,
         enable_tcp=not args.no_tcp,
-        enable_serial=args.serial,
-        serial_port=args.serial_port or default_serial_port(),
+        enable_serial=args.serial or settings.enable_serial,
+        serial_port=args.serial_port or settings.serial_port or default_serial_port(),
+        serial_baud=settings.serial_baud,
         announce=settings.auto_announce,
         lan_ip=settings.lan_ip,
         incoming_dir=str(settings.resolved_incoming_dir()),
@@ -109,6 +112,7 @@ async def run_web(args: argparse.Namespace) -> None:
     web_holder["site"] = site
     settings.web_port = bound_port
     store.save(settings)
+    _android_web_port["port"] = bound_port
 
     log.info("SRLTCP v%s running — https://127.0.0.1:%d", __version__, bound_port)
     log.info("Press Ctrl+C to stop")
@@ -166,12 +170,25 @@ async def run_identity() -> None:
         print(f"  public_key: {identity.public_bytes().hex()[:32]}…")
 
 
-def start_android_server() -> None:
-    """Entry point for Chaquopy Android app."""
-    import sys
+def get_android_web_port() -> int:
+    """Return bound HTTPS port for Android WebView."""
+    return _android_web_port["port"]
 
-    sys.argv = ["srltcp", "web", "--log-level", "INFO"]
-    main()
+
+def start_android_server() -> None:
+    """Entry point for Chaquopy Android app (background thread)."""
+    import threading
+
+    def _run() -> None:
+        import sys
+
+        sys.argv = ["srltcp", "web", "--log-level", "INFO"]
+        try:
+            main()
+        except Exception:
+            log.exception("Android server failed")
+
+    threading.Thread(target=_run, name="srltcp-server", daemon=True).start()
 
 
 def main() -> None:

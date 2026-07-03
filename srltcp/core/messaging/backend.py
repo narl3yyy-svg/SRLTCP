@@ -88,7 +88,9 @@ class MessagingBackend(
         self._on_transfer_progress: EventCallback | None = None
         self._on_transfer_complete: EventCallback | None = None
         self._on_peer_metrics: EventCallback | None = None
+        self._on_link_down: EventCallback | None = None
         self._on_event: EventCallback | None = None
+        self._reconnect_tasks: dict[str, asyncio.Task[None]] = {}
 
         self._init_links()
         self._init_connect()
@@ -108,6 +110,7 @@ class MessagingBackend(
         on_transfer_progress: EventCallback | None = None,
         on_transfer_complete: EventCallback | None = None,
         on_peer_metrics: EventCallback | None = None,
+        on_link_down: EventCallback | None = None,
         on_event: EventCallback | None = None,
     ) -> None:
         self._on_message = on_message
@@ -117,6 +120,7 @@ class MessagingBackend(
         self._on_transfer_progress = on_transfer_progress
         self._on_transfer_complete = on_transfer_complete
         self._on_peer_metrics = on_peer_metrics
+        self._on_link_down = on_link_down
         self._on_event = on_event
 
     async def start(self) -> None:
@@ -167,6 +171,11 @@ class MessagingBackend(
         self._running = False
         await self.stop_announce_loop()
         await self.stop_ping_loop()
+        for task in list(self._reconnect_tasks.values()):
+            task.cancel()
+        if self._reconnect_tasks:
+            await asyncio.gather(*self._reconnect_tasks.values(), return_exceptions=True)
+        self._reconnect_tasks.clear()
         tasks = list(self._transfer_tasks.values())
         for task in tasks:
             task.cancel()
@@ -176,6 +185,67 @@ class MessagingBackend(
             await self.tcp_transport.stop()
         if self.serial_transport:
             await self.serial_transport.stop()
+
+    async def apply_serial_transport(self) -> dict[str, str]:
+        """Start, stop, or restart serial transport when settings change."""
+        want = self.config.enable_serial
+        port = self.config.serial_port or None
+        baud = self.config.serial_baud
+
+        if not want:
+            if self.serial_transport:
+                await self.serial_transport.stop()
+                self.serial_transport = None
+            self.identities.pop("serial", None)
+            return {"serial": "stopped"}
+
+        needs_restart = False
+        if self.serial_transport:
+            if (
+                getattr(self.serial_transport, "port", None) != (port or "")
+                or getattr(self.serial_transport, "baudrate", None) != baud
+            ):
+                await self.serial_transport.stop()
+                self.serial_transport = None
+                needs_restart = True
+        else:
+            needs_restart = True
+
+        if needs_restart:
+            self.identities["serial"] = self.identity_store.load_or_create(
+                self.config.name, "serial"
+            )
+            self.serial_transport = SerialTransport(port=port, baudrate=baud)
+            self._wire_transport(self.serial_transport)
+            try:
+                await self.serial_transport.start()
+            except Exception as exc:
+                log.warning("Serial transport unavailable: %s", exc)
+                self.serial_transport = None
+                self.identities.pop("serial", None)
+                return {"serial": "failed", "error": str(exc)}
+
+        return {"serial": "running" if self.serial_transport else "failed"}
+
+    def _schedule_reconnect(self, hash_id: str) -> None:
+        if hash_id in self._reconnect_tasks or not self._running:
+            return
+        if not self.trusted.is_trusted(hash_id):
+            return
+
+        async def _reconnect() -> None:
+            try:
+                await asyncio.sleep(2.0)
+                if self.get_link(hash_id) or not self._running:
+                    return
+                trusted = self.trusted.get(hash_id)
+                transport = trusted.transport if trusted else "tcp"
+                log.info("Auto-reconnecting to %s", hash_id[:8])
+                await self.connect_to_peer(hash_id, transport=transport, force=True)
+            finally:
+                self._reconnect_tasks.pop(hash_id, None)
+
+        self._reconnect_tasks[hash_id] = asyncio.create_task(_reconnect())
 
     def _wire_transport(self, transport: Transport) -> None:
         transport.on_frame(self._on_transport_frame)
@@ -188,21 +258,29 @@ class MessagingBackend(
         return identity
 
     async def _on_transport_event(self, event: TransportEvent) -> None:
+        link_hash: str | None = None
+        link_name = ""
         if event.kind == "discovered" and event.data and event.peer:
             await self._handle_discovered(event.peer.address, "tcp", event.data)
         elif event.kind == "disconnected" and event.peer:
             link = self.get_link_by_peer_id(event.peer.peer_id)
             if link:
-                hash_id = link.hash_id
-                self.remove_link(hash_id)
-                self._pending_handshakes.pop(hash_id, None)
+                link_hash = link.hash_id
+                link_name = link.peer_name
+                self.remove_link(link_hash)
+                self._pending_handshakes.pop(link_hash, None)
                 if self.config.relay_mode:
                     self.routing.remove_for_peer(event.peer.peer_id)
+                if self._on_link_down:
+                    await self._on_link_down(link_hash, link_name)
+                self._schedule_reconnect(link_hash)
         if self._on_event:
             await self._on_event(
                 {
                     "kind": event.kind,
                     "peer": event.peer.address if event.peer else None,
+                    "hash_id": link_hash,
+                    "name": link_name,
                     "error": event.error,
                 }
             )
@@ -396,11 +474,77 @@ class MessagingBackend(
         self._messages.clear()
         return count
 
+    def _file_msg_type(self, filename: str) -> str:
+        ext = Path(filename).suffix.lower()
+        if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"):
+            return "image"
+        return "file"
+
+    async def _append_file_message(
+        self,
+        *,
+        sender_hash: str,
+        recipient_hash: str,
+        transport: str,
+        transfer: dict[str, Any],
+        direction: str,
+    ) -> None:
+        msg = ChatMessage.create(
+            sender_hash=sender_hash,
+            recipient_hash=recipient_hash,
+            text=transfer.get("filename", "file"),
+            transport=transport,
+            msg_type=self._file_msg_type(transfer.get("filename", "")),
+            metadata={
+                "transfer_id": transfer.get("id"),
+                "filename": transfer.get("filename"),
+                "size": transfer.get("size"),
+                "sha256": transfer.get("sha256"),
+                "state": transfer.get("state"),
+                "offset": transfer.get("offset", 0),
+                "speed_mbps": transfer.get("speed_mbps", 0),
+                "direction": direction,
+            },
+        )
+        self._messages.append(msg)
+        if self._on_message:
+            await self._on_message(msg.to_dict())
+
+    async def _update_file_message(self, transfer: dict[str, Any]) -> None:
+        transfer_id = transfer.get("id")
+        for msg in reversed(self._messages):
+            if msg.metadata.get("transfer_id") == transfer_id:
+                msg.metadata.update(
+                    {
+                        "state": transfer.get("state"),
+                        "offset": transfer.get("offset", 0),
+                        "speed_mbps": transfer.get("speed_mbps", 0),
+                    }
+                )
+                if self._on_message:
+                    await self._on_message(msg.to_dict())
+                return
+
     async def send_file(
         self, recipient_hash: str, path: Path, *, transport: str = "tcp"
     ) -> dict[str, Any] | None:
         if not self.trusted.is_trusted(recipient_hash):
             log.warning("Recipient %s not trusted for file send", recipient_hash[:8])
             return None
+        link = self.get_link(recipient_hash)
+        if not link or not link.handshake_complete:
+            log.warning("No active link to %s for file send", recipient_hash[:8])
+            return None
         transfer = await self.offer_file(recipient_hash, path, transport=transport)
-        return transfer.to_dict() if transfer else None
+        if not transfer:
+            return None
+        data = transfer.to_dict()
+        identity = self._identity_for_transport(transport)
+        await self._append_file_message(
+            sender_hash=identity.hash_id,
+            recipient_hash=recipient_hash,
+            transport=transport,
+            transfer=data,
+            direction="out",
+        )
+        return data

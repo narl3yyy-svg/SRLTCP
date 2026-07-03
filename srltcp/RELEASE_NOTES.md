@@ -1,5 +1,22 @@
 # SRLTCP Release Notes
 
+## v0.1.7 (2026-07-03)
+
+### Fixes
+- **Serial transport** — enabling serial in settings now starts the transport and shows the serial identity (no restart required)
+- **Serial from settings** — `enable_serial` / port / baud loaded at startup from saved settings
+- **Separate announces** — "Announce TCP" and "Announce Serial" buttons (independent discovery per transport)
+- **Connection stability** — TCP disconnects detected correctly; auto-reconnect for trusted peers; `link_down` WebSocket events
+- **Chat UI state** — link status syncs every 5s; no page refresh needed to send messages when encrypted/online
+- **File transfer** — progress bar and MB/s in chat bubbles; files and images appear in the message window
+- **Large file send** — requires active encrypted link; clearer errors when peer not connected
+- **Delete contacts** — remove trusted peers from the Trusted tab (× button)
+- **Android APK** — `SRLTCPApplication` for Chaquopy init; self-signed localhost TLS accepted; port fallback 9876–9878
+
+### New
+- **Uninstall scripts** — `uninstall.sh` / `uninstall.bat` remove config and app data
+- **File download API** — `GET /api/transfers/{id}/file` for completed transfers in chat
+
 ## v0.1.6 (2026-07-03)
 
 ### Fixes

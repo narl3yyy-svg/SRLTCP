@@ -100,10 +100,16 @@ class Connection:
         self._frame_reader = FrameReader()
         self._read_task: asyncio.Task[None] | None = None
         self._on_frame: FrameHandler | None = None
+        self._on_close: Callable[[TransportPeer], Awaitable[None]] | None = None
         self._closed = False
 
     def set_frame_handler(self, handler: FrameHandler) -> None:
         self._on_frame = handler
+
+    def set_close_handler(
+        self, handler: Callable[[TransportPeer], Awaitable[None]] | None
+    ) -> None:
+        self._on_close = handler
 
     async def start_reading(self) -> None:
         self._read_task = asyncio.create_task(self._read_loop())
@@ -142,3 +148,5 @@ class Connection:
             await self.writer.wait_closed()
         except Exception:
             pass
+        if self._on_close:
+            await self._on_close(self.peer)

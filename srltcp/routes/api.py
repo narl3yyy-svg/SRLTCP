@@ -72,6 +72,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
 
     async def trusted_remove(request: web.Request) -> web.Response:
         hash_id = request.match_info.get("hash_id", "")
+        await node.backend.disconnect_peer(hash_id)
         ok = node.backend.trusted.remove(hash_id)
         return web.json_response({"removed": ok})
 
@@ -175,6 +176,20 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
 
     async def transfers(_request: web.Request) -> web.Response:
         return web.json_response(node.backend.list_transfers())
+
+    async def transfer_file(request: web.Request) -> web.Response:
+        transfer_id = request.match_info.get("transfer_id", "")
+        transfer = node.backend._transfers.get(transfer_id)
+        if not transfer:
+            return web.json_response({"error": "transfer not found"}, status=404)
+        path = transfer.path
+        if not path.is_file():
+            incoming = node.backend._incoming_paths.get(transfer_id)
+            if incoming and incoming.is_file():
+                path = incoming
+            else:
+                return web.json_response({"error": "file not ready"}, status=404)
+        return web.FileResponse(path, headers={"Cache-Control": "no-store"})
 
     async def create_share(request: web.Request) -> web.Response:
         data = await request.json()
@@ -288,6 +303,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_post("/api/upload", upload_file)
     app.router.add_post("/api/transfer", send_file)
     app.router.add_get("/api/transfers", transfers)
+    app.router.add_get("/api/transfers/{transfer_id}/file", transfer_file)
     app.router.add_post("/api/share/create", create_share)
     app.router.add_get("/api/settings", settings_get)
     app.router.add_post("/api/settings", settings_post)
