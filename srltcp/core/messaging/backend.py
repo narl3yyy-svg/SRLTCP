@@ -554,9 +554,25 @@ class MessagingBackend(
         return peers
 
     def get_trusted_peers(self) -> list[dict[str, Any]]:
+        from srltcp.core.trusted import _GENERIC_NAMES, is_valid_hash_id
+
         result = []
+        seen: set[str] = set()
         for p in self.trusted.list_peers():
+            if not is_valid_hash_id(p.hash_id) or p.hash_id in seen:
+                continue
+            seen.add(p.hash_id)
+            name = p.name
+            if name.strip().lower() in _GENERIC_NAMES:
+                discovered = self.discovery.get(p.hash_id, p.transport) or self.discovery.get(
+                    p.hash_id
+                )
+                if discovered and discovered.name:
+                    name = discovered.name
+                elif p.hash_id in self._links:
+                    name = f"Peer {p.hash_id[:8]}"
             d = p.to_dict()
+            d["name"] = name
             link = self.get_link(p.hash_id)
             if link:
                 if link.rtt_ms is not None:

@@ -6,7 +6,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.16
+**Current version:** 0.1.17
 
 ---
 
@@ -231,21 +231,21 @@ rsync -a --delete srltcp/ android/app/src/main/python/srltcp/
 cd android && ./gradlew assembleDebug
 ```
 
-Sideload `app/build/outputs/apk/debug/SRLTCP-0.1.16.apk` (or latest from [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases)) on arm64 devices.
+Sideload `app/build/outputs/apk/debug/SRLTCP-0.1.17.apk` (or latest from [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases)) on arm64 devices.
 
-**CI builds:** Push tag `v0.1.16` (or run the **Build Android APK** workflow manually) to produce a release APK attached to GitHub Releases.
+**CI builds:** Push tag `v0.1.17` (or run the **Build Android APK** workflow manually) to produce a release APK attached to GitHub Releases.
 
 **Troubleshooting:**
 
 | Symptom | What to do |
 |---------|------------|
-| App closes on launch | `adb logcat -s SRLTCP SRLTCPService` — ensure `srltcp/` was rsync'd before build |
+| App closes on launch | `adb logcat -s SRLTCP SRLTCPService` — check for Python init errors; serial is auto-disabled on Android |
 | `Python runtime not initialized` | Reinstall APK; re-sync Gradle / Chaquopy in Android Studio |
 | White screen / UI never loads | Wait up to 60s; check logcat for `Server ready on port`; app tries ports 9876–9878 |
 | Notification permission denied (Android 13+) | Grant when prompted, or enable in system settings — required for foreground service |
 | No peers / identities after reinstall | Uninstall clears app data; identities are stored in the app files directory |
 | USB serial not detected | USB-OTG adapter + cable; grant USB permission when device attaches |
-| Shared folder / WAN missing | Rebuild APK after `rsync`; ensure backend is **0.1.16+** (check status bar version) |
+| Shared folder / WAN missing | Rebuild APK after `rsync`; ensure backend is **0.1.17+** (check status bar version) |
 | WAN peer won't connect | Confirm TCP 7825 forwarded on owner; use **WAN only** mode off-LAN; verify hash ID |
 
 ```bash
@@ -319,7 +319,7 @@ curl -k https://127.0.0.1:9876/api/transfers
 
 Transfers are **resumable** — if interrupted, the receiver's partial file offset is used on resume via `FILE_RESUME`.
 
-In the web UI, images and videos preview in chat during transfer. Click to enlarge in a lightbox; use **Download** to save the file. The transfer dock (progress bar above the composer) hides automatically when no transfers are active. **Drag files** from your file manager onto a contact in the sidebar to send. Both peers must run **v0.1.16+** for shared-folder and WAN features.
+In the web UI, images and videos preview in chat during transfer. Click to enlarge in a lightbox; use **Download** to save the file. The transfer dock (progress bar above the composer) hides automatically when no transfers are active. **Drag files** from your file manager onto a contact in the sidebar to send. Both peers must run **v0.1.17+** for shared-folder limits, revoke, and WAN features.
 
 ### E2EE shared folder (recommended)
 
@@ -329,8 +329,16 @@ Share a folder with a **trusted, connected** peer over the encrypted link — no
 
 1. Open **Settings → Folders** and set **Default shared folder** (or use the default `~/.srltcp/shared`).
 2. Trust and connect to the peer on the LAN (or WAN — see below).
-3. Open the chat with that peer → click the **folder icon** in the header, or right-click the contact → **Share folder (E2EE)** → **Offer shared folder**.
-4. The peer receives an encrypted grant (2-hour TTL, bound to their hash ID).
+3. Open the chat with that peer → click the **folder icon** in the header → set **time limit** and **download limit** → **Offer shared folder**.
+4. The peer receives an encrypted grant bound to their hash ID (enforced server-side).
+
+**Remove a share:** In the share modal, under **Your active offers**, click **Remove** next to any grant.
+
+**Download limits:** Choose 1, 2, 5, 10, 25, or unlimited downloads per grant. Each file or ZIP counts as one download.
+
+**Time limits:** 1 minute, 5 minutes, 1 hour, 1 day, 1 week, or forever.
+
+**Folder download:** Click **Download as ZIP** next to any folder in the browse view — the sender compresses it before transfer.
 
 **Recipient (machine B):**
 
@@ -407,7 +415,7 @@ SRLTCP listens on **TCP 7825** by default for encrypted P2P messaging (handshake
 | Web UI exposed to internet | **Do not** port-forward 9876; UI is localhost-only by design |
 | Untrusted inbound traffic | Only trusted peers complete handshake; others are ignored after crypto verify |
 
-**Both peers should run v0.1.16+** for WAN endpoint fields and share-folder messages.
+**Both peers should run v0.1.17+** for WAN endpoint fields and share-folder messages.
 
 ---
 
@@ -456,6 +464,11 @@ pytest tests/ -v                # unit tests only
 ## Changelog
 
 See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
+
+### v0.1.17
+
+- Share lifecycle limits, revoke, folder ZIP download; trusted peer list fix
+- Receiver Save file on complete; media pan; Android crash fixes; 512 KiB chunks
 
 ### v0.1.16
 

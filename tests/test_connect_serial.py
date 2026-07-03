@@ -38,7 +38,7 @@ def backend() -> MessagingBackend:
 @pytest.mark.asyncio
 async def test_stale_tcp_link_torn_down_before_serial_connect(backend: MessagingBackend) -> None:
     """Incomplete TCP link with dead peer_id must not block serial connect."""
-    hash_id = "ab" * 16
+    hash_id = "ab" * 32
     backend.trusted.add(
         TrustedPeer(
             hash_id=hash_id,
@@ -70,7 +70,7 @@ async def test_stale_tcp_link_torn_down_before_serial_connect(backend: Messaging
 
 @pytest.mark.asyncio
 async def test_serial_connect_skips_unreachable_incomplete_link(backend: MessagingBackend) -> None:
-    hash_id = "cd" * 16
+    hash_id = "cd" * 32
     backend.trusted.add(
         TrustedPeer(
             hash_id=hash_id,

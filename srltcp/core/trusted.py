@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from srltcp.utils.platform import data_dir
+
+_HASH_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+_GENERIC_NAMES = frozenset({"peer", "trusted", "serial-peer", "tcp-peer", "unknown"})
+
+
+def is_valid_hash_id(hash_id: str) -> bool:
+    return bool(hash_id and _HASH_ID_RE.fullmatch(hash_id.lower()))
 
 
 @dataclass
@@ -40,10 +48,22 @@ class TrustedStore:
         if not self.path.exists():
             return
         raw = json.loads(self.path.read_text(encoding="utf-8"))
+        cleaned: dict[str, TrustedPeer] = {}
         for item in raw.get("peers", []):
             item = {k: v for k, v in item.items() if k in TrustedPeer.__dataclass_fields__}
-            peer = TrustedPeer(**item)
-            self._peers[peer.hash_id] = peer
+            try:
+                peer = TrustedPeer(**item)
+            except TypeError:
+                continue
+            if not is_valid_hash_id(peer.hash_id):
+                continue
+            peer.hash_id = peer.hash_id.lower()
+            existing = cleaned.get(peer.hash_id)
+            if not existing or peer.added_at >= existing.added_at:
+                cleaned[peer.hash_id] = peer
+        self._peers = cleaned
+        if len(cleaned) != len(raw.get("peers", [])):
+            self.save()
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -55,6 +75,11 @@ class TrustedStore:
         return bool(peer and not peer.blocked)
 
     def add(self, peer: TrustedPeer) -> TrustedPeer:
+        if not is_valid_hash_id(peer.hash_id):
+            raise ValueError("invalid peer hash_id")
+        peer.hash_id = peer.hash_id.lower()
+        if peer.name.strip().lower() in _GENERIC_NAMES:
+            peer.name = peer.name.strip() or "Peer"
         self._peers[peer.hash_id] = peer
         self.save()
         return peer
@@ -66,8 +91,12 @@ class TrustedStore:
         self.save()
         return True
 
-    def list_peers(self) -> list[TrustedPeer]:
-        return sorted(self._peers.values(), key=lambda p: p.name.lower())
+    def list_peers(self, *, include_blocked: bool = False) -> list[TrustedPeer]:
+        peers = [
+            p for p in self._peers.values()
+            if is_valid_hash_id(p.hash_id) and (include_blocked or not p.blocked)
+        ]
+        return sorted(peers, key=lambda p: p.name.lower())
 
     def get(self, hash_id: str) -> TrustedPeer | None:
         return self._peers.get(hash_id)

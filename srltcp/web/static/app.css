@@ -1412,9 +1412,64 @@ body {
 }
 
 .share-grant-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
   font-size: 0.82rem;
   padding: 0.35rem 0;
   color: var(--text-muted);
+}
+
+.share-grant-meta {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.share-revoke-btn {
+  margin-left: auto;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--danger, #f07178);
+  cursor: pointer;
+  font-size: 0.72rem;
+}
+
+.share-revoke-btn:hover {
+  background: rgba(240, 113, 120, 0.12);
+}
+
+.share-offer-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.share-entry.dir {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.share-entry-dl {
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.72rem;
+}
+
+.media-lightbox-body {
+  cursor: grab;
+  overflow: hidden;
+  touch-action: none;
 }
 
 .share-size {

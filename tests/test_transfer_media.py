@@ -65,7 +65,7 @@ async def test_connect_skips_force_during_transfer(backend: MessagingBackend) ->
     from srltcp.core.messaging.models import FileTransfer
     from srltcp.core.trusted import TrustedPeer
 
-    hash_id = "deadbeef" * 4
+    hash_id = "deadbeef" * 8
     backend.trusted.add(
         TrustedPeer(hash_id=hash_id, name="peer", transport="tcp", tcp_host="127.0.0.1")
     )

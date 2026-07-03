@@ -22,6 +22,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewClientCompat
 import com.chaquo.python.Python
+import com.chaquo.python.android.AndroidPlatform
 
 class MainActivity : AppCompatActivity() {
     private var webView: WebView? = null
@@ -46,6 +47,11 @@ class MainActivity : AppCompatActivity() {
 
         super.onCreate(savedInstanceState)
         try {
+            SRLTCPApplication.pythonError?.let {
+                showFatal("Python failed to start:\n$it")
+                return
+            }
+            ensurePythonStarted()
             if (!Python.isStarted()) {
                 showFatal("Python runtime not initialized.\nRestart the app.")
                 return
@@ -109,6 +115,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun ensurePythonStarted() {
+        if (Python.isStarted()) return
+        try {
+            Python.start(AndroidPlatform(applicationContext))
+            Log.i(TAG, "Python started from MainActivity fallback")
+        } catch (e: Exception) {
+            Log.e(TAG, "Python fallback start failed", e)
+            throw e
+        }
+    }
+
     private fun ensureServiceThenWaitForServer() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
@@ -131,7 +148,11 @@ class MainActivity : AppCompatActivity() {
         serviceStarted = true
         try {
             val serviceIntent = Intent(this, SRLTCPService::class.java)
-            ContextCompat.startForegroundService(this, serviceIntent)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.startForegroundService(this, serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "startForegroundService failed", e)
             startServerDirectly()
@@ -145,11 +166,14 @@ class MainActivity : AppCompatActivity() {
                 val filesDir = applicationContext.filesDir.absolutePath
                 py.getModule("srltcp.utils.platform")
                     .callAttr("set_android_data_dir", filesDir)
-                py.getModule("srltcp.app").callAttr("start_android_server")
+                if (!py.getModule("srltcp.app").callAttr("is_android_server_ready").toBoolean()) {
+                    py.getModule("srltcp.app").callAttr("start_android_server")
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Direct server start failed", e)
+                handler.post { showFatal("Server start failed:\n${e.message}") }
             }
-        }.start()
+        }.apply { name = "srltcp-direct"; start() }
     }
 
     private fun waitForServerInBackground() {
@@ -179,7 +203,7 @@ class MainActivity : AppCompatActivity() {
                 Log.e(TAG, "Server wait failed", e)
                 handler.post { showFatal("Failed to reach server:\n${e.message}") }
             }
-        }.start()
+        }.apply { name = "srltcp-wait"; start() }
     }
 
     private fun scheduleLoad(delayMs: Long) {
@@ -222,7 +246,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun showFatal(message: String) {
         handler.post {
-            webView?.destroy()
+            webView?.let {
+                try {
+                    (it.parent as? FrameLayout)?.removeView(it)
+                } catch (_: Exception) { /* ignore */ }
+            }
             webView = null
             val tv = TextView(this).apply {
                 text = "SRLTCP\n\n$message"
@@ -251,7 +279,9 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         if (isFinishing) {
-            webView?.destroy()
+            try {
+                webView?.destroy()
+            } catch (_: Exception) { /* ignore */ }
             webView = null
             stopService(Intent(this, SRLTCPService::class.java))
         }

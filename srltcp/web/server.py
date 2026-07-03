@@ -94,7 +94,7 @@ def create_app(node: SRLTCPNode) -> web.Application:
 
     async def on_event(data: dict) -> None:
         kind = data.get("kind", "")
-        if kind in ("share_offer", "share_listing"):
+        if kind in ("share_offer", "share_listing", "share_revoked"):
             await broadcast_event(node, kind, data)
         else:
             await broadcast_event(node, "transport_event", data)

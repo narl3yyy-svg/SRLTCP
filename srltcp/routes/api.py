@@ -12,8 +12,9 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 from srltcp import __version__
+from srltcp.core.messaging.share_peer import SHARE_DOWNLOAD_LIMITS, SHARE_TTL_SECONDS
 from srltcp.core.settings import AppSettings, SettingsStore
-from srltcp.core.trusted import TrustedPeer
+from srltcp.core.trusted import TrustedPeer, is_valid_hash_id
 from srltcp.utils.folders import list_directory
 from srltcp.utils.network import list_interfaces
 from srltcp.utils.platform import data_dir
@@ -60,16 +61,21 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         hash_id = data.get("hash_id", "")
         if not hash_id:
             return web.json_response({"error": "hash_id required"}, status=400)
+        if not is_valid_hash_id(hash_id):
+            return web.json_response({"error": "invalid hash_id"}, status=400)
         transport = data.get("transport")
         peer = node.add_trusted_from_discovered(hash_id, transport)
         if not peer:
-            peer = node.backend.trusted.add(
-                TrustedPeer(
-                    hash_id=hash_id,
-                    name=data.get("name", "peer"),
-                    transport=data.get("transport", "tcp"),
-                )
-            ).to_dict()
+            try:
+                peer = node.backend.trusted.add(
+                    TrustedPeer(
+                        hash_id=hash_id,
+                        name=data.get("name", "peer"),
+                        transport=data.get("transport", "tcp"),
+                    )
+                ).to_dict()
+            except ValueError as exc:
+                return web.json_response({"error": str(exc)}, status=400)
         return web.json_response(peer)
 
     async def trusted_update(request: web.Request) -> web.Response:
@@ -338,15 +344,39 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         )
         if not folder or not folder.is_dir():
             return web.json_response({"error": "shared folder not found"}, status=404)
+        ttl_preset = data.get("ttl_preset", "1h")
+        download_limit_preset = data.get("download_limit_preset", "unlimited")
+        if ttl_preset not in SHARE_TTL_SECONDS:
+            return web.json_response({"error": "invalid ttl_preset"}, status=400)
+        if download_limit_preset not in SHARE_DOWNLOAD_LIMITS:
+            return web.json_response({"error": "invalid download_limit_preset"}, status=400)
         try:
             result = await node.backend.offer_share_folder(
-                recipient, folder=folder, label=data.get("label", folder.name)
+                recipient,
+                folder=folder,
+                label=data.get("label", folder.name),
+                ttl_preset=ttl_preset,
+                download_limit_preset=download_limit_preset,
             )
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
         if not result:
             return web.json_response({"error": "share offer failed — connect first"}, status=500)
         return web.json_response(result)
+
+    async def share_peer_revoke(request: web.Request) -> web.Response:
+        data = await request.json()
+        grant_id = data.get("grant_id", "")
+        if not grant_id:
+            return web.json_response({"error": "grant_id required"}, status=400)
+        grant = node.backend._share_grants.get(grant_id)
+        if not grant:
+            return web.json_response({"error": "grant not found"}, status=404)
+        recipient = grant.recipient_hash
+        ok = await node.backend.notify_share_revoked(grant_id, recipient)
+        if not ok:
+            return web.json_response({"error": "revoke failed"}, status=400)
+        return web.json_response({"revoked": True, "grant_id": grant_id})
 
     async def share_peer_list(request: web.Request) -> web.Response:
         data = await request.json()
@@ -368,7 +398,10 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response(
                 {"error": "owner_hash, grant_id, and path required"}, status=400
             )
-        ok = await node.backend.request_share_file(owner, grant_id, rel_path)
+        as_folder = data.get("as_folder", False) in (True, "true", "1", 1)
+        ok = await node.backend.request_share_file(
+            owner, grant_id, rel_path, as_folder=as_folder
+        )
         if not ok:
             return web.json_response({"error": "fetch request failed"}, status=400)
         return web.json_response({"requested": True})
@@ -620,6 +653,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_post("/api/share/peer/offer", share_peer_offer)
     app.router.add_post("/api/share/peer/list", share_peer_list)
     app.router.add_post("/api/share/peer/fetch", share_peer_fetch)
+    app.router.add_post("/api/share/peer/revoke", share_peer_revoke)
     app.router.add_get("/api/version", version_info)
     app.router.add_post("/api/share/create", create_share)
     app.router.add_get("/api/settings", settings_get)

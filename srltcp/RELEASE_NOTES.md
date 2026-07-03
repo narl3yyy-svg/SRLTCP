@@ -1,5 +1,22 @@
 # SRLTCP Release Notes
 
+## v0.1.17 (2026-07-03)
+
+### Fixes
+- **Trusted peers list** — invalid/duplicate entries filtered; generic placeholder names resolved
+- **Shared folder download** — fixed path field bug; files now arrive via secure transfer
+- **Receiver transfer UI** — progress bar removed on complete; **Save file** link injected dynamically
+- **Android crash** — Python startup fallback, serial disabled on Android, safer WebView lifecycle
+
+### New features
+- **Share lifecycle** — time limits (1m–forever) and download count limits (1–unlimited)
+- **Revoke shares** — sender can remove active share offers
+- **Folder ZIP download** — directories compressed on sender before E2EE transfer
+- **Media lightbox pan** — drag to move around zoomed images
+
+### Performance
+- TCP chunk size increased to 512 KiB (from 256 KiB) for higher throughput (~30–50+ MB/s on fast LAN)
+
 ## v0.1.16 (2026-07-03)
 
 ### New features

@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from srltcp.core.trusted import TrustedPeer, TrustedStore
+import pytest
+
+from srltcp.core.trusted import TrustedPeer, TrustedStore, is_valid_hash_id
+
+
+def _hash(seed: str) -> str:
+    return (seed * 64)[:64]
 
 
 def test_trusted_add_remove(tmp_path: Path) -> None:
     store = TrustedStore(path=tmp_path / "trusted.json")
-    peer = TrustedPeer(hash_id="abc" * 10 + "ab", name="alice", transport="tcp")
+    peer = TrustedPeer(hash_id=_hash("a"), name="alice", transport="tcp")
     store.add(peer)
     assert store.is_trusted(peer.hash_id)
     assert len(store.list_peers()) == 1
@@ -19,7 +25,7 @@ def test_trusted_add_remove(tmp_path: Path) -> None:
 
 def test_trusted_blocked_not_trusted(tmp_path: Path) -> None:
     store = TrustedStore(path=tmp_path / "trusted.json")
-    peer = TrustedPeer(hash_id="def" * 10 + "de", name="bob", transport="tcp", blocked=True)
+    peer = TrustedPeer(hash_id=_hash("b"), name="bob", transport="tcp", blocked=True)
     store.add(peer)
     assert peer.hash_id in store._peers
     assert not store.is_trusted(peer.hash_id)
@@ -27,7 +33,7 @@ def test_trusted_blocked_not_trusted(tmp_path: Path) -> None:
 
 def test_trusted_update_rename_and_block(tmp_path: Path) -> None:
     store = TrustedStore(path=tmp_path / "trusted.json")
-    peer = TrustedPeer(hash_id="ghi" * 10 + "gh", name="carol", transport="serial")
+    peer = TrustedPeer(hash_id=_hash("c"), name="carol", transport="serial")
     store.add(peer)
     updated = store.update(peer.hash_id, name="Carol S", blocked=True)
     assert updated is not None
@@ -40,7 +46,7 @@ def test_trusted_update_rename_and_block(tmp_path: Path) -> None:
 
 def test_trusted_update_wan_fields(tmp_path: Path) -> None:
     store = TrustedStore(path=tmp_path / "trusted.json")
-    peer = TrustedPeer(hash_id="jkl" * 10 + "jk", name="dave", transport="tcp")
+    peer = TrustedPeer(hash_id=_hash("d"), name="dave", transport="tcp")
     store.add(peer)
     updated = store.update(
         peer.hash_id,
@@ -54,3 +60,29 @@ def test_trusted_update_wan_fields(tmp_path: Path) -> None:
     assert updated.wan_port == 9000
     assert updated.wan_enabled is True
     assert updated.connection_mode == "wan"
+
+
+def test_trusted_rejects_invalid_hash(tmp_path: Path) -> None:
+    store = TrustedStore(path=tmp_path / "trusted.json")
+    with pytest.raises(ValueError):
+        store.add(TrustedPeer(hash_id="not-a-valid-hash", name="bad"))
+
+
+def test_trusted_load_skips_invalid_entries(tmp_path: Path) -> None:
+    path = tmp_path / "trusted.json"
+    path.write_text(
+        '{"peers": ['
+        '{"hash_id": "deadbeef", "name": "bad"},'
+        f'{{"hash_id": "{_hash("e")}", "name": "good"}}'
+        "]}",
+        encoding="utf-8",
+    )
+    store = TrustedStore(path=path)
+    assert len(store.list_peers()) == 1
+    assert store.list_peers()[0].name == "good"
+
+
+def test_is_valid_hash_id() -> None:
+    assert is_valid_hash_id("a" * 64)
+    assert not is_valid_hash_id("short")
+    assert not is_valid_hash_id("g" * 64)

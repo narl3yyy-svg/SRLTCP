@@ -24,7 +24,7 @@ def backend() -> MessagingBackend:
 
 @pytest.mark.asyncio
 async def test_file_chunk_dispatched_as_background_task(backend: MessagingBackend) -> None:
-    hash_id = "a" * 32
+    hash_id = "a" * 64
     peer_id = "peer-1"
     link = PeerLink(
         hash_id=hash_id,
@@ -52,7 +52,7 @@ async def test_file_chunk_dispatched_as_background_task(backend: MessagingBacken
 async def test_complete_handshake_skips_ping_during_transfer(
     backend: MessagingBackend,
 ) -> None:
-    hash_id = "b" * 32
+    hash_id = "b" * 64
     link = PeerLink(
         hash_id=hash_id,
         transport_peer_id="peer-2",
@@ -90,7 +90,7 @@ def test_connection_send_lock_exists() -> None:
 
 
 def test_transfer_cooldown(backend: MessagingBackend) -> None:
-    hash_id = "c" * 32
+    hash_id = "c" * 64
     assert backend.in_transfer_cooldown(hash_id) is False
     backend._mark_transfer_cooldown(hash_id)
     assert backend.in_transfer_cooldown(hash_id) is True

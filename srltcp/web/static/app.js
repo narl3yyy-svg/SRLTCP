@@ -28,6 +28,9 @@
     unread: {},
     transferCooldownUntil: {},
     mediaZoom: 1,
+    mediaPan: { x: 0, y: 0 },
+    mediaDragging: false,
+    mediaDragStart: null,
     transferPatchTimer: null,
     pendingTransferPatches: new Map(),
     dropTargetHash: null,
@@ -348,6 +351,12 @@
             };
             renderShareEntries();
           }
+          break;
+        case "share_revoked":
+          loadShareGrants().then(() => {
+            renderShareGrants();
+            toast("Shared folder access revoked");
+          });
           break;
         case "transport_event":
           logActivity(`Transport: ${data.kind}${data.hash_id ? ` (${data.hash_id.slice(0, 8)})` : ""}`);
@@ -803,11 +812,14 @@
     let html = "";
     if (state.shareMode === "offer" && peer && isPeerLinked(peer)) {
       const folder = state.settings.shared_folder || "";
+      $("#share-offer-options")?.classList.remove("hidden");
       html += `<div class="share-section">
         <p class="share-section-title">Offer to ${escapeHtml(state.selectedName || "peer")}</p>
         <p class="share-hint">Folder: ${escapeHtml(folder || "(default shared folder)")}</p>
         <button type="button" class="action-btn" id="share-offer-btn">Offer shared folder (E2EE)</button>
       </div>`;
+    } else {
+      $("#share-offer-options")?.classList.add("hidden");
     }
     if (remote.length) {
       html += `<div class="share-section"><p class="share-section-title">Available from peers</p>`;
@@ -823,7 +835,14 @@
       html += `<div class="share-section"><p class="share-section-title">Your active offers</p>`;
       html += local.map((g) => {
         const recip = peerByHash(g.recipient_hash);
-        return `<div class="share-grant-item">${escapeHtml(g.label)} → ${escapeHtml(recip?.name || g.recipient_hash.slice(0, 8))}</div>`;
+        const limit = g.max_downloads
+          ? `${g.download_count || 0}/${g.max_downloads} downloads`
+          : "unlimited downloads";
+        return `<div class="share-grant-item">
+          <span>${escapeHtml(g.label)} → ${escapeHtml(recip?.name || g.recipient_hash.slice(0, 8))}</span>
+          <span class="share-grant-meta">${escapeHtml(limit)}</span>
+          <button type="button" class="share-revoke-btn" data-grant="${escapeHtml(g.grant_id)}">Remove</button>
+        </div>`;
       }).join("");
       html += "</div>";
     }
@@ -837,6 +856,9 @@
         requestShareListing(btn.dataset.owner, btn.dataset.grant);
       });
     });
+    el.querySelectorAll(".share-revoke-btn").forEach((btn) => {
+      btn.addEventListener("click", () => revokeShareGrant(btn.dataset.grant));
+    });
   }
 
   function renderShareEntries() {
@@ -848,16 +870,24 @@
       return;
     }
     el.innerHTML = entries.map((e) => {
+      const relPath = e.path || e.name || "";
       if (e.type === "dir") {
-        return `<div class="share-entry dir">📁 ${escapeHtml(e.name)}</div>`;
+        return `<div class="share-entry dir">
+          <span>📁 ${escapeHtml(e.name)}</span>
+          <button type="button" class="share-entry-dl" data-path="${escapeHtml(relPath)}" data-folder="1">Download as ZIP</button>
+        </div>`;
       }
-      return `<button type="button" class="share-entry file" data-path="${escapeHtml(e.path)}">
+      return `<button type="button" class="share-entry file" data-path="${escapeHtml(relPath)}">
         📄 ${escapeHtml(e.name)} <span class="share-size">${formatBytes(e.size || 0)}</span>
       </button>`;
     }).join("");
     el.querySelectorAll(".share-entry.file").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        fetchShareFile(btn.dataset.path);
+      btn.addEventListener("click", () => fetchShareFile(btn.dataset.path, false));
+    });
+    el.querySelectorAll(".share-entry-dl").forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        fetchShareFile(btn.dataset.path, true);
       });
     });
   }
@@ -891,6 +921,8 @@
       body: JSON.stringify({
         recipient_hash: state.selectedPeer,
         label: state.settings.shared_folder?.split("/").pop() || "shared",
+        ttl_preset: $("#share-ttl")?.value || "1h",
+        download_limit_preset: $("#share-download-limit")?.value || "unlimited",
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -919,20 +951,45 @@
     toast("Loading folder listing…");
   }
 
-  async function fetchShareFile(relPath) {
+  async function fetchShareFile(relPath, asFolder = false) {
     const { ownerHash, grantId } = state.shareListing;
-    if (!ownerHash || !grantId || !relPath) return;
+    if (!ownerHash || !grantId || relPath == null) return;
     const res = await fetch("/api/share/peer/fetch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ owner_hash: ownerHash, grant_id: grantId, path: relPath }),
+      body: JSON.stringify({
+        owner_hash: ownerHash,
+        grant_id: grantId,
+        path: relPath,
+        as_folder: asFolder,
+      }),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       toast(data.error || "Download request failed");
       return;
     }
-    toast("Secure file transfer started");
+    toast(asFolder ? "Folder ZIP transfer started — check chat" : "File transfer started — check chat");
+    if (state.selectedPeer === ownerHash) {
+      setTimeout(loadMessages, 800);
+    }
+  }
+
+  async function revokeShareGrant(grantId) {
+    if (!grantId || !confirm("Remove this shared folder offer? The peer will lose access.")) return;
+    const res = await fetch("/api/share/peer/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grant_id: grantId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast(data.error || "Could not revoke share");
+      return;
+    }
+    toast("Share removed");
+    await loadShareGrants();
+    renderShareGrants();
   }
 
   function openWanModal(hashId) {
@@ -1331,12 +1388,23 @@
     renderTransfers();
   }
 
+  function dedupePeers(peers) {
+    const seen = new Set();
+    return peers.filter((p) => {
+      const id = (p.hash_id || "").toLowerCase();
+      if (!id || id.length !== 64 || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
+
   function renderContacts() {
     const q = state.search.toLowerCase();
-    const trustedIds = new Set(state.trusted.map((p) => p.hash_id));
+    state.trusted = dedupePeers(state.trusted);
+    const trustedIds = new Set(state.trusted.map((p) => p.hash_id.toLowerCase()));
     const list = state.peerTab === "trusted"
       ? state.trusted
-      : state.peers.filter((p) => !trustedIds.has(p.hash_id));
+      : dedupePeers(state.peers).filter((p) => !trustedIds.has(p.hash_id.toLowerCase()));
     const filtered = list.filter(
       (p) =>
         !q ||
@@ -1456,8 +1524,9 @@
     const progressBar = stateLabel !== "complete" && !cancelled && !failed
       ? `<div class="progress-track chat-progress"><div class="progress-fill" style="width:${pct}%"></div></div>`
       : "";
-    const downloadLink = downloadUrl
-      ? `<a class="file-download" href="${downloadUrl}" download="${escapeHtml(filename)}" target="_blank" rel="noopener">Download</a>`
+    const showDownload = stateLabel === "complete" && downloadUrl;
+    const downloadLink = showDownload
+      ? `<a class="file-download" href="${downloadUrl}" download="${escapeHtml(filename)}" target="_blank" rel="noopener">Save file</a>`
       : "";
 
     if (canPreview && m.msg_type === "image") {
@@ -1498,9 +1567,28 @@
                 : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr}`
         }</div>
         ${progressBar}
-        ${stateLabel === "complete" ? downloadLink : ""}
+        ${downloadLink}
       </div>
     </div>`;
+  }
+
+  function ensureTransferDownloadLink(bubble, transferId, filename) {
+    if (!transferId || bubble.querySelector(".file-download")) return;
+    const url = `/api/transfers/${encodeURIComponent(transferId)}/file?download=1`;
+    const link = document.createElement("a");
+    link.className = "file-download";
+    link.href = url;
+    link.setAttribute("download", filename || "file");
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "Save file";
+    const info = bubble.querySelector(".file-info");
+    const imageBubble = bubble.classList.contains("image-bubble") || bubble.classList.contains("video-bubble");
+    if (info) {
+      info.appendChild(link);
+    } else if (imageBubble) {
+      bubble.appendChild(link);
+    }
   }
 
   async function copyMessageText(text) {
@@ -1552,6 +1640,10 @@
       bubble.classList.remove("cancelled", "failed");
       if (cancelled) bubble.classList.add("cancelled");
       if (failed) bubble.classList.add("failed");
+      if (stateLabel === "complete") {
+        const filename = bubble.querySelector(".file-name")?.textContent || data.filename || "file";
+        ensureTransferDownloadLink(bubble, transferId, filename);
+      }
     } else {
       bubble.querySelectorAll(".progress-fill").forEach((fill) => {
         fill.style.width = `${pct}%`;
@@ -1641,7 +1733,8 @@
     const media = body?.querySelector(".lightbox-media");
     if (!media) return;
     const z = state.mediaZoom;
-    media.style.transform = `scale(${z})`;
+    const { x, y } = state.mediaPan;
+    media.style.transform = `translate(${x}px, ${y}px) scale(${z})`;
     if (level) level.textContent = `${Math.round(z * 100)}%`;
   }
 
@@ -1652,7 +1745,33 @@
 
   function resetMediaZoom() {
     state.mediaZoom = 1;
+    state.mediaPan = { x: 0, y: 0 };
     applyMediaZoom();
+  }
+
+  function setupMediaPan() {
+    const body = $("#media-lightbox-body");
+    if (!body) return;
+    body.addEventListener("mousedown", (e) => {
+      if (!$("#media-lightbox")?.classList.contains("open")) return;
+      if (e.button !== 0) return;
+      state.mediaDragging = true;
+      state.mediaDragStart = { x: e.clientX - state.mediaPan.x, y: e.clientY - state.mediaPan.y };
+      body.style.cursor = "grabbing";
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!state.mediaDragging || !state.mediaDragStart) return;
+      state.mediaPan = {
+        x: e.clientX - state.mediaDragStart.x,
+        y: e.clientY - state.mediaDragStart.y,
+      };
+      applyMediaZoom();
+    });
+    window.addEventListener("mouseup", () => {
+      state.mediaDragging = false;
+      state.mediaDragStart = null;
+      if (body) body.style.cursor = "grab";
+    });
   }
 
   function openMediaLightbox(url, kind, filename) {
@@ -1665,6 +1784,7 @@
     }
     const downloadUrl = `${url}${url.includes("?") ? "&" : "?"}download=1`;
     state.mediaZoom = 1;
+    state.mediaPan = { x: 0, y: 0 };
     if (kind === "video") {
       body.innerHTML = `<video src="${url}" controls autoplay class="lightbox-video lightbox-media"></video>`;
     } else {
@@ -2141,6 +2261,7 @@
 
   /* ── Init ── */
   setupDragDrop();
+  setupMediaPan();
   connectWs();
   pollSystemStats();
   setInterval(pollSystemStats, 10000);
