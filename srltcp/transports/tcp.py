@@ -73,16 +73,19 @@ class TCPTransport(Transport):
 
     async def stop(self) -> None:
         self._running = False
+        for conn in list(self._connections.values()):
+            await conn.close()
+        self._connections.clear()
         if self._discovery_transport:
             self._discovery_transport.close()
             self._discovery_transport = None
         if self._server:
             self._server.close()
-            await self._server.wait_closed()
+            try:
+                await asyncio.wait_for(self._server.wait_closed(), timeout=3.0)
+            except TimeoutError:
+                log.warning("TCP server close timed out")
             self._server = None
-        for conn in list(self._connections.values()):
-            await conn.close()
-        self._connections.clear()
 
     async def _handle_frame(self, peer: TransportPeer, payload: bytes) -> None:
         await self._emit_frame(peer, payload)

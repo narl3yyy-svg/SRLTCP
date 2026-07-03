@@ -14,7 +14,7 @@ from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.utils.logging import get_logger, setup_logging
 from srltcp.utils.platform import default_serial_port
 from srltcp.utils.shutdown import GracefulShutdown
-from srltcp.web.server import run_web_server
+from srltcp.web.server import run_web_server, shutdown_web_server
 
 log = get_logger(__name__)
 
@@ -92,19 +92,21 @@ async def run_web(args: argparse.Namespace) -> None:
     node = SRLTCPNode(config, settings)
 
     shutdown = GracefulShutdown()
-    runner_holder: list = []
+    web_holder: dict = {}
 
     async def cleanup() -> None:
-        log.info("Cleaning up transports and web server…")
+        if web_holder:
+            await shutdown_web_server(
+                node, web_holder["runner"], web_holder["site"]
+            )
         await node.stop()
-        if runner_holder:
-            await runner_holder[0].cleanup()
 
     shutdown.add_hook(cleanup)
 
     await node.start()
-    runner, bound_port = await run_web_server(node, host="127.0.0.1", port=web_port)
-    runner_holder.append(runner)
+    runner, site, bound_port = await run_web_server(node, host="127.0.0.1", port=web_port)
+    web_holder["runner"] = runner
+    web_holder["site"] = site
     settings.web_port = bound_port
     store.save(settings)
 

@@ -56,6 +56,17 @@ class SRLTCPNode:
             self.backend.clear_messages()
         await self.backend.start()
 
+    async def close_websockets(self) -> None:
+        """Close browser WebSocket connections so the web server can exit."""
+        dead: list[Any] = []
+        for ws in list(self._ws_clients):
+            try:
+                await ws.close()
+            except Exception:
+                dead.append(ws)
+        self._ws_clients -= set(dead)
+        self._ws_clients.clear()
+
     async def stop(self) -> None:
         if self.settings.message_retention_hours == 0:
             self.backend.clear_messages()

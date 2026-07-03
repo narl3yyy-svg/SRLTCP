@@ -81,8 +81,11 @@ class AnnounceMixin:
         self._announce_tasks.append(asyncio.create_task(_loop()))
 
     async def stop_announce_loop(self: MessagingBackend) -> None:
-        for task in self._announce_tasks:
+        tasks = list(self._announce_tasks)
+        for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._announce_tasks.clear()
 
     async def set_auto_announce(self: MessagingBackend, enabled: bool) -> None:

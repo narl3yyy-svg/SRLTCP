@@ -90,7 +90,7 @@ async def run_web_server(
     node: SRLTCPNode,
     host: str = "127.0.0.1",
     port: int = WEB_PORT,
-) -> tuple[web.AppRunner, int]:
+) -> tuple[web.AppRunner, web.TCPSite, int]:
     if host not in ("127.0.0.1", "localhost", "::1"):
         raise ValueError("SRLTCP web UI must bind to localhost only for security")
 
@@ -98,8 +98,20 @@ async def run_web_server(
     app = create_app(node)
     runner = web.AppRunner(app, access_log_format='%a %t "%r" %s %b')
     await runner.setup()
-    _site, bound_port = await start_web_site(
+    site, bound_port = await start_web_site(
         runner, host if host != "localhost" else "127.0.0.1", port, ssl_context=ssl_ctx
     )
     log.info("Web UI (HTTPS only): https://127.0.0.1:%d", bound_port)
-    return runner, bound_port
+    return runner, site, bound_port
+
+
+async def shutdown_web_server(
+    node: SRLTCPNode,
+    runner: web.AppRunner,
+    site: web.TCPSite,
+) -> None:
+    """Stop the HTTPS site, close clients, and tear down aiohttp."""
+    await node.close_websockets()
+    await site.stop()
+    await runner.shutdown()
+    await runner.cleanup()

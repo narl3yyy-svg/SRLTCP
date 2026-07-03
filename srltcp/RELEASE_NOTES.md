@@ -1,5 +1,12 @@
 # SRLTCP Release Notes
 
+## v0.1.4 (2026-07-03)
+
+### Fixes
+- **Ctrl+C shutdown** — process now exits promptly; WebSockets closed before aiohttp teardown; background loops awaited
+- **APK build** — Chaquopy 15 `chaquopy` DSL (replaces deprecated `python` block); plugin versions in `settings.gradle.kts`
+- **TCP transport stop** — close peer connections before server shutdown to avoid hang
+
 ## v0.1.3 (2026-07-03)
 
 ### Fixes

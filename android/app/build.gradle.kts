@@ -11,20 +11,11 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.1.3"
+        versionCode = 4
+        versionName = "0.1.4"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
-        }
-
-        python {
-            version = "3.12"
-            buildPython("/usr/bin/python3")
-            pip {
-                install("aiohttp", "aiofiles", "cryptography", "pyserial", "zstandard")
-            }
-            srcDir("../../")
         }
     }
 
@@ -44,6 +35,21 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.12"
+        buildPython("python3")
+        pip {
+            install("aiohttp", "aiofiles", "cryptography", "pyserial", "zstandard")
+        }
+    }
+    sourceSets {
+        getByName("main") {
+            srcDir("../../")
+        }
     }
 }
 

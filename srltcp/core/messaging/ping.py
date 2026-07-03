@@ -40,8 +40,11 @@ class PingMixin:
         self._ping_tasks.append(asyncio.create_task(_loop()))
 
     async def stop_ping_loop(self: MessagingBackend) -> None:
-        for task in self._ping_tasks:
+        tasks = list(self._ping_tasks)
+        for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._ping_tasks.clear()
 
     async def ping_peer(self: MessagingBackend, hash_id: str) -> float | None:
