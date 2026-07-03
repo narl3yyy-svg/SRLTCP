@@ -16,12 +16,14 @@ from srltcp.core.messaging.share_peer import SHARE_DOWNLOAD_LIMITS, SHARE_TTL_SE
 from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.core.trusted import TrustedPeer, is_valid_hash_id
 from srltcp.utils.folders import list_directory
+from srltcp.utils.logging import get_logger
 from srltcp.utils.network import list_interfaces
 from srltcp.utils.platform import data_dir
 from srltcp.utils.serial_ports import baud_rates, list_serial_ports
 from srltcp.utils.system_stats import list_timezones, system_stats
 
 RELEASE_NOTES_PATH = Path(__file__).resolve().parents[1] / "RELEASE_NOTES.md"
+log = get_logger(__name__)
 
 if TYPE_CHECKING:
     from srltcp.core.node import SRLTCPNode
@@ -293,10 +295,21 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         path = _validate_path(path_str, must_exist=True)
         if not path or not path.is_dir():
             return web.json_response({"error": "folder not found"}, status=404)
-        result = await node.backend.send_folder(recipient, path, transport=transport)
+        try:
+            result = await node.backend.send_folder(recipient, path, transport=transport)
+        except Exception as exc:
+            from srltcp.utils.files import FolderZipError
+
+            if isinstance(exc, FolderZipError):
+                return web.json_response({"error": str(exc)}, status=507)
+            log.exception("Folder transfer failed for %s", path)
+            return web.json_response({"error": "folder transfer failed"}, status=500)
         if result:
             return web.json_response(result)
-        return web.json_response({"error": "folder transfer failed"}, status=500)
+        return web.json_response(
+            {"error": "folder transfer failed — peer not connected"},
+            status=503,
+        )
 
     def _mime_for_filename(name: str) -> str:
         ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
@@ -505,7 +518,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
 
     async def browse_folders(request: web.Request) -> web.Response:
         path = request.rel_url.query.get("path")
-        return web.json_response(list_directory(path))
+        dirs_only = request.rel_url.query.get("dirs_only") in ("1", "true", "yes")
+        return web.json_response(list_directory(path, dirs_only=dirs_only))
 
     async def identity_regenerate(request: web.Request) -> web.Response:
         transport = request.match_info.get("transport", "tcp")

@@ -46,7 +46,7 @@ jobs:
 
       - name: Build debug APK with python-for-android
         working-directory: android
-        run: buildozer -v android debug
+        run: yes | buildozer -v android debug
 
       - name: Rename APK
         run: |

@@ -676,13 +676,14 @@ class MessagingBackend(
     async def send_folder(
         self, recipient_hash: str, folder: Path, *, transport: str = "tcp"
     ) -> dict[str, Any] | None:
-        from srltcp.utils.files import zip_path_to_temp
+        from srltcp.utils.files import FolderZipError, zip_path_to_temp_async
 
         root = folder.resolve()
         if not root.is_dir():
             return None
-        zip_path = zip_path_to_temp(root)
+        zip_path: Path | None = None
         try:
+            zip_path = await zip_path_to_temp_async(root)
             result = await self.send_file(recipient_hash, zip_path, transport=transport)
             if result:
                 transfer = self._transfers.get(result.get("id", ""))
@@ -690,9 +691,19 @@ class MessagingBackend(
                     transfer.filename = f"{root.name}.zip"
                     transfer.metadata["folder_name"] = root.name
                     transfer.metadata["is_folder_zip"] = True
+                    transfer.metadata["temp_zip_path"] = str(zip_path)
                     result = transfer.to_dict()
                     await self._update_file_message(result)
-            return result
-        except OSError as exc:
-            log.warning("Folder zip failed for %s: %s", root, exc)
+                return result
+            if zip_path:
+                zip_path.unlink(missing_ok=True)
             return None
+        except FolderZipError:
+            if zip_path:
+                zip_path.unlink(missing_ok=True)
+            raise
+        except OSError as exc:
+            if zip_path:
+                zip_path.unlink(missing_ok=True)
+            log.warning("Folder zip failed for %s: %s", root, exc)
+            raise FolderZipError(f"Could not zip folder: {exc}") from exc

@@ -28,7 +28,13 @@ from srltcp.core.protocol.messages import (
     pack_file_chunk,
     unpack_file_chunk,
 )
-from srltcp.utils.files import ensure_dir, fsync_file, safe_filename, sha256_file, write_file_chunk
+from srltcp.utils.files import (
+    ensure_dir,
+    fsync_file,
+    sha256_file,
+    unique_dest_path,
+    write_file_chunk,
+)
 from srltcp.utils.logging import get_logger
 from srltcp.utils.platform import data_dir
 
@@ -133,7 +139,7 @@ class TransferMixin:
     async def _handle_file_offer(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
         transfer_id = data["transfer_id"]
-        dest = self._transfer_dir / f"{transfer_id}_{safe_filename(data['filename'])}"
+        dest = unique_dest_path(self._transfer_dir, data["filename"])
         identity_hash = ""
         link = self.get_link(hash_id)
         if link:
@@ -281,6 +287,10 @@ class TransferMixin:
             await self._update_file_message(transfer.to_dict())
         finally:
             self._transfer_tasks.pop(transfer.id, None)
+            temp_zip = transfer.metadata.get("temp_zip_path")
+            if temp_zip:
+                with contextlib.suppress(OSError):
+                    Path(temp_zip).unlink(missing_ok=True)
 
     async def _handle_file_chunk(
         self: MessagingBackend, hash_id: str, body: bytes, *, compressed: bool = False

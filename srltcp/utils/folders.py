@@ -10,7 +10,7 @@ def _safe_root() -> Path:
     return Path.home()
 
 
-def list_directory(path: str | None = None) -> dict[str, Any]:
+def list_directory(path: str | None = None, *, dirs_only: bool = False) -> dict[str, Any]:
     """List a directory for the folder picker UI."""
     root = _safe_root()
     target = Path(path).expanduser() if path else root
@@ -31,11 +31,14 @@ def list_directory(path: str | None = None) -> dict[str, Any]:
             if child.name.startswith("."):
                 continue
             try:
+                is_dir = child.is_dir()
+                if dirs_only and not is_dir:
+                    continue
                 entries.append(
                     {
                         "name": child.name,
                         "path": str(child),
-                        "type": "dir" if child.is_dir() else "file",
+                        "type": "dir" if is_dir else "file",
                     }
                 )
             except OSError:

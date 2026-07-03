@@ -1,5 +1,16 @@
 # SRLTCP Release Notes
 
+## v0.1.22 (2026-07-03)
+
+### Fixes
+- **Send folder** — zipping runs off the event loop (chat stays responsive); temp zips use `~/.srltcp` instead of `/tmp`; clear errors for disk quota / oversized folders
+- **Incoming files** — saved under the original filename; duplicates become `name (1).ext`, `name (2).ext`, …
+- **Folder picker** — directories-only listing when sending a folder (faster browse)
+- **Android CI** — auto-accept SDK licenses (`yes | buildozer`); pin build-tools 34
+
+### UI
+- **Send folder** button in chat header (next to attach file)
+
 ## v0.1.21 (2026-07-03)
 
 ### CI

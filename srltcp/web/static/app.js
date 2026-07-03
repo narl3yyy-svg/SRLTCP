@@ -2263,6 +2263,14 @@
 
   $("#msg-input").addEventListener("input", (e) => autoResize(e.target));
 
+  $("#btn-send-folder-peer")?.addEventListener("click", () => {
+    if (!state.selectedPeer) {
+      toast("Select a peer first");
+      return;
+    }
+    openFolderSendPicker(state.selectedPeer, state.selectedName);
+  });
+
   $("#btn-file").addEventListener("click", () => $("#file-input").click());
 
   $("#file-input").addEventListener("change", (e) => {
@@ -2296,7 +2304,11 @@
   }
 
   async function browseFolder(path) {
-    const url = path ? `/api/browse?path=${encodeURIComponent(path)}` : "/api/browse";
+    const params = new URLSearchParams();
+    if (path) params.set("path", path);
+    if (state.folderTarget === "folder-send") params.set("dirs_only", "1");
+    const qs = params.toString();
+    const url = qs ? `/api/browse?${qs}` : "/api/browse";
     const res = await fetch(url);
     const data = await res.json();
     $("#folder-crumb").textContent = data.path;

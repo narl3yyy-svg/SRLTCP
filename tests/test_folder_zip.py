@@ -8,7 +8,7 @@ import pytest
 
 from srltcp.core.messaging.backend import MessagingBackend, NodeConfig
 from srltcp.core.messaging.models import FileTransfer, TransferState
-from srltcp.utils.files import zip_path_to_temp
+from srltcp.utils.files import FolderZipError, zip_path_to_temp
 
 
 @pytest.fixture
@@ -31,6 +31,15 @@ def test_zip_path_to_temp_directory(tmp_path: Path) -> None:
         assert zip_path.stat().st_size > 0
     finally:
         zip_path.unlink(missing_ok=True)
+
+
+def test_zip_path_to_temp_rejects_huge_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    folder = tmp_path / "big"
+    folder.mkdir()
+    (folder / "a.txt").write_text("x")
+    monkeypatch.setattr("srltcp.utils.files.MAX_FOLDER_ZIP_BYTES", 0)
+    with pytest.raises(FolderZipError, match="too large"):
+        zip_path_to_temp(folder)
 
 
 def test_list_transfers_active_only(backend: MessagingBackend) -> None:
