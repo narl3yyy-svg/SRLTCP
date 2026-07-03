@@ -23,6 +23,9 @@ class PeerLink:
     connected: bool = False
     handshake_complete: bool = False
     last_ping: float = 0.0
+    rtt_ms: float | None = None
+    link_quality_pct: float | None = None
+    peer_name: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -33,6 +36,9 @@ class PeerLink:
             "address": self.address,
             "connected": self.connected,
             "handshake_complete": self.handshake_complete,
+            "rtt_ms": self.rtt_ms,
+            "link_quality_pct": self.link_quality_pct,
+            "peer_name": self.peer_name,
             "metadata": self.metadata,
         }
 

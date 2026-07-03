@@ -42,7 +42,7 @@ class AppSettings:
     serial_baud: int = 115200
     lan_ip: str = ""
     bind_interface: str = ""
-    version: str = "0.1.2"
+    version: str = "0.1.3"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

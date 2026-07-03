@@ -12,6 +12,7 @@
     trusted: [],
     peerTab: "discovered",
     links: {},
+    linkMetrics: {},
     folderTarget: null,
     ws: null,
     search: "",
@@ -121,9 +122,17 @@
         case "link_up":
           state.links[data.hash_id] = true;
           loadPeers();
-          if (state.selectedPeer === data.hash_id) updatePeerStatus("Encrypted · Online");
+          if (state.selectedPeer === data.hash_id) refreshPeerStatus(data.hash_id);
           toast(`Connected to ${data.name}`);
           logActivity(`Link up: ${data.name}`);
+          break;
+        case "peer_metrics":
+          state.linkMetrics[data.hash_id] = {
+            rtt_ms: data.rtt_ms,
+            link_quality_pct: data.link_quality_pct,
+          };
+          loadPeers();
+          if (state.selectedPeer === data.hash_id) refreshPeerStatus(data.hash_id);
           break;
         case "transfer_progress":
         case "transfer_complete":
@@ -132,6 +141,15 @@
           break;
         case "transport_event":
           logActivity(`Transport: ${data.kind}`);
+          if (data.kind === "disconnected") {
+            Object.keys(state.links).forEach((id) => {
+              if (!state._lastLinks?.find((l) => l.hash_id === id && l.handshake_complete)) {
+                delete state.links[id];
+              }
+            });
+            if (state.selectedPeer) refreshPeerStatus(state.selectedPeer);
+            loadPeers();
+          }
           break;
       }
     };
@@ -189,14 +207,62 @@
     setTimeout(loadPeers, 800);
   }
 
-  async function connectPeer(hashId) {
-    await fetch("/api/connect", {
+  function formatLatency(hashId) {
+    const m = state.linkMetrics[hashId] || {};
+    const link = (state._lastLinks || []).find((l) => l.hash_id === hashId);
+    const rtt = m.rtt_ms ?? link?.rtt_ms;
+    if (rtt != null) return `${Math.round(rtt)} ms`;
+    return null;
+  }
+
+  function refreshPeerStatus(hashId) {
+    const linked = state.links[hashId];
+    const latency = formatLatency(hashId);
+    if (linked && latency) {
+      updatePeerStatus(`Encrypted · Online · ${latency}`);
+      $(".status-dot").className = "status-dot online";
+    } else if (linked) {
+      updatePeerStatus("Encrypted · Online");
+      $(".status-dot").className = "status-dot online";
+    } else {
+      updatePeerStatus("Handshaking…");
+      $(".status-dot").className = "status-dot pending";
+    }
+  }
+
+  async function connectPeer(hashId, force = true) {
+    updatePeerStatus("Handshaking…");
+    $(".status-dot").className = "status-dot pending";
+    logActivity(`Connecting to ${hashId.slice(0, 12)}…`);
+    const res = await fetch("/api/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hash_id: hashId, transport: "tcp" }),
+      body: JSON.stringify({ hash_id: hashId, transport: "tcp", force }),
     });
-    updatePeerStatus("Handshaking…");
-    logActivity(`Connecting to ${hashId.slice(0, 12)}…`);
+    const data = await res.json().catch(() => ({}));
+    if (data.handshake_complete) {
+      state.links[hashId] = true;
+      if (data.rtt_ms != null) {
+        state.linkMetrics[hashId] = { rtt_ms: data.rtt_ms };
+      }
+      refreshPeerStatus(hashId);
+    } else if (!data.connected) {
+      updatePeerStatus("Connection failed");
+      toast("Could not connect to peer");
+    }
+  }
+
+  async function disconnectPeer(hashId) {
+    await fetch("/api/disconnect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hash_id: hashId }),
+    });
+    delete state.links[hashId];
+    delete state.linkMetrics[hashId];
+    updatePeerStatus("Disconnected");
+    toast("Disconnected");
+    loadPeers();
   }
 
   async function sendMessage() {
@@ -245,6 +311,35 @@
   }
 
   /* ── Render ── */
+  async function loadSerialSettings(selectedPort, selectedBaud) {
+    const portEl = $("#set-serial-port");
+    const baudEl = $("#set-serial-baud");
+    if (!portEl || !baudEl) return;
+    try {
+      const [portsRes, baudRes] = await Promise.all([
+        fetch("/api/serial/ports"),
+        fetch("/api/serial/baud-rates"),
+      ]);
+      const portsData = await portsRes.json();
+      const baudData = await baudRes.json();
+      const ports = portsData.ports || [];
+      portEl.innerHTML = ports.length
+        ? ports.map((p) =>
+            `<option value="${escapeHtml(p.device)}" ${p.device === selectedPort ? "selected" : ""}>${escapeHtml(p.description)}</option>`
+          ).join("")
+        : `<option value="">No serial devices detected</option>`;
+      if (selectedPort && !ports.some((p) => p.device === selectedPort)) {
+        portEl.innerHTML += `<option value="${escapeHtml(selectedPort)}" selected>${escapeHtml(selectedPort)} (saved)</option>`;
+      }
+      baudEl.innerHTML = (baudData.rates || [115200]).map((r) =>
+        `<option value="${r}" ${r === selectedBaud ? "selected" : ""}>${r}</option>`
+      ).join("");
+    } catch (_) {
+      portEl.innerHTML = `<option value="${escapeHtml(selectedPort)}">${escapeHtml(selectedPort || "—")}</option>`;
+      baudEl.innerHTML = `<option value="115200">115200</option>`;
+    }
+  }
+
   async function loadInterfaces(selectEl, selectedIp) {
     const res = await fetch("/api/interfaces");
     const data = await res.json();
@@ -266,8 +361,7 @@
     $("#set-shared").value = settings.shared_folder || "";
     $("#set-auto-announce").checked = !!settings.auto_announce;
     if ($("#set-enable-serial")) $("#set-enable-serial").checked = !!settings.enable_serial;
-    if ($("#set-serial-port")) $("#set-serial-port").value = settings.serial_port || "";
-    if ($("#set-serial-baud")) $("#set-serial-baud").value = settings.serial_baud || 115200;
+    loadSerialSettings(settings.serial_port || "", settings.serial_baud || 115200);
     loadInterfaces($("#set-lan-ip"), settings.lan_ip || "");
   }
 
@@ -354,11 +448,19 @@
       setAvatar($("#me-avatar"), primary.name, primary.hash_id);
     }
 
+    state._lastLinks = data.links || [];
     (data.links || []).forEach((l) => {
       state.links[l.hash_id] = l.handshake_complete;
+      if (l.rtt_ms != null) {
+        state.linkMetrics[l.hash_id] = {
+          rtt_ms: l.rtt_ms,
+          link_quality_pct: l.link_quality_pct,
+        };
+      }
     });
 
     loadPeers();
+    if (state.selectedPeer) refreshPeerStatus(state.selectedPeer);
     renderTransfers();
   }
 
@@ -388,11 +490,15 @@
 
     el.innerHTML = filtered
       .map((p) => {
-        const linked = state.links[p.hash_id];
         const active = state.selectedPeer === p.hash_id ? " active" : "";
+        const lm = state.linkMetrics[p.hash_id] || {};
         const metrics = [];
-        if (p.rtt_ms != null) metrics.push(`${Math.round(p.rtt_ms)}ms`);
-        if (p.transport === "serial" && p.link_quality_pct != null) metrics.push(`${p.link_quality_pct}%`);
+        const rtt = lm.rtt_ms ?? p.rtt_ms;
+        if (rtt != null) metrics.push(`${Math.round(rtt)}ms`);
+        const lq = lm.link_quality_pct ?? p.link_quality_pct;
+        if (p.transport === "serial" && lq != null) metrics.push(`${lq}%`);
+        const linked = state.links[p.hash_id];
+        if (linked && !metrics.length) metrics.push("online");
         const meta = metrics.length ? metrics.join(" · ") : `${p.transport.toUpperCase()} · ${p.hash_id.slice(0, 10)}…`;
         const trustBtn = state.peerTab === "discovered" && !trustedIds.has(p.hash_id)
           ? `<button type="button" class="contact-trust" data-trust="${p.hash_id}">Trust</button>` : "";
@@ -434,9 +540,7 @@
     $("#chat-peer-name").textContent = name;
     setAvatar($("#peer-avatar"), name, hashId);
 
-    const linked = state.links[hashId];
-    updatePeerStatus(linked ? "Encrypted · Online" : "Connecting…");
-    $(".status-dot").className = `status-dot ${linked ? "online" : "pending"}`;
+    refreshPeerStatus(hashId);
 
     $("#msg-input").disabled = false;
     $("#send-btn").disabled = false;
@@ -525,6 +629,8 @@
   function openDrawer() {
     $("#drawer").classList.add("open");
     $("#drawer").setAttribute("aria-hidden", "false");
+    const s = state.settings || {};
+    loadSerialSettings(s.serial_port || "", s.serial_baud || 115200);
   }
 
   function closeDrawer() {
@@ -589,7 +695,7 @@
       lan_ip: $(`#${prefix}-lan-ip`)?.value || "",
       auto_announce: $(`#${prefix}-auto-announce`)?.checked || false,
       enable_serial: $("#set-enable-serial")?.checked || false,
-      serial_port: $("#set-serial-port")?.value.trim() || "",
+      serial_port: $("#set-serial-port")?.value || "",
       serial_baud: parseInt($("#set-serial-baud")?.value || "115200", 10),
     };
   }

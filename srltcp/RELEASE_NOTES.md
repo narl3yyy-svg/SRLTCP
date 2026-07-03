@@ -1,5 +1,19 @@
 # SRLTCP Release Notes
 
+## v0.1.3 (2026-07-03)
+
+### Fixes
+- **Handshake UI** — no longer stuck on "Handshaking…" after connect (race condition fixed)
+- **Reconnect** — tearing down stale links before reconnect; force reconnect on each connect
+- **Self in discovered** — own node filtered from peer list and purged from registry
+- **Latency display** — RTT (ms) shown in chat header and peer list when connected
+- **APK build** — Gradle wrapper, SDK licenses, NDK, Chaquopy buildPython fix
+
+### New
+- **Serial port picker** — dropdown lists USB devices plugged into the system
+- **Baud rate picker** — selectable standard rates (9600–921600)
+- **Disconnect API** — `POST /api/disconnect` for clean peer teardown
+
 ## v0.1.2 (2026-07-03)
 
 ### Fixes

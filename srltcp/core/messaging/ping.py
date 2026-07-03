@@ -67,13 +67,15 @@ class PingMixin:
         link = self.get_link_by_peer_id(peer_id)
         if not link:
             return
+        link.rtt_ms = rtt_ms
         self.discovery.update_metrics(link.hash_id, rtt_ms=rtt_ms)
         if link.transport == "serial" and self.serial_transport:
             self.serial_transport.record_ping_success(rtt_ms)
-            self.discovery.update_metrics(
-                link.hash_id,
-                link_quality_pct=self.serial_transport.link_quality_pct(),
-            )
+            lq = self.serial_transport.link_quality_pct()
+            link.link_quality_pct = lq
+            self.discovery.update_metrics(link.hash_id, link_quality_pct=lq)
+        if self._on_peer_metrics:
+            await self._on_peer_metrics(link.hash_id, self.get_peer_metrics(link.hash_id))
 
     async def _reply_pong_with_rtt(self: MessagingBackend, peer: object, body: bytes) -> None:
         from srltcp.transports.base import TransportPeer
@@ -89,13 +91,18 @@ class PingMixin:
         await self._send_raw(peer.peer_id, peer.transport, packet)
 
     def get_peer_metrics(self: MessagingBackend, hash_id: str) -> dict[str, float | None]:
+        link = self.get_link(hash_id)
+        if link and link.rtt_ms is not None:
+            return {
+                "rtt_ms": link.rtt_ms,
+                "link_quality_pct": link.link_quality_pct,
+            }
         peer = self.discovery.get(hash_id)
         link_quality: float | None = None
-        link = self.get_link(hash_id)
         if link and link.transport == "serial" and self.serial_transport:
             link_quality = self.serial_transport.link_quality_pct()
         return {
-            "rtt_ms": peer.rtt_ms if peer else None,
+            "rtt_ms": peer.rtt_ms if peer else (link.rtt_ms if link else None),
             "link_quality_pct": (
                 peer.link_quality_pct
                 if peer and peer.link_quality_pct is not None

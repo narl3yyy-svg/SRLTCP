@@ -87,6 +87,7 @@ class MessagingBackend(
         self._on_file_offer: EventCallback | None = None
         self._on_transfer_progress: EventCallback | None = None
         self._on_transfer_complete: EventCallback | None = None
+        self._on_peer_metrics: EventCallback | None = None
         self._on_event: EventCallback | None = None
 
         self._init_links()
@@ -106,6 +107,7 @@ class MessagingBackend(
         on_file_offer: EventCallback | None = None,
         on_transfer_progress: EventCallback | None = None,
         on_transfer_complete: EventCallback | None = None,
+        on_peer_metrics: EventCallback | None = None,
         on_event: EventCallback | None = None,
     ) -> None:
         self._on_message = on_message
@@ -114,6 +116,7 @@ class MessagingBackend(
         self._on_file_offer = on_file_offer
         self._on_transfer_progress = on_transfer_progress
         self._on_transfer_complete = on_transfer_complete
+        self._on_peer_metrics = on_peer_metrics
         self._on_event = on_event
 
     async def start(self) -> None:
@@ -190,7 +193,9 @@ class MessagingBackend(
         elif event.kind == "disconnected" and event.peer:
             link = self.get_link_by_peer_id(event.peer.peer_id)
             if link:
-                self.remove_link(link.hash_id)
+                hash_id = link.hash_id
+                self.remove_link(hash_id)
+                self._pending_handshakes.pop(hash_id, None)
                 if self.config.relay_mode:
                     self.routing.remove_for_peer(event.peer.peer_id)
         if self._on_event:
@@ -359,10 +364,32 @@ class MessagingBackend(
         return [m.to_dict() for m in self._messages[-limit:]]
 
     def get_discovered_peers(self) -> list[dict[str, Any]]:
-        return [p.to_dict() for p in self.discovery.list_peers()]
+        own_hashes = {i.hash_id for i in self.identities.values()}
+        own_keys = {i.public_bytes().hex() for i in self.identities.values()}
+        peers = []
+        for p in self.discovery.list_peers():
+            if p.hash_id in own_hashes or p.public_key in own_keys:
+                self.discovery.remove(p.hash_id)
+                continue
+            d = p.to_dict()
+            link = self.get_link(p.hash_id)
+            if link and link.rtt_ms is not None:
+                d["rtt_ms"] = link.rtt_ms
+            peers.append(d)
+        return peers
 
     def get_trusted_peers(self) -> list[dict[str, Any]]:
-        return [p.to_dict() for p in self.trusted.list_peers()]
+        result = []
+        for p in self.trusted.list_peers():
+            d = p.to_dict()
+            link = self.get_link(p.hash_id)
+            if link:
+                if link.rtt_ms is not None:
+                    d["rtt_ms"] = link.rtt_ms
+                if link.link_quality_pct is not None:
+                    d["link_quality_pct"] = link.link_quality_pct
+            result.append(d)
+        return result
 
     def clear_messages(self) -> int:
         count = len(self._messages)

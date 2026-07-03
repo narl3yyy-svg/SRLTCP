@@ -6,7 +6,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.2
+**Current version:** 0.1.3
 
 ---
 
@@ -349,6 +349,12 @@ pytest tests/ -v                # unit tests only
 ## Changelog
 
 See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
+
+### v0.1.3
+
+- Handshake UI and reconnect fixes; RTT shown when connected
+- Serial port and baud rate dropdowns (USB devices)
+- Self-node removed from discovered peers; APK build fixed
 
 ### v0.1.2
 

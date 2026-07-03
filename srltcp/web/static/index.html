@@ -153,11 +153,12 @@
             </label>
             <label class="field">
               <span>Serial port</span>
-              <input type="text" id="set-serial-port" placeholder="/dev/ttyUSB0" />
+              <select id="set-serial-port"></select>
+              <small>Plug in USB device, then refresh settings</small>
             </label>
             <label class="field">
               <span>Baud rate</span>
-              <input type="number" id="set-serial-baud" value="115200" />
+              <select id="set-serial-baud"></select>
             </label>
             <label class="field">
               <span>Network interface / IP</span>
@@ -243,7 +244,7 @@
         <span class="stat-label">Temp</span>
         <span class="stat-value">—</span>
       </div>
-      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.2</div>
+      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.3</div>
     </footer>
 
     <div class="modal-overlay" id="folder-modal">

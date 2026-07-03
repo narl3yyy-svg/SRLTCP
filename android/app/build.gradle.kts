@@ -11,8 +11,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.1.3"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -20,6 +20,7 @@ android {
 
         python {
             version = "3.12"
+            buildPython("/usr/bin/python3")
             pip {
                 install("aiohttp", "aiofiles", "cryptography", "pyserial", "zstandard")
             }
@@ -29,11 +30,14 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        debug {
+            isMinifyEnabled = false
         }
     }
 

@@ -98,6 +98,8 @@ class AnnounceMixin:
         own_hashes = {i.hash_id for i in self.identities.values()}
         peer, is_new = self.discovery.upsert_from_announce(address, transport, payload)
         if not peer or peer.hash_id in own_hashes:
+            if peer and peer.hash_id in own_hashes:
+                self.discovery.remove(peer.hash_id)
             return
         if is_new and self._on_peer_discovered:
             await self._on_peer_discovered(peer.to_dict())

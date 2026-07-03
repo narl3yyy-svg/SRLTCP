@@ -23,6 +23,17 @@ class ConnectMixin:
     def _init_connect(self: MessagingBackend) -> None:
         self._pending_handshakes = {}
 
+    async def _teardown_link(self: MessagingBackend, hash_id: str) -> None:
+        link = self.get_link(hash_id)
+        if not link:
+            return
+        self._pending_handshakes.pop(hash_id, None)
+        peer_id = link.transport_peer_id
+        transport = link.transport
+        self.remove_link(hash_id)
+        if transport == "tcp" and self.tcp_transport:
+            await self.tcp_transport.disconnect(peer_id)
+
     async def connect_to_peer(
         self: MessagingBackend,
         hash_id: str,
@@ -30,19 +41,43 @@ class ConnectMixin:
         host: str | None = None,
         port: int | None = None,
         transport: str = "tcp",
+        force: bool = False,
     ) -> bool:
         """Dial a peer by hash (uses discovery registry for address)."""
         discovered = self.discovery.get(hash_id)
-        if not discovered and not host:
+        trusted = self.trusted.get(hash_id)
+        if not discovered and not trusted and not host:
             log.warning("Peer %s not in discovery registry", hash_id[:8])
             return False
 
-        target_host = host or (discovered.tcp_host if discovered else "")
-        target_port = port or (discovered.tcp_port if discovered else self.config.tcp_port)
+        existing = self.get_link(hash_id)
+        if existing and existing.handshake_complete and not force:
+            await self.ping_peer(hash_id)
+            return True
+
+        if existing:
+            await self._teardown_link(hash_id)
+
+        target_host = host or (
+            (discovered.tcp_host if discovered else "")
+            or (trusted.tcp_host if trusted else "")
+        )
+        target_port = port or (
+            (discovered.tcp_port if discovered else None)
+            or (trusted.tcp_port if trusted else None)
+            or self.config.tcp_port
+        )
 
         if transport == "tcp" and self.tcp_transport:
+            if not target_host:
+                log.warning("No host for peer %s", hash_id[:8])
+                return False
             peer_id = await self.tcp_transport.connect(target_host, target_port)
-            pub_hex = discovered.public_key if discovered else ""
+            pub_hex = ""
+            if discovered:
+                pub_hex = discovered.public_key
+            elif trusted:
+                pub_hex = trusted.public_key
             pub_bytes = bytes.fromhex(pub_hex) if pub_hex else b"\x00" * 32
             link = PeerLink(
                 hash_id=hash_id,
@@ -50,11 +85,18 @@ class ConnectMixin:
                 transport="tcp",
                 address=f"{target_host}:{target_port}",
                 public_key=pub_bytes,
+                peer_name=(discovered.name if discovered else trusted.name if trusted else ""),
             )
             self.register_link(link)
             await self._initiate_handshake(hash_id)
             return True
         return False
+
+    async def disconnect_peer(self: MessagingBackend, hash_id: str) -> bool:
+        if not self.get_link(hash_id):
+            return False
+        await self._teardown_link(hash_id)
+        return True
 
     async def _initiate_handshake(self: MessagingBackend, hash_id: str) -> None:
         link = self.get_link(hash_id)
@@ -75,6 +117,29 @@ class ConnectMixin:
         packet = build_header(MessageType.HANDSHAKE, body=body)
         await self._send_raw(link.transport_peer_id, link.transport, packet)
 
+    async def _complete_handshake(
+        self: MessagingBackend,
+        remote_hash: str,
+        remote_name: str,
+        *,
+        from_ack: bool = False,
+    ) -> None:
+        link = self.get_link(remote_hash)
+        if link:
+            link.peer_name = remote_name
+        await self.ping_peer(remote_hash)
+        if self._on_link_up:
+            await self._on_link_up(remote_hash, remote_name)
+        if self._on_peer_metrics:
+            metrics = self.get_peer_metrics(remote_hash)
+            await self._on_peer_metrics(remote_hash, metrics)
+        log.info(
+            "Link up with %s (%s)%s",
+            remote_name,
+            remote_hash[:8],
+            " [ack]" if from_ack else "",
+        )
+
     async def _handle_handshake(
         self: MessagingBackend, peer_id: str, body: bytes, *, initiator: bool
     ) -> None:
@@ -83,6 +148,7 @@ class ConnectMixin:
         remote_pub = bytes.fromhex(data["public_key"])
         remote_eph = bytes.fromhex(data["ephemeral"])
         remote_sig = bytes.fromhex(data["signature"])
+        remote_name = data.get("name", "")
 
         link = self.get_link_by_peer_id(peer_id)
         if not link:
@@ -92,12 +158,20 @@ class ConnectMixin:
                 transport="tcp",
                 address="",
                 public_key=remote_pub,
+                peer_name=remote_name,
             )
             self.register_link(link)
         else:
+            old_hash = link.hash_id
+            if old_hash != remote_hash:
+                self._links.pop(old_hash, None)
             link.hash_id = remote_hash
             link.public_key = remote_pub
+            link.peer_name = remote_name
+            self._links[remote_hash] = link
             self._peer_id_to_hash[peer_id] = remote_hash
+            if old_hash in self._pending_handshakes and old_hash != remote_hash:
+                self._pending_handshakes[remote_hash] = self._pending_handshakes.pop(old_hash)
 
         identity = self._identity_for_transport(link.transport)
         if remote_hash in self._pending_handshakes:
@@ -116,10 +190,10 @@ class ConnectMixin:
                 load_public_key(remote_pub),
                 initiator=False,
             )
-            # Respond with our handshake ack
             ack_body = encode_payload(
                 {
                     "hash_id": identity.hash_id,
+                    "name": identity.name,
                     "public_key": identity.public_bytes().hex(),
                     "ephemeral": kx.ephemeral_public.hex(),
                     "signature": kx.sign_ephemeral().hex(),
@@ -129,10 +203,7 @@ class ConnectMixin:
             await self._send_raw(peer_id, link.transport, ack)
 
         self.set_link_keys(remote_hash, keys)
-        log.info("Handshake complete with %s (%s)", data.get("name"), remote_hash[:8])
-
-        if self._on_link_up:
-            await self._on_link_up(remote_hash, data.get("name", ""))
+        await self._complete_handshake(remote_hash, remote_name)
 
     async def _handle_handshake_ack(self: MessagingBackend, peer_id: str, body: bytes) -> None:
         data = decode_payload(body)
@@ -140,13 +211,15 @@ class ConnectMixin:
         remote_pub = bytes.fromhex(data["public_key"])
         remote_eph = bytes.fromhex(data["ephemeral"])
         remote_sig = bytes.fromhex(data["signature"])
+        remote_name = data.get("name", "")
 
         kx = self._pending_handshakes.pop(remote_hash, None)
         if not kx:
             link = self.get_link_by_peer_id(peer_id)
             if link:
-                remote_hash = link.hash_id
-                kx = self._pending_handshakes.pop(remote_hash, None)
+                kx = self._pending_handshakes.pop(link.hash_id, None)
+                if kx:
+                    remote_hash = link.hash_id
         if not kx:
             log.warning("Unexpected handshake ack from %s", peer_id[:8])
             return
@@ -158,6 +231,7 @@ class ConnectMixin:
             initiator=True,
         )
         self.set_link_keys(remote_hash, keys)
-        log.info("Handshake ack from %s", remote_hash[:8])
-        if self._on_link_up:
-            await self._on_link_up(remote_hash, data.get("name", ""))
+        link = self.get_link(remote_hash)
+        if link:
+            link.peer_name = remote_name
+        await self._complete_handshake(remote_hash, remote_name, from_ack=True)

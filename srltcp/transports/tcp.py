@@ -93,6 +93,12 @@ class TCPTransport(Transport):
             peer = conn.peer
             await self._emit_event(TransportEvent(kind="disconnected", peer=peer))
 
+    async def disconnect(self, peer_id: str) -> None:
+        conn = self._connections.pop(peer_id, None)
+        if conn:
+            await conn.close()
+            await self._emit_event(TransportEvent(kind="disconnected", peer=conn.peer))
+
     async def connect(self, host: str, port: int) -> str:
         reader, writer = await asyncio.open_connection(host, port)
         peer_id = str(uuid.uuid4())

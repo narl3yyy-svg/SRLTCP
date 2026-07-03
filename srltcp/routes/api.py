@@ -16,6 +16,7 @@ from srltcp.core.trusted import TrustedPeer
 from srltcp.utils.folders import list_directory
 from srltcp.utils.network import list_interfaces
 from srltcp.utils.platform import data_dir
+from srltcp.utils.serial_ports import baud_rates, list_serial_ports
 from srltcp.utils.system_stats import system_stats
 
 RELEASE_NOTES_PATH = Path(__file__).resolve().parents[1] / "RELEASE_NOTES.md"
@@ -98,8 +99,32 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         host = data.get("host")
         port = data.get("port")
         transport = data.get("transport", "tcp")
-        ok = await node.backend.connect_to_peer(hash_id, host=host, port=port, transport=transport)
-        return web.json_response({"connected": ok})
+        force = bool(data.get("force", True))
+        ok = await node.backend.connect_to_peer(
+            hash_id, host=host, port=port, transport=transport, force=force
+        )
+        link = node.backend.get_link(hash_id)
+        return web.json_response(
+            {
+                "connected": ok,
+                "handshake_complete": bool(link and link.handshake_complete),
+                "rtt_ms": link.rtt_ms if link else None,
+            }
+        )
+
+    async def disconnect(request: web.Request) -> web.Response:
+        data = await request.json()
+        hash_id = data.get("hash_id", "")
+        if not hash_id:
+            return web.json_response({"error": "hash_id required"}, status=400)
+        ok = await node.backend.disconnect_peer(hash_id)
+        return web.json_response({"disconnected": ok})
+
+    async def serial_ports(_request: web.Request) -> web.Response:
+        return web.json_response({"ports": list_serial_ports()})
+
+    async def serial_baud_rates(_request: web.Request) -> web.Response:
+        return web.json_response({"rates": baud_rates()})
 
     async def ping_peer(request: web.Request) -> web.Response:
         data = await request.json()
@@ -255,6 +280,9 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_get("/api/messages", messages)
     app.router.add_post("/api/messages", send_message)
     app.router.add_post("/api/connect", connect)
+    app.router.add_post("/api/disconnect", disconnect)
+    app.router.add_get("/api/serial/ports", serial_ports)
+    app.router.add_get("/api/serial/baud-rates", serial_baud_rates)
     app.router.add_post("/api/ping", ping_peer)
     app.router.add_post("/api/announce", announce)
     app.router.add_post("/api/upload", upload_file)

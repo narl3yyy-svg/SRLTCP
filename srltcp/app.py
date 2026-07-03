@@ -164,6 +164,14 @@ async def run_identity() -> None:
         print(f"  public_key: {identity.public_bytes().hex()[:32]}…")
 
 
+def start_android_server() -> None:
+    """Entry point for Chaquopy Android app."""
+    import sys
+
+    sys.argv = ["srltcp", "web", "--log-level", "INFO"]
+    main()
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()

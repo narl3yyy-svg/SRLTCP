@@ -1,6 +1,9 @@
 package com.srltcp.app
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
@@ -15,21 +18,29 @@ class MainActivity : AppCompatActivity() {
             Python.start(AndroidPlatform(this))
         }
 
-        // Start SRLTCP web server in background (HTTPS localhost)
         Thread {
             try {
                 val py = Python.getInstance()
-                val app = py.getModule("srltcp.app")
-                app.callAttr("main")
+                py.getModule("srltcp.app").callAttr("start_android_server")
             } catch (_: Exception) {
-                // Server may already run or needs CLI args — WebView still loads UI
+                // Server may already be running
             }
         }.start()
 
         val webView = WebView(this)
         webView.settings.javaScriptEnabled = true
-        webView.webViewClient = WebViewClient()
-        webView.loadUrl("https://127.0.0.1:9876/")
+        webView.settings.domStorageEnabled = true
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                return false
+            }
+        }
+
+        // Allow self-signed localhost HTTPS cert
+        Handler(Looper.getMainLooper()).postDelayed({
+            webView.loadUrl("https://127.0.0.1:9876/")
+        }, 2500)
+
         setContentView(webView)
     }
 }
