@@ -116,6 +116,9 @@ class SerialTransport(Transport):
     def peers(self) -> list[TransportPeer]:
         return [self._peer] if self._peer else []
 
+    def has_peer(self, peer_id: str) -> bool:
+        return self._peer is not None and self._peer.peer_id == peer_id
+
     def update_peer_metadata(self, metadata: dict[str, Any]) -> None:
         if self._peer:
             self._peer.metadata.update(metadata)

@@ -265,6 +265,27 @@ body {
   text-overflow: ellipsis;
 }
 
+.transport-badge {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  margin-right: 0.25rem;
+  vertical-align: middle;
+}
+.transport-badge.tcp {
+  background: rgba(91, 141, 239, 0.25);
+  color: #8eb8ff;
+  border: 1px solid rgba(91, 141, 239, 0.45);
+}
+.transport-badge.serial {
+  background: rgba(62, 207, 142, 0.2);
+  color: #7dffb8;
+  border: 1px solid rgba(62, 207, 142, 0.45);
+}
+
 .contact-preview {
   font-size: 0.75rem;
   color: var(--text-muted);
@@ -272,7 +293,11 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
 }
+.contact-endpoint { color: var(--text-muted); }
 
 .contact-meta {
   font-family: var(--mono);
@@ -471,6 +496,10 @@ body {
   opacity: 0.85;
   margin: 0.2rem 0 0.35rem;
 }
+.file-bubble.cancelled .file-progress-meta { color: var(--warning); }
+.file-bubble.cancelled .progress-fill { background: var(--warning); }
+.file-bubble.failed .file-progress-meta { color: var(--danger); }
+.file-bubble.failed .progress-fill { background: var(--danger); }
 .chat-progress { height: 4px; margin-top: 0.25rem; }
 .chat-image {
   display: block;
@@ -661,19 +690,16 @@ body {
 }
 
 .transfer-dock {
-  position: fixed;
-  left: var(--sidebar-w);
-  right: 0;
-  bottom: 0;
-  z-index: 90;
   display: flex;
   align-items: center;
-  gap: 1rem;
-  padding: 0.65rem 1.25rem;
-  background: rgba(12, 14, 20, 0.96);
+  gap: 0.75rem;
+  padding: 0.55rem 1rem;
+  background: rgba(24, 28, 40, 0.95);
   border-top: 1px solid var(--border-strong);
-  backdrop-filter: blur(8px);
+  flex-shrink: 0;
 }
+.transfer-dock.cancelled .transfer-dock-title { color: var(--warning); }
+.transfer-dock.cancelled .progress-fill { background: var(--warning); }
 .transfer-dock-main { flex: 1; min-width: 0; }
 .transfer-dock-title {
   font-size: 0.85rem;
@@ -688,8 +714,56 @@ body {
   margin: 2px 0 6px;
 }
 .transfer-dock-progress { margin: 0; }
-@media (max-width: 768px) {
-  .transfer-dock { left: 0; }
+
+.bubble-row { position: relative; }
+.bubble-actions {
+  display: none;
+  gap: 4px;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+.bubble-row:hover .bubble-actions { display: flex; }
+.bubble-row.out .bubble-actions { left: 4px; right: auto; }
+.bubble-action {
+  font-size: 0.65rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.bubble-action:hover { color: var(--text); background: var(--surface-hover); }
+.bubble-action.danger { color: #f07178; border-color: rgba(240, 113, 120, 0.35); }
+.bubble-action.danger:hover { background: rgba(240, 113, 120, 0.12); }
+
+.network-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.network-legend span::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 0.35rem;
+  vertical-align: middle;
+}
+.legend-self::before { background: #5b8def; }
+.legend-trusted::before { background: #3ecf8e; }
+.legend-discovered::before { background: #f5a623; }
+.legend-link::before { background: #8eb8ff; box-shadow: 0 0 6px #5b8def; }
+.network-canvas {
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  width: 100%;
+  max-width: 100%;
 }
 
 .drawer-section { margin-bottom: 1.5rem; }

@@ -33,7 +33,7 @@ def _fallback_interfaces() -> list[dict[str, Any]]:
     try:
         hostname = socket.gethostname()
         for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
-            ip = info[4][0]
+            ip = str(info[4][0])
             if not ip.startswith("127."):
                 ips.add(ip)
     except OSError:

@@ -46,7 +46,7 @@ class AppSettings:
     show_clock: bool = True
     clock_source: str = "system"  # system | ntp
     ntp_server: str = "pool.ntp.org"
-    version: str = "0.1.10"
+    version: str = "0.1.11"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:
@@ -68,7 +68,7 @@ class AppSettings:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AppSettings:
-        known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+        known = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in data.items() if k in known}
         settings = cls(**filtered)
         if "message_retention_preset" in filtered:

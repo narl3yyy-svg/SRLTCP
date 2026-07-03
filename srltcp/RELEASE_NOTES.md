@@ -1,5 +1,27 @@
 # SRLTCP Release Notes
 
+## v0.1.11 (2026-07-03)
+
+### Fixes
+- **Serial connect 500** — stale incomplete TCP links are torn down before serial dial; transport mismatch no longer sends handshake over dead TCP peer (`KeyError: unknown peer`)
+- **File transfer transport** — offers and chunks use the active link's transport (serial vs TCP)
+- **Transfer cancel** — `FILE_REJECT` notifies remote peer; both sides show **cancelled** in chat and transfer dock
+- **CPU / temperature** — more accurate first CPU sample; temperature uses hottest CPU zone (not average)
+- **HKDF session keys** — proper salt (`srltcp-session-salt-v2`) and directional info strings (`srltcp-v2-send` / `srltcp-v2-recv`)
+
+### New / UI
+- **Message actions** — Copy and Delete on text bubbles
+- **Transport badges** — readable TCP / SERIAL pills on trusted and discovered contacts
+- **Transfer dock** — inline above composer (no longer blocks chat); cancelled state with toast
+- **Network map** — animated graph, legend, glow on active links
+- **Android** — `set_android_data_dir()` before server start for correct app files path
+
+### Project
+- `SECURITY.md`, `CONTRIBUTING.md`, issue/PR templates, `.pre-commit-config.yaml`
+- CI: ruff, mypy, pytest with coverage, advisory pip-audit
+
+**Note:** Peers must both run v0.1.11+ for handshake compatibility after the HKDF change.
+
 ## v0.1.10 (2026-07-03)
 
 ### Fixes

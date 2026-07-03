@@ -53,6 +53,33 @@ class ConnectMixin:
                 hash_id, host=host, port=port, transport=transport, force=force
             )
 
+    def _resolve_transport(
+        self: MessagingBackend, hash_id: str, requested: str
+    ) -> str:
+        discovered = self.discovery.get(hash_id, requested) or self.discovery.get(
+            hash_id
+        )
+        if discovered:
+            return discovered.transport
+        trusted = self.trusted.get(hash_id)
+        if trusted:
+            return trusted.transport
+        return requested
+
+    def _is_link_reachable(self: MessagingBackend, link: PeerLink) -> bool:
+        if link.transport == "tcp" and self.tcp_transport:
+            return self.tcp_transport.has_peer(link.transport_peer_id)
+        if link.transport == "serial" and self.serial_transport:
+            return self.serial_transport.has_peer(link.transport_peer_id)
+        return False
+
+    def _infer_transport(self: MessagingBackend, peer_id: str) -> str:
+        if self.serial_transport and self.serial_transport.has_peer(peer_id):
+            return "serial"
+        if self.tcp_transport and self.tcp_transport.has_peer(peer_id):
+            return "tcp"
+        return "tcp"
+
     async def _connect_to_peer_locked(
         self: MessagingBackend,
         hash_id: str,
@@ -62,7 +89,10 @@ class ConnectMixin:
         transport: str = "tcp",
         force: bool = False,
     ) -> bool:
-        discovered = self.discovery.get(hash_id, transport) or self.discovery.get(hash_id)
+        transport = self._resolve_transport(hash_id, transport)
+        discovered = self.discovery.get(hash_id, transport) or self.discovery.get(
+            hash_id
+        )
         trusted = self.trusted.get(hash_id)
         if not discovered and not trusted and not host:
             log.warning("Peer %s not in discovery registry", hash_id[:8])
@@ -73,12 +103,26 @@ class ConnectMixin:
 
         existing = self.get_link(hash_id)
         if existing and existing.handshake_complete and not force:
-            await self.ping_peer(hash_id)
-            return True
+            if existing.transport == transport and self._is_link_reachable(existing):
+                await self.ping_peer(hash_id)
+                return True
+            await self._teardown_link(hash_id)
+            existing = None
 
         if existing and not existing.handshake_complete and not force:
-            await self._initiate_handshake(hash_id)
-            return True
+            if existing.transport != transport or not self._is_link_reachable(existing):
+                await self._teardown_link(hash_id)
+                existing = None
+            else:
+                try:
+                    await self._initiate_handshake(hash_id)
+                    return True
+                except (KeyError, RuntimeError, OSError) as exc:
+                    log.warning(
+                        "Handshake retry failed for %s: %s", hash_id[:8], exc
+                    )
+                    await self._teardown_link(hash_id)
+                    existing = None
 
         if existing and force:
             await self._teardown_link(hash_id)
@@ -147,7 +191,8 @@ class ConnectMixin:
             if link and link.handshake_complete:
                 return True
             await asyncio.sleep(0.1)
-        return bool(self.get_link(hash_id) and self.get_link(hash_id).handshake_complete)
+        link = self.get_link(hash_id)
+        return bool(link and link.handshake_complete)
 
     def _cancel_reconnect(self: MessagingBackend, hash_id: str) -> None:
         task = self._reconnect_tasks.pop(hash_id, None)
@@ -223,7 +268,11 @@ class ConnectMixin:
                 await self.tcp_transport.disconnect(peer_id)
             return
         if not link:
-            transport = existing.transport if existing else "tcp"
+            transport = (
+                existing.transport
+                if existing
+                else self._infer_transport(peer_id)
+            )
             link = PeerLink(
                 hash_id=remote_hash,
                 transport_peer_id=peer_id,

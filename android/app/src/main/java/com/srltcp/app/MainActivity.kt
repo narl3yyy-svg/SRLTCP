@@ -92,6 +92,9 @@ class MainActivity : AppCompatActivity() {
             Thread {
                 try {
                     val py = Python.getInstance()
+                    val filesDir = applicationContext.filesDir.absolutePath
+                    py.getModule("srltcp.utils.platform")
+                        .callAttr("set_android_data_dir", filesDir)
                     py.getModule("srltcp.app").callAttr("start_android_server")
                     var waited = 0
                     while (waited < 45000) {

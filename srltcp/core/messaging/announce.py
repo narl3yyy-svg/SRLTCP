@@ -46,7 +46,7 @@ class AnnounceMixin:
             s.connect(("8.8.8.8", 80))
             ip = s.getsockname()[0]
             s.close()
-            return ip
+            return str(ip)
         except Exception:
             return "127.0.0.1"
 

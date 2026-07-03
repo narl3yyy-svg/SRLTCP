@@ -11,8 +11,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Run checks
-        run: bash scripts/check.sh
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install -q -e ".[dev]"
+          pip install -q pytest-cov
+
+      - name: Ruff lint
+        run: |
+          source .venv/bin/activate
+          ruff check srltcp tests
+
+      - name: Mypy type check (core security modules)
+        run: |
+          source .venv/bin/activate
+          mypy srltcp/core/protocol/ srltcp/core/messaging/connect.py srltcp/utils/platform.py
+
+      - name: Pytest with coverage
+        run: |
+          source .venv/bin/activate
+          pytest tests/ -q --cov=srltcp --cov-report=term-missing
+
+      - name: Security — dependency audit (advisory)
+        continue-on-error: true
+        run: |
+          source .venv/bin/activate
+          pip install -q pip-audit
+          pip-audit -r <(pip freeze) || true

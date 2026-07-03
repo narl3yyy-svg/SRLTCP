@@ -30,10 +30,20 @@ def cpu_usage_percent() -> float | None:
     if not sample:
         return None
     now = time.monotonic()
-    if _prev_cpu is None:
+    if _prev_cpu is None or (now - _prev_time) < 0.4:
         _prev_cpu = sample
         _prev_time = now
-        return 0.0
+        time.sleep(0.35)
+        sample2 = _read_proc_stat()
+        if not sample2:
+            return None
+        total_delta = sample2[0] - sample[0]
+        idle_delta = sample2[1] - sample[1]
+        _prev_cpu = sample2
+        _prev_time = time.monotonic()
+        if total_delta <= 0:
+            return 0.0
+        return round(100.0 * (1.0 - idle_delta / total_delta), 1)
     total_delta = sample[0] - _prev_cpu[0]
     idle_delta = sample[1] - _prev_cpu[1]
     _prev_cpu = sample
@@ -77,7 +87,8 @@ def cpu_temperature_c() -> float | None:
             pass
     if not temps:
         return None
-    return round(sum(temps) / len(temps), 1)
+    # Use hottest CPU-relevant zone (package temp is most representative).
+    return round(max(temps), 1)
 
 
 def _query_ntp(server: str, *, timeout: float = 2.0) -> datetime | None:
@@ -117,8 +128,8 @@ def local_time_info(
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
-        tz = datetime.now().astimezone().tzinfo or ZoneInfo("UTC")
-        tz_name = str(tz)
+        tz = ZoneInfo("UTC")
+        tz_name = "UTC"
 
     source = (clock_source or "system").lower()
     now_utc: datetime | None = None

@@ -78,10 +78,10 @@ class TransferMixin:
 
         file_hash = await sha256_file(path)
         transfer = FileTransfer.create(
-            self._identity_for_transport(transport).hash_id,
+            self._identity_for_transport(link.transport).hash_id,
             recipient_hash,
             path,
-            transport,
+            link.transport,
             sha256=file_hash,
         )
         self._transfers[transfer.id] = transfer
@@ -148,7 +148,7 @@ class TransferMixin:
         self._transfer_tasks[transfer_id] = task
 
     async def _handle_file_resume(self: MessagingBackend, hash_id: str, body: bytes) -> None:
-        await self._handle_file_accept(self, hash_id, body)
+        await self._handle_file_accept(hash_id, body)
 
     async def _send_file_chunks(
         self: MessagingBackend, hash_id: str, transfer: FileTransfer
@@ -299,10 +299,43 @@ class TransferMixin:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        peer_hash = (
+            transfer.recipient_hash
+            if transfer.sender_hash in {i.hash_id for i in self.identities.values()}
+            else transfer.sender_hash
+        )
+        link = self.get_link(peer_hash)
+        if link and link.handshake_complete:
+            body = encode_payload(
+                {"transfer_id": transfer_id, "reason": "cancelled"}
+            )
+            try:
+                packet = await self._encrypt_for_link(
+                    link, MessageType.FILE_REJECT, body
+                )
+                await self._send_raw(
+                    link.transport_peer_id, link.transport, packet
+                )
+            except (KeyError, RuntimeError, OSError) as exc:
+                log.warning("Could not notify cancel to peer: %s", exc)
         if self._on_transfer_progress:
             await self._on_transfer_progress(transfer.to_dict())
         await self._update_file_message(transfer.to_dict())
         return True
+
+    async def _handle_file_reject(self: MessagingBackend, hash_id: str, body: bytes) -> None:
+        data = decode_payload(body)
+        transfer_id = data.get("transfer_id", "")
+        transfer = self._transfers.get(transfer_id)
+        if not transfer:
+            return
+        transfer.state = TransferState.CANCELLED
+        task = self._transfer_tasks.pop(transfer_id, None)
+        if task and not task.done():
+            task.cancel()
+        if self._on_transfer_progress:
+            await self._on_transfer_progress(transfer.to_dict())
+        await self._update_file_message(transfer.to_dict())
 
     def has_active_transfer_for(self: MessagingBackend, hash_id: str) -> bool:
         for transfer in self._transfers.values():

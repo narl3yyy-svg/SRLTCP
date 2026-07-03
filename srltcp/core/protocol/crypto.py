@@ -75,34 +75,15 @@ class KeyExchange:
         peer_x = X25519PublicKey.from_public_bytes(peer_ephemeral)
         shared = self._x_private.exchange(peer_x)
         # Deterministic salt so both peers derive identical session keys
-        salt = hashlib.sha256(shared + b"srltcp-session-salt").digest()[:16]
-        base = derive_session_key(shared, salt)
+        salt = hashlib.sha256(shared + b"srltcp-session-salt-v2").digest()[:16]
+        send_info = b"srltcp-v2-send"
+        recv_info = b"srltcp-v2-recv"
         if initiator:
-            send_key = HKDF(
-                algorithm=hashes.SHA256(),
-                length=KEY_SIZE,
-                salt=b"send",
-                info=base,
-            ).derive(b"initiator")
-            recv_key = HKDF(
-                algorithm=hashes.SHA256(),
-                length=KEY_SIZE,
-                salt=b"recv",
-                info=base,
-            ).derive(b"initiator")
+            send_key = derive_session_key(shared, salt, send_info)
+            recv_key = derive_session_key(shared, salt, recv_info)
         else:
-            recv_key = HKDF(
-                algorithm=hashes.SHA256(),
-                length=KEY_SIZE,
-                salt=b"send",
-                info=base,
-            ).derive(b"initiator")
-            send_key = HKDF(
-                algorithm=hashes.SHA256(),
-                length=KEY_SIZE,
-                salt=b"recv",
-                info=base,
-            ).derive(b"initiator")
+            recv_key = derive_session_key(shared, salt, send_info)
+            send_key = derive_session_key(shared, salt, recv_info)
         return SessionKeys(send_key=send_key, recv_key=recv_key, salt=salt)
 
 

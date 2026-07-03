@@ -7,15 +7,26 @@ import platform
 import sys
 from pathlib import Path
 
+_android_data_dir: str | None = None
+
 
 def is_android() -> bool:
     return "chaquopy" in sys.modules or os.environ.get("SRLTCP_ANDROID") == "1"
 
 
+def set_android_data_dir(path: str) -> None:
+    """Called from Android MainActivity before starting the Python server."""
+    global _android_data_dir
+    _android_data_dir = path
+
+
 def data_dir() -> Path:
     """Return persistent data directory for identities and transfers."""
     if is_android():
-        base = Path("/data/data/com.srltcp.app/files")
+        base = Path(
+            _android_data_dir
+            or os.environ.get("SRLTCP_DATA_DIR", "/data/data/com.srltcp.app/files")
+        )
     elif platform.system() == "Windows":
         base = Path(os.environ.get("APPDATA", Path.home())) / "SRLTCP"
     else:

@@ -169,7 +169,7 @@ async def run_identity() -> None:
 
     store = IdentityStore()
     for transport in ("tcp", "serial"):
-        identity = store.load_or_create("srltcp-node", transport)  # type: ignore[arg-type]
+        identity = store.load_or_create("srltcp-node", transport)
         print(f"[{transport}] {identity.name}")
         print(f"  hash: {identity.hash_id}")
         print(f"  public_key: {identity.public_bytes().hex()[:32]}…")

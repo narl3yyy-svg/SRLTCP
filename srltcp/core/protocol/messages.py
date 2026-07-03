@@ -61,7 +61,8 @@ def encode_payload(obj: dict[str, Any]) -> bytes:
 
 
 def decode_payload(data: bytes) -> dict[str, Any]:
-    return json.loads(data.decode("utf-8"))
+    result: dict[str, Any] = json.loads(data.decode("utf-8"))
+    return result
 
 
 # File chunk binary layout after header:

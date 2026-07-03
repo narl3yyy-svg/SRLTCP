@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import struct
 import zlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 # Magic: 'SRL\x01' + version byte
 FRAME_MAGIC = b"SRL\x01"
@@ -91,7 +91,7 @@ class FrameWriter:
 
 
 async def read_frames_from_stream(
-    read_coro,
+    read_coro: Callable[[int], Awaitable[bytes]],
     chunk_size: int = 65536,
 ) -> AsyncIterator[bytes]:
     """Read frames from an async read callable."""

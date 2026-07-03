@@ -96,6 +96,15 @@
 
         <div class="messages" id="messages" role="log" aria-live="polite"></div>
 
+        <div class="transfer-dock hidden" id="transfer-dock" aria-live="polite">
+          <div class="transfer-dock-main">
+            <div class="transfer-dock-title" id="transfer-dock-title">Transferring…</div>
+            <div class="transfer-dock-meta" id="transfer-dock-meta">0% · 0 MB/s</div>
+            <div class="progress-track transfer-dock-progress"><div class="progress-fill" id="transfer-dock-fill"></div></div>
+          </div>
+          <button type="button" class="action-btn small danger" id="transfer-dock-cancel">Cancel</button>
+        </div>
+
         <footer class="composer">
           <div class="composer-inner">
             <textarea id="msg-input" rows="1" placeholder="Message…" disabled></textarea>
@@ -234,15 +243,6 @@
       </div>
     </div>
 
-    <div class="transfer-dock hidden" id="transfer-dock" aria-live="polite">
-      <div class="transfer-dock-main">
-        <div class="transfer-dock-title" id="transfer-dock-title">Transferring…</div>
-        <div class="transfer-dock-meta" id="transfer-dock-meta">0% · 0 MB/s</div>
-        <div class="progress-track transfer-dock-progress"><div class="progress-fill" id="transfer-dock-fill"></div></div>
-      </div>
-      <button type="button" class="action-btn small danger" id="transfer-dock-cancel">Cancel</button>
-    </div>
-
     <!-- First-run setup -->
     <div class="setup-overlay hidden" id="setup-overlay">
       <div class="setup-card">
@@ -307,7 +307,7 @@
         <span class="stat-value">—</span>
       </div>
       <div class="stat-item hidden" id="stat-clock" aria-hidden="true"></div>
-      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.10</div>
+      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.11</div>
     </footer>
 
     <div class="modal-overlay" id="folder-modal">
@@ -325,7 +325,13 @@
     <div class="modal-overlay" id="network-modal">
       <div class="modal-card wide">
         <h3>Network map</h3>
-        <p class="hint">Your node (center) and discovered/trusted peers. Lines show active encrypted links.</p>
+        <p class="hint">Your node (center) and discovered/trusted peers. Solid lines are active encrypted links; dashed lines are discovered only.</p>
+        <div class="network-legend" aria-hidden="false">
+          <span class="legend-self">You</span>
+          <span class="legend-trusted">Trusted</span>
+          <span class="legend-discovered">Discovered</span>
+          <span class="legend-link">Active link</span>
+        </div>
         <canvas id="network-canvas" width="640" height="360" class="network-canvas"></canvas>
         <div class="modal-actions">
           <button type="button" class="action-btn" id="network-refresh">Refresh</button>

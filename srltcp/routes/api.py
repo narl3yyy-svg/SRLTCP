@@ -105,6 +105,13 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         limit = min(int(request.rel_url.query.get("limit", "200")), 1000)
         return web.json_response(node.backend.get_messages(limit=limit))
 
+    async def delete_message(request: web.Request) -> web.Response:
+        message_id = request.match_info.get("message_id", "")
+        if not message_id:
+            return web.json_response({"error": "message_id required"}, status=400)
+        ok = node.backend.delete_message(message_id)
+        return web.json_response({"deleted": ok})
+
     async def send_message(request: web.Request) -> web.Response:
         data = await request.json()
         recipient = data.get("recipient_hash", "")
@@ -126,11 +133,17 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         port = data.get("port")
         transport = data.get("transport", "tcp")
         force = bool(data.get("force", False))
-        ok = await node.backend.connect_to_peer(
-            hash_id, host=host, port=port, transport=transport, force=force
-        )
-        if ok:
-            await node.backend.wait_for_handshake(hash_id, timeout=12.0)
+        try:
+            ok = await node.backend.connect_to_peer(
+                hash_id, host=host, port=port, transport=transport, force=force
+            )
+            if ok:
+                await node.backend.wait_for_handshake(hash_id, timeout=12.0)
+        except (KeyError, RuntimeError, OSError) as exc:
+            return web.json_response(
+                {"connected": False, "error": str(exc), "handshake_complete": False},
+                status=500,
+            )
         link = node.backend.get_link(hash_id)
         return web.json_response(
             {
@@ -275,7 +288,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         if transport not in ("tcp", "serial"):
             return web.json_response({"error": "invalid transport"}, status=400)
         identity = node.backend.identity_store.regenerate(
-            node.config.name, transport  # type: ignore[arg-type]
+            node.config.name, transport
         )
         node.backend.identities[transport] = identity
         return web.json_response(
@@ -291,7 +304,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         transport = request.match_info.get("transport", "tcp")
         if transport not in ("tcp", "serial"):
             return web.json_response({"error": "invalid transport"}, status=400)
-        ok = node.backend.identity_store.delete(transport)  # type: ignore[arg-type]
+        ok = node.backend.identity_store.delete(transport)
         node.backend.identities.pop(transport, None)
         return web.json_response({"deleted": ok})
 
@@ -440,6 +453,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_post("/api/trusted/{hash_id}/clear-chat", trusted_clear_chat)
     app.router.add_delete("/api/trusted/{hash_id}", trusted_remove)
     app.router.add_get("/api/messages", messages)
+    app.router.add_delete("/api/messages/{message_id}", delete_message)
     app.router.add_post("/api/messages", send_message)
     app.router.add_post("/api/connect", connect)
     app.router.add_post("/api/disconnect", disconnect)

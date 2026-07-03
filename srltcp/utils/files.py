@@ -49,7 +49,8 @@ async def sha256_file(path: Path, chunk_size: int = CHUNK_SIZE) -> str:
 async def read_file_chunk(path: Path, offset: int, length: int) -> bytes:
     async with aiofiles.open(path, "rb") as f:
         await f.seek(offset)
-        return await f.read(length)
+        data: bytes = await f.read(length)
+        return data
 
 
 async def write_file_chunk(path: Path, offset: int, data: bytes) -> None:

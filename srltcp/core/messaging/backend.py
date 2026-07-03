@@ -16,7 +16,7 @@ from srltcp.core.identity import Identity, IdentityStore
 from srltcp.core.messaging.announce import AnnounceMixin
 from srltcp.core.messaging.connect import ConnectMixin
 from srltcp.core.messaging.constants import COMPRESS_THRESHOLD
-from srltcp.core.messaging.links import PeerLinkMixin
+from srltcp.core.messaging.links import PeerLink, PeerLinkMixin
 from srltcp.core.messaging.models import ChatMessage
 from srltcp.core.messaging.ping import PingMixin
 from srltcp.core.messaging.queue import QueueMixin
@@ -334,6 +334,12 @@ class MessagingBackend(
                 body = link.crypto.decrypt(body)
             if link:
                 await self._handle_file_accept(link.hash_id, body)
+        elif msg_type == MessageType.FILE_REJECT:
+            link = self.get_link_by_peer_id(peer.peer_id)
+            if link and flags & Flags.ENCRYPTED:
+                body = link.crypto.decrypt(body)
+            if link:
+                await self._handle_file_reject(link.hash_id, body)
         elif msg_type == MessageType.FILE_CHUNK:
             link = self.get_link_by_peer_id(peer.peer_id)
             if link:
@@ -367,6 +373,11 @@ class MessagingBackend(
     def is_trusted(self, hash_id: str) -> bool:
         peer = self.trusted.get(hash_id)
         return bool(peer and not peer.blocked)
+
+    def delete_message(self, message_id: str) -> bool:
+        before = len(self._messages)
+        self._messages = [m for m in self._messages if m.id != message_id]
+        return len(self._messages) < before
 
     def clear_messages_for_peer(self, hash_id: str) -> int:
         before = len(self._messages)
@@ -444,7 +455,9 @@ class MessagingBackend(
             await self._on_message(msg.to_dict())
         return msg
 
-    async def _encrypt_for_link(self, link, msg_type: MessageType, body: bytes) -> bytes:
+    async def _encrypt_for_link(
+        self, link: PeerLink, msg_type: MessageType, body: bytes
+    ) -> bytes:
         encrypted = link.crypto.encrypt(body)
         return build_header(msg_type, flags=Flags.ENCRYPTED | Flags.E2EE, body=encrypted)
 
@@ -568,22 +581,27 @@ class MessagingBackend(
             log.warning("Recipient %s not trusted for file send", recipient_hash[:8])
             return None
         link = self.get_link(recipient_hash)
+        effective_transport = link.transport if link else transport
         if not link or not link.handshake_complete:
-            await self.connect_to_peer(recipient_hash, transport=transport, force=False)
+            await self.connect_to_peer(
+                recipient_hash, transport=effective_transport, force=False
+            )
             await self.wait_for_handshake(recipient_hash, timeout=10.0)
             link = self.get_link(recipient_hash)
         if not link or not link.handshake_complete:
             log.warning("No active link to %s for file send", recipient_hash[:8])
             return None
-        transfer = await self.offer_file(recipient_hash, path, transport=transport)
+        transfer = await self.offer_file(
+            recipient_hash, path, transport=link.transport
+        )
         if not transfer:
             return None
         data = transfer.to_dict()
-        identity = self._identity_for_transport(transport)
+        identity = self._identity_for_transport(link.transport)
         await self._append_file_message(
             sender_hash=identity.hash_id,
             recipient_hash=recipient_hash,
-            transport=transport,
+            transport=link.transport,
             transfer=data,
             direction="out",
         )

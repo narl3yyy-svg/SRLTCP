@@ -127,6 +127,9 @@ class TCPTransport(Transport):
     def peers(self) -> list[TransportPeer]:
         return [c.peer for c in self._connections.values()]
 
+    def has_peer(self, peer_id: str) -> bool:
+        return peer_id in self._connections
+
     def update_peer_id(self, old_id: str, new_id: str, metadata: dict[str, Any]) -> None:
         conn = self._connections.pop(old_id, None)
         if not conn:

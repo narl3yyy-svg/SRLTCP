@@ -107,6 +107,15 @@
     return peerByHash(hashId)?.transport || "tcp";
   }
 
+  function transportBadge(transport) {
+    const t = (transport || "tcp").toLowerCase();
+    const label = t === "serial" ? "SERIAL" : "TCP";
+    return `<span class="transport-badge ${t}">${label}</span>`;
+  }
+
+  let networkAnimFrame = null;
+  let networkGraphData = null;
+
   function isPeerLinked(hashId) {
     if (state.links[hashId]) return true;
     const link = (state._lastLinks || []).find((l) => l.hash_id === hashId);
@@ -680,83 +689,152 @@
     return peer.hash_id.slice(0, 12) + "…";
   }
 
-  async function renderNetworkGraph() {
-    const canvas = $("#network-canvas");
-    if (!canvas) return;
-    const res = await fetch("/api/network");
-    const data = await res.json();
-    const ctx = canvas.getContext("2d");
-    const w = canvas.width;
-    const h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "#0c0e14";
-    ctx.fillRect(0, 0, w, h);
+  function stopNetworkAnimation() {
+    if (networkAnimFrame) {
+      cancelAnimationFrame(networkAnimFrame);
+      networkAnimFrame = null;
+    }
+  }
 
-    const nodes = data.nodes || [];
-    const edges = data.edges || [];
+  function layoutNetworkNodes(nodes, w, h) {
     const centerX = w / 2;
     const centerY = h / 2;
-    const radius = Math.min(w, h) * 0.34;
+    const radius = Math.min(w, h) * 0.36;
     const positions = {};
-
-    nodes.forEach((n, i) => {
-      if (n.role === "self") {
-        const selfNodes = nodes.filter((x) => x.role === "self");
-        const idx = selfNodes.indexOf(n);
-        const angle = (idx / Math.max(selfNodes.length, 1)) * Math.PI * 2 - Math.PI / 2;
-        positions[n.id] = {
-          x: centerX + Math.cos(angle) * 48,
-          y: centerY + Math.sin(angle) * 48,
-        };
-      }
+    const selfNodes = nodes.filter((n) => n.role === "self");
+    selfNodes.forEach((n, idx) => {
+      const angle = (idx / Math.max(selfNodes.length, 1)) * Math.PI * 2 - Math.PI / 2;
+      positions[n.id] = {
+        x: centerX + Math.cos(angle) * 52,
+        y: centerY + Math.sin(angle) * 52,
+        r: 20,
+      };
     });
-
     const others = nodes.filter((n) => n.role !== "self");
     others.forEach((n, i) => {
       const angle = (i / Math.max(others.length, 1)) * Math.PI * 2 - Math.PI / 2;
       positions[n.id] = {
         x: centerX + Math.cos(angle) * radius,
         y: centerY + Math.sin(angle) * radius,
+        r: 15,
       };
     });
+    return positions;
+  }
 
-    edges.forEach((e) => {
+  function drawNetworkFrame(canvas, data, tick) {
+    const ctx = canvas.getContext("2d");
+    const w = canvas.width;
+    const h = canvas.height;
+    const nodes = data.nodes || [];
+    const edges = data.edges || [];
+    const positions = layoutNetworkNodes(nodes, w, h);
+
+    const grad = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w * 0.55);
+    grad.addColorStop(0, "#141824");
+    grad.addColorStop(1, "#0a0c12");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.strokeStyle = "rgba(91, 141, 239, 0.06)";
+    ctx.lineWidth = 1;
+    for (let x = 40; x < w; x += 40) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, h);
+      ctx.stroke();
+    }
+    for (let y = 40; y < h; y += 40) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+    }
+
+    edges.forEach((e, i) => {
       const a = positions[e.from];
       const b = positions[e.to];
       if (!a || !b) return;
       const discovered = e.state === "discovered";
-      ctx.strokeStyle = discovered
-        ? "#8b95a8"
+      const linked = e.state === "up" || e.state === "linked" || e.state === "active";
+      const pulse = linked ? 0.65 + 0.35 * Math.sin(tick * 0.04 + i) : 1;
+      const color = discovered
+        ? "rgba(139, 149, 168, 0.45)"
         : e.transport === "serial"
-          ? "#3ecf8e"
-          : "#5b8def";
-      ctx.lineWidth = discovered ? 1.5 : 2;
-      ctx.setLineDash(discovered ? [6, 5] : []);
-      ctx.globalAlpha = discovered ? 0.5 : 1;
+          ? `rgba(62, 207, 142, ${0.55 * pulse})`
+          : `rgba(91, 141, 239, ${0.7 * pulse})`;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = linked ? 2.5 : discovered ? 1.5 : 2;
+      ctx.setLineDash(discovered ? [7, 6] : []);
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
+      if (linked) {
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        ctx.fillStyle = e.transport === "serial" ? "#3ecf8e" : "#5b8def";
+        ctx.beginPath();
+        ctx.arc(mx, my, 3 + Math.sin(tick * 0.06 + i) * 1.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
     });
 
     nodes.forEach((n) => {
       const p = positions[n.id];
       if (!p) return;
-      const color = n.role === "self" ? "#5b8def" : n.role === "trusted" ? "#3ecf8e" : "#f5a623";
-      ctx.fillStyle = color;
+      const linked = edges.some(
+        (e) =>
+          (e.from === n.id || e.to === n.id) &&
+          (e.state === "up" || e.state === "linked" || e.state === "active")
+      );
+      const roleColor =
+        n.role === "self" ? "#5b8def" : n.role === "trusted" ? "#3ecf8e" : "#f5a623";
+      if (linked || n.role === "self") {
+        const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r + 14);
+        glow.addColorStop(0, `${roleColor}55`);
+        glow.addColorStop(1, "transparent");
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r + 14, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = roleColor;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, n.role === "self" ? 18 : 14, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
       ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.15)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
       ctx.fillStyle = "#e8ecf4";
-      ctx.font = "11px DM Sans, sans-serif";
+      ctx.font = "600 11px DM Sans, sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(n.label.slice(0, 14), p.x, p.y + 32);
-      ctx.fillStyle = "#8b95a8";
-      ctx.font = "9px JetBrains Mono, monospace";
-      ctx.fillText(n.transport.toUpperCase(), p.x, p.y + 44);
+      ctx.fillText((n.label || "").slice(0, 16), p.x, p.y + p.r + 16);
+      const badge = (n.transport || "tcp").toUpperCase();
+      ctx.fillStyle = n.transport === "serial" ? "#7dffb8" : "#8eb8ff";
+      ctx.font = "500 9px JetBrains Mono, monospace";
+      ctx.fillText(badge, p.x, p.y + p.r + 28);
     });
+  }
+
+  async function renderNetworkGraph() {
+    const canvas = $("#network-canvas");
+    if (!canvas) return;
+    stopNetworkAnimation();
+    const res = await fetch("/api/network");
+    networkGraphData = await res.json();
+    let tick = 0;
+    const loop = () => {
+      if (!$("#network-modal")?.classList.contains("open")) {
+        stopNetworkAnimation();
+        return;
+      }
+      drawNetworkFrame(canvas, networkGraphData, tick);
+      tick += 1;
+      networkAnimFrame = requestAnimationFrame(loop);
+    };
+    loop();
   }
 
   function renderStatus(data) {
@@ -851,9 +929,8 @@
         const linked = isPeerLinked(p.hash_id);
         if (linked && !metrics.length) metrics.push("online");
         const endpoint = peerEndpoint(p);
-        const meta = metrics.length
-          ? `${p.transport.toUpperCase()} · ${endpoint} · ${metrics.join(" · ")}`
-          : `${p.transport.toUpperCase()} · ${endpoint}`;
+        const metricsStr = metrics.length ? ` · ${metrics.join(" · ")}` : "";
+        const meta = `${transportBadge(p.transport)}<span class="contact-endpoint">${escapeHtml(endpoint)}${escapeHtml(metricsStr)}</span>`;
         const trustBtn = state.peerTab === "discovered" && !trustedIds.has(p.hash_id)
           ? `<button type="button" class="contact-trust" data-trust="${p.hash_id}">Trust</button>` : "";
         const menuBtn = state.peerTab === "trusted"
@@ -930,6 +1007,9 @@
     const filename = meta.filename || m.text || "file";
     const speedStr = speed ? ` · ${Number(speed).toFixed(2)} MB/s` : "";
     const fileUrl = tid ? `/api/transfers/${encodeURIComponent(tid)}/file` : "";
+    const cancelled = stateLabel === "cancelled";
+    const failed = stateLabel === "failed";
+    const stateClass = cancelled ? " cancelled" : failed ? " failed" : "";
 
     if (m.msg_type === "image" && (stateLabel === "complete" || pct >= 100) && fileUrl) {
       return `<div class="file-bubble image-bubble">
@@ -941,15 +1021,41 @@
       </div>`;
     }
 
-    return `<div class="file-bubble" data-transfer="${escapeHtml(tid)}">
-      <div class="file-icon">📎</div>
+    return `<div class="file-bubble${stateClass}" data-transfer="${escapeHtml(tid)}">
+      <div class="file-icon">${cancelled ? "✕" : failed ? "!" : "📎"}</div>
       <div class="file-info">
         <div class="file-name">${escapeHtml(filename)}</div>
-        <div class="file-progress-meta">${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr} · ${stateLabel}</div>
-        <div class="progress-track chat-progress"><div class="progress-fill" style="width:${pct}%"></div></div>
+        <div class="file-progress-meta">${
+          cancelled
+            ? "Transfer cancelled"
+            : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr} · ${stateLabel}`
+        }</div>
+        <div class="progress-track chat-progress"><div class="progress-fill" style="width:${cancelled || failed ? 100 : pct}%"></div></div>
         ${stateLabel === "complete" && fileUrl ? `<a class="file-download" href="${fileUrl}" target="_blank" rel="noopener">Download</a>` : ""}
       </div>
     </div>`;
+  }
+
+  async function copyMessageText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("Copied to clipboard");
+    } catch (_) {
+      toast("Copy failed");
+    }
+  }
+
+  async function deleteMessage(messageId) {
+    if (!messageId) return;
+    const res = await fetch(`/api/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" });
+    const data = await res.json().catch(() => ({}));
+    if (data.deleted) {
+      state.messageCache = state.messageCache.filter((m) => m.id !== messageId);
+      renderMessages(state.messageCache);
+      toast("Message deleted");
+    } else {
+      toast("Could not delete message");
+    }
   }
 
   function renderMessages(msgs) {
@@ -965,10 +1071,16 @@
         lastDate = date;
       }
       const out = isOutgoing(m.sender_hash);
-      const body = (m.msg_type === "file" || m.msg_type === "image")
-        ? renderFileBubble(m, out)
-        : escapeHtml(m.text);
+      const isFile = m.msg_type === "file" || m.msg_type === "image";
+      const body = isFile ? renderFileBubble(m, out) : escapeHtml(m.text);
+      const actions = isFile
+        ? ""
+        : `<div class="bubble-actions">
+            <button type="button" class="bubble-action" data-copy="${escapeHtml(m.id)}" title="Copy">Copy</button>
+            <button type="button" class="bubble-action danger" data-del-msg="${escapeHtml(m.id)}" title="Delete">Delete</button>
+          </div>`;
       html += `<div class="bubble-row ${out ? "out" : "in"}" data-msg-id="${escapeHtml(m.id)}">
+        ${actions}
         <div class="bubble ${out ? "out" : "in"} ${m.msg_type === "image" ? "image" : ""}">
           ${body}
           <div class="bubble-meta">
@@ -980,6 +1092,19 @@
     });
 
     el.innerHTML = html || '<div class="empty-hint" style="text-align:center;padding:2rem">No messages yet — say hello!</div>';
+    el.querySelectorAll("[data-copy]").forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const msg = state.messageCache.find((m) => m.id === btn.dataset.copy);
+        if (msg?.text) copyMessageText(msg.text);
+      });
+    });
+    el.querySelectorAll("[data-del-msg]").forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        deleteMessage(btn.dataset.delMsg);
+      });
+    });
     el.scrollTop = el.scrollHeight;
   }
 
@@ -1088,17 +1213,29 @@
     const dock = $("#transfer-dock");
     if (!dock || !data) return;
     const active = ["transferring", "accepted", "offered"].includes(data.state);
-    if (!active) {
+    const cancelled = data.state === "cancelled";
+    if (!active && !cancelled) {
       hideTransferDockIfDone(data.id);
       return;
     }
     dock.classList.remove("hidden");
+    dock.classList.toggle("cancelled", cancelled);
     const pct = data.size ? Math.min(100, Math.round((data.offset / data.size) * 100)) : 0;
     const speed = data.speed_mbps ? `${Number(data.speed_mbps).toFixed(2)} MB/s` : "";
-    $("#transfer-dock-title").textContent = data.filename || "Transfer";
-    $("#transfer-dock-meta").textContent = `${pct}% · ${formatBytes(data.offset)} / ${formatBytes(data.size)}${speed ? ` · ${speed}` : ""}`;
-    $("#transfer-dock-fill").style.width = `${pct}%`;
+    $("#transfer-dock-title").textContent = cancelled
+      ? `${data.filename || "Transfer"} — cancelled`
+      : (data.filename || "Transfer");
+    $("#transfer-dock-meta").textContent = cancelled
+      ? "Transfer was cancelled on both sides"
+      : `${pct}% · ${formatBytes(data.offset)} / ${formatBytes(data.size)}${speed ? ` · ${speed}` : ""}`;
+    $("#transfer-dock-fill").style.width = `${cancelled ? 100 : pct}%`;
     dock.dataset.transferId = data.id;
+    const cancelBtn = $("#transfer-dock-cancel");
+    if (cancelBtn) cancelBtn.classList.toggle("hidden", cancelled);
+    if (cancelled) {
+      setTimeout(() => hideTransferDockIfDone(data.id), 4000);
+      toast(`Transfer cancelled: ${data.filename || "file"}`);
+    }
   }
 
   function hideTransferDockIfDone(transferId) {
@@ -1307,7 +1444,10 @@
     $("#network-modal").classList.add("open");
     await renderNetworkGraph();
   });
-  $("#network-close")?.addEventListener("click", () => $("#network-modal").classList.remove("open"));
+  $("#network-close")?.addEventListener("click", () => {
+    $("#network-modal").classList.remove("open");
+    stopNetworkAnimation();
+  });
   $("#network-refresh")?.addEventListener("click", () => renderNetworkGraph());
 
   $("#identities")?.addEventListener("click", async (e) => {

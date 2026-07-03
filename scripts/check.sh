@@ -15,7 +15,10 @@ pip install -q -e ".[dev]"
 echo "==> ruff"
 ruff check srltcp tests
 
+echo "==> mypy"
+mypy srltcp
+
 echo "==> pytest"
-pytest tests/ -q
+pytest tests/ -q --cov=srltcp --cov-report=term-missing --cov-fail-under=0
 
 echo "All checks passed."
