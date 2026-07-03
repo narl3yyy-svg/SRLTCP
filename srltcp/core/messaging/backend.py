@@ -21,6 +21,7 @@ from srltcp.core.messaging.models import ChatMessage
 from srltcp.core.messaging.ping import PingMixin
 from srltcp.core.messaging.queue import QueueMixin
 from srltcp.core.messaging.relay import RelayMixin
+from srltcp.core.messaging.share_peer import SharePeerMixin
 from srltcp.core.messaging.transfer import TransferMixin
 from srltcp.core.protocol.messages import (
     Flags,
@@ -65,6 +66,7 @@ class MessagingBackend(
     PingMixin,
     QueueMixin,
     TransferMixin,
+    SharePeerMixin,
     RelayMixin,
 ):
     """Central messaging orchestrator."""
@@ -98,6 +100,7 @@ class MessagingBackend(
         self._init_ping()
         self._init_queue()
         self._init_transfer()
+        self._init_share_peer()
         self._init_relay()
 
     def set_callbacks(
@@ -389,6 +392,18 @@ class MessagingBackend(
                 body = link.crypto.decrypt(body)
             if link:
                 await self._handle_file_resume(link.hash_id, body)
+        elif msg_type == MessageType.SHARE_LIST:
+            link = self.get_link_by_peer_id(peer.peer_id)
+            if link and flags & Flags.ENCRYPTED:
+                body = link.crypto.decrypt(body)
+            if link:
+                await self._handle_share_list(link.hash_id, body)
+        elif msg_type == MessageType.SHARE_REQUEST:
+            link = self.get_link_by_peer_id(peer.peer_id)
+            if link and flags & Flags.ENCRYPTED:
+                body = link.crypto.decrypt(body)
+            if link:
+                await self._handle_share_request(link.hash_id, body)
         elif msg_type == MessageType.RELAY_ENVELOPE:
             await self._handle_relay_envelope(peer.peer_id, body)
         elif msg_type == MessageType.ROUTE_UPDATE:

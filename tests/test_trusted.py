@@ -36,3 +36,21 @@ def test_trusted_update_rename_and_block(tmp_path: Path) -> None:
     assert not store.is_trusted(peer.hash_id)
     store.update(peer.hash_id, blocked=False)
     assert store.is_trusted(peer.hash_id)
+
+
+def test_trusted_update_wan_fields(tmp_path: Path) -> None:
+    store = TrustedStore(path=tmp_path / "trusted.json")
+    peer = TrustedPeer(hash_id="jkl" * 10 + "jk", name="dave", transport="tcp")
+    store.add(peer)
+    updated = store.update(
+        peer.hash_id,
+        wan_host="8.8.8.8",
+        wan_port=9000,
+        wan_enabled=True,
+        connection_mode="wan",
+    )
+    assert updated is not None
+    assert updated.wan_host == "8.8.8.8"
+    assert updated.wan_port == 9000
+    assert updated.wan_enabled is True
+    assert updated.connection_mode == "wan"

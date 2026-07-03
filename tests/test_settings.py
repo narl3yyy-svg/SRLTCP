@@ -11,7 +11,7 @@ def test_settings_defaults(tmp_path: Path) -> None:
     store = SettingsStore(path=tmp_path / "settings.json")
     settings = store.load()
     assert settings.auto_announce is False
-    assert settings.version == "0.1.15"
+    assert settings.version == "0.1.16"
     assert settings.serial_baud == 57600
     assert settings.message_retention_hours == 168
 
@@ -33,3 +33,12 @@ def test_settings_persist(tmp_path: Path) -> None:
     assert loaded.display_name == "bob"
     assert loaded.auto_announce is True
     assert loaded.message_retention_hours == 24
+
+
+def test_wan_expose_port_persist(tmp_path: Path) -> None:
+    store = SettingsStore(path=tmp_path / "settings.json")
+    settings = store.load()
+    settings.wan_expose_port = True
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.wan_expose_port is True

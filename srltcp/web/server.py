@@ -93,7 +93,11 @@ def create_app(node: SRLTCPNode) -> web.Application:
         await broadcast_event(node, "transfer_complete", data)
 
     async def on_event(data: dict) -> None:
-        await broadcast_event(node, "transport_event", data)
+        kind = data.get("kind", "")
+        if kind in ("share_offer", "share_listing"):
+            await broadcast_event(node, kind, data)
+        else:
+            await broadcast_event(node, "transport_event", data)
 
     node.backend.set_callbacks(
         on_message=on_message,

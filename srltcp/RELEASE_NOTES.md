@@ -1,5 +1,24 @@
 # SRLTCP Release Notes
 
+## v0.1.16 (2026-07-03)
+
+### New features
+- **Drag-and-drop file send** — drop files from your file manager onto a contact in the sidebar to send to that peer
+- **E2EE shared folders** — offer a local folder to a trusted, connected peer; browse and download over the encrypted link (no plaintext HTTP exposure)
+- **Manual WAN peers** — add host/domain + port per trusted contact; connection modes `auto`, `lan`, or `wan`; outbound dials validated and rate-limited
+
+### Fixes
+- **Receiver transfer bar** — progress track removed when transfer completes; no stuck “transferring” state
+- **Share / WAN WebSocket events** — `share_offer` and `share_listing` broadcast correctly to the UI
+
+### Security
+- WAN hosts must be public IPs or valid domains; private/localhost addresses rejected
+- Share grants are recipient-bound with TTL; list/fetch denied without valid grant + handshake
+- Settings flag documents intent to port-forward TCP **7825** (encrypted messaging port)
+
+### Android
+- APK **0.1.16** (versionCode 14) built via CI on tag `v0.1.16`
+
 ## v0.1.15 (2026-07-03)
 
 ### Fixes

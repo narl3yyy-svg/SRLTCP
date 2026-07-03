@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING
 from srltcp.core.messaging.links import PeerLink
 from srltcp.core.protocol.crypto import KeyExchange, load_public_key
 from srltcp.core.protocol.messages import MessageType, build_header, decode_payload, encode_payload
+from srltcp.core.trusted import TrustedPeer
 from srltcp.utils.logging import get_logger
+from srltcp.utils.wan import resolve_wan_endpoint, validate_wan_port
 
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
@@ -25,6 +27,84 @@ class ConnectMixin:
     def _init_connect(self: MessagingBackend) -> None:
         self._pending_handshakes = {}
         self._connect_locks: dict[str, asyncio.Lock] = {}
+        self._last_wan_dial: dict[str, float] = {}
+
+    def _resolve_tcp_endpoint(
+        self: MessagingBackend,
+        hash_id: str,
+        *,
+        host: str | None,
+        port: int | None,
+        discovered: object | None,
+        trusted: object | None,
+    ) -> tuple[str, int] | None:
+        if host:
+            port_val = port or self.config.tcp_port
+            wan_dial = (
+                trusted
+                and isinstance(trusted, TrustedPeer)
+                and (
+                    trusted.connection_mode == "wan"
+                    or (trusted.wan_enabled and trusted.wan_host == host.strip())
+                )
+            )
+            try:
+                if wan_dial:
+                    endpoint = resolve_wan_endpoint(host, port_val)
+                    return endpoint.host, endpoint.port
+                return host.strip(), validate_wan_port(port_val)
+            except ValueError as exc:
+                log.warning("Invalid endpoint %s:%s — %s", host, port_val, exc)
+                return None
+
+        mode = "auto"
+        if trusted and isinstance(trusted, TrustedPeer):
+            mode = trusted.connection_mode or "auto"
+
+        use_wan = mode == "wan" or (
+            mode == "auto"
+            and trusted
+            and isinstance(trusted, TrustedPeer)
+            and trusted.wan_enabled
+            and trusted.wan_host
+        )
+
+        if use_wan and trusted and isinstance(trusted, TrustedPeer):
+            key = f"{trusted.wan_host}:{trusted.wan_port}"
+            now = time.monotonic()
+            last = self._last_wan_dial.get(key, 0.0)
+            if now - last < 1.0:
+                log.debug("WAN dial rate-limited for %s", key)
+            else:
+                self._last_wan_dial[key] = now
+            try:
+                endpoint = resolve_wan_endpoint(
+                    trusted.wan_host, trusted.wan_port or self.config.tcp_port
+                )
+                log.info(
+                    "WAN dial to %s (%s) for peer %s",
+                    endpoint.host,
+                    endpoint.resolved_ip,
+                    hash_id[:8],
+                )
+                return endpoint.host, endpoint.port
+            except ValueError as exc:
+                log.warning("WAN endpoint invalid for %s: %s", hash_id[:8], exc)
+                if mode == "wan":
+                    return None
+
+        lan_host = ""
+        lan_port: int | None = None
+        if discovered:
+            lan_host = getattr(discovered, "tcp_host", "") or ""
+            lan_port = getattr(discovered, "tcp_port", None)
+        if not lan_host and trusted and isinstance(trusted, TrustedPeer):
+            lan_host = trusted.tcp_host
+            lan_port = trusted.tcp_port or self.config.tcp_port
+        if lan_host:
+            port_val = lan_port or self.config.tcp_port
+            return lan_host, validate_wan_port(port_val)
+        return None
 
     async def _teardown_link(self: MessagingBackend, hash_id: str) -> None:
         link = self.get_link(hash_id)
@@ -143,18 +223,17 @@ class ConnectMixin:
         pub_bytes = bytes.fromhex(pub_hex) if pub_hex else b"\x00" * 32
 
         if transport == "tcp" and self.tcp_transport:
-            target_host = host or (
-                (discovered.tcp_host if discovered else "")
-                or (trusted.tcp_host if trusted else "")
+            endpoint = self._resolve_tcp_endpoint(
+                hash_id,
+                host=host,
+                port=port,
+                discovered=discovered,
+                trusted=trusted,
             )
-            target_port = port or (
-                (discovered.tcp_port if discovered else None)
-                or (trusted.tcp_port if trusted else None)
-                or self.config.tcp_port
-            )
-            if not target_host:
+            if not endpoint:
                 log.warning("No host for peer %s", hash_id[:8])
                 return False
+            target_host, target_port = endpoint
             peer_id = await self.tcp_transport.connect(target_host, target_port)
             link = PeerLink(
                 hash_id=hash_id,

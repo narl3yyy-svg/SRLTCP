@@ -77,10 +77,50 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         data = await request.json()
         name = data.get("name")
         blocked = data.get("blocked")
-        if name is None and blocked is None:
-            return web.json_response({"error": "name or blocked required"}, status=400)
+        wan_host = data.get("wan_host")
+        wan_port = data.get("wan_port")
+        wan_enabled = data.get("wan_enabled")
+        connection_mode = data.get("connection_mode")
+        tcp_host = data.get("tcp_host")
+        tcp_port = data.get("tcp_port")
+        if all(
+            v is None
+            for v in (
+                name,
+                blocked,
+                wan_host,
+                wan_port,
+                wan_enabled,
+                connection_mode,
+                tcp_host,
+                tcp_port,
+            )
+        ):
+            return web.json_response({"error": "no fields to update"}, status=400)
+        if wan_host:
+            from srltcp.utils.wan import validate_wan_host
+
+            try:
+                validate_wan_host(str(wan_host))
+            except ValueError as exc:
+                return web.json_response({"error": str(exc)}, status=400)
+        if wan_port is not None:
+            from srltcp.utils.wan import validate_wan_port
+
+            try:
+                wan_port = validate_wan_port(int(wan_port))
+            except (ValueError, TypeError) as exc:
+                return web.json_response({"error": str(exc)}, status=400)
         peer = node.backend.trusted.update(
-            hash_id, name=name if name is not None else None, blocked=blocked
+            hash_id,
+            name=name if name is not None else None,
+            blocked=blocked,
+            tcp_host=tcp_host,
+            tcp_port=int(tcp_port) if tcp_port is not None else None,
+            wan_host=str(wan_host).strip() if wan_host is not None else None,
+            wan_port=wan_port,
+            wan_enabled=wan_enabled,
+            connection_mode=connection_mode,
         )
         if not peer:
             return web.json_response({"error": "peer not found"}, status=404)
@@ -273,6 +313,72 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                 "Content-Disposition": disposition,
                 "Content-Type": _mime_for_filename(fname),
             },
+        )
+
+    async def share_grants(_request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "local": node.backend.list_local_share_grants(),
+                "remote": node.backend.list_remote_share_grants(),
+            }
+        )
+
+    async def share_peer_offer(request: web.Request) -> web.Response:
+        data = await request.json()
+        recipient = data.get("recipient_hash", "")
+        if not recipient:
+            return web.json_response({"error": "recipient_hash required"}, status=400)
+        if not node.backend.is_trusted(recipient):
+            return web.json_response({"error": "peer not trusted"}, status=403)
+        path_str = data.get("path", "")
+        folder = (
+            _validate_path(path_str, must_exist=True)
+            if path_str
+            else node.settings.resolved_shared_folder()
+        )
+        if not folder or not folder.is_dir():
+            return web.json_response({"error": "shared folder not found"}, status=404)
+        try:
+            result = await node.backend.offer_share_folder(
+                recipient, folder=folder, label=data.get("label", folder.name)
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        if not result:
+            return web.json_response({"error": "share offer failed — connect first"}, status=500)
+        return web.json_response(result)
+
+    async def share_peer_list(request: web.Request) -> web.Response:
+        data = await request.json()
+        owner = data.get("owner_hash", "")
+        grant_id = data.get("grant_id", "")
+        if not owner or not grant_id:
+            return web.json_response({"error": "owner_hash and grant_id required"}, status=400)
+        ok = await node.backend.request_share_list(owner, grant_id)
+        if not ok:
+            return web.json_response({"error": "list request failed"}, status=400)
+        return web.json_response({"requested": True})
+
+    async def share_peer_fetch(request: web.Request) -> web.Response:
+        data = await request.json()
+        owner = data.get("owner_hash", "")
+        grant_id = data.get("grant_id", "")
+        rel_path = data.get("path", "")
+        if not owner or not grant_id or not rel_path:
+            return web.json_response(
+                {"error": "owner_hash, grant_id, and path required"}, status=400
+            )
+        ok = await node.backend.request_share_file(owner, grant_id, rel_path)
+        if not ok:
+            return web.json_response({"error": "fetch request failed"}, status=400)
+        return web.json_response({"requested": True})
+
+    async def version_info(_request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "version": __version__,
+                "release_notes": "/api/release-notes",
+            }
         )
 
     async def create_share(request: web.Request) -> web.Response:
@@ -510,6 +616,11 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_get("/api/transfers", transfers)
     app.router.add_get("/api/transfers/{transfer_id}/file", transfer_file)
     app.router.add_post("/api/transfers/{transfer_id}/cancel", cancel_transfer)
+    app.router.add_get("/api/share/grants", share_grants)
+    app.router.add_post("/api/share/peer/offer", share_peer_offer)
+    app.router.add_post("/api/share/peer/list", share_peer_list)
+    app.router.add_post("/api/share/peer/fetch", share_peer_fetch)
+    app.router.add_get("/api/version", version_info)
     app.router.add_post("/api/share/create", create_share)
     app.router.add_get("/api/settings", settings_get)
     app.router.add_post("/api/settings", settings_post)

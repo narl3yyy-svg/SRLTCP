@@ -30,6 +30,11 @@
     mediaZoom: 1,
     transferPatchTimer: null,
     pendingTransferPatches: new Map(),
+    dropTargetHash: null,
+    wanModalTarget: null,
+    shareMode: "browse",
+    shareGrants: { local: [], remote: [] },
+    shareListing: { ownerHash: null, grantId: null, entries: [] },
   };
 
   const UNREAD_STORAGE_KEY = "srltcp-unread-v1";
@@ -326,6 +331,22 @@
             if (state.selectedPeer) {
               patchTransferBubble(data.id, data);
             }
+          }
+          break;
+        case "share_offer":
+          loadShareGrants().then(() => {
+            if (state.selectedPeer === data.hash_id) renderShareGrants();
+            toast(`Shared folder offered: ${data.label || "folder"}`);
+          });
+          break;
+        case "share_listing":
+          if (data.grant_id) {
+            state.shareListing = {
+              ownerHash: data.hash_id,
+              grantId: data.grant_id,
+              entries: data.entries || [],
+            };
+            renderShareEntries();
           }
           break;
         case "transport_event":
@@ -662,44 +683,297 @@
     }
   }
 
-  async function sendFile(file) {
-    if (!state.selectedPeer || !file) return;
-    if (!isPeerLinked(state.selectedPeer)) {
-      toast("Connecting before send…");
-      await connectPeer(state.selectedPeer, false);
-      if (!isPeerLinked(state.selectedPeer)) {
-        await connectPeer(state.selectedPeer, false);
-      }
-      if (!isPeerLinked(state.selectedPeer)) {
+  async function sendFileToPeer(file, hashId, peerName) {
+    if (!hashId || !file) return false;
+    if (!isPeerLinked(hashId)) {
+      toast(`Connecting to ${peerName || "peer"}…`);
+      await connectPeer(hashId, false);
+      if (!isPeerLinked(hashId)) {
         toast("Cannot send file — peer not connected");
-        return;
+        return false;
       }
     }
     toast(`Uploading ${file.name}…`);
     const form = new FormData();
     form.append("file", file);
     const up = await fetch("/api/upload", { method: "POST", body: form });
-    if (!up.ok) { toast("Upload failed"); return; }
+    if (!up.ok) {
+      toast("Upload failed");
+      return false;
+    }
     const uploaded = await up.json();
     const res = await fetch("/api/transfer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        recipient_hash: state.selectedPeer,
+        recipient_hash: hashId,
         path: uploaded.path,
-        transport: peerTransport(state.selectedPeer),
+        transport: peerTransport(hashId),
       }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       toast(err.error || "File send failed");
-    } else {
-      const sent = await res.json();
-      if (sent.id) updateTransferDock(sent);
-      toast(`Sending ${file.name}…`);
-      loadMessages();
+      return false;
     }
+    const sent = await res.json();
+    if (sent.id) updateTransferDock(sent);
+    toast(`Sending ${file.name}…`);
+    if (state.selectedPeer === hashId) loadMessages();
     renderTransfers();
+    return true;
+  }
+
+  async function sendFile(file) {
+    if (!state.selectedPeer || !file) return;
+    await sendFileToPeer(file, state.selectedPeer, state.selectedName);
+  }
+
+  async function sendDroppedFiles(files, hashId, peerName) {
+    const list = [...files].filter((f) => f && f.size >= 0);
+    if (!list.length) return;
+    let sent = 0;
+    for (const file of list) {
+      if (await sendFileToPeer(file, hashId, peerName)) sent += 1;
+    }
+    if (sent > 1) toast(`Sent ${sent} files`);
+  }
+
+  function setupDragDrop() {
+    const contacts = $("#contacts");
+    const overlay = $("#drop-overlay");
+    if (!contacts) return;
+
+    document.addEventListener("dragenter", (e) => {
+      if (!e.dataTransfer?.types?.includes("Files")) return;
+      e.preventDefault();
+    });
+
+    contacts.addEventListener("dragover", (e) => {
+      if (!e.dataTransfer?.types?.includes("Files")) return;
+      e.preventDefault();
+      const contact = e.target.closest(".contact");
+      if (!contact?.dataset.hash) return;
+      state.dropTargetHash = contact.dataset.hash;
+      overlay?.classList.remove("hidden");
+      contacts.querySelectorAll(".contact").forEach((c) => c.classList.remove("drop-target"));
+      contact.classList.add("drop-target");
+      e.dataTransfer.dropEffect = "copy";
+    });
+
+    contacts.addEventListener("dragleave", (e) => {
+      if (e.relatedTarget && contacts.contains(e.relatedTarget)) return;
+      overlay?.classList.add("hidden");
+      contacts.querySelectorAll(".contact.drop-target").forEach((c) => c.classList.remove("drop-target"));
+      state.dropTargetHash = null;
+    });
+
+    contacts.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      overlay?.classList.add("hidden");
+      contacts.querySelectorAll(".contact.drop-target").forEach((c) => c.classList.remove("drop-target"));
+      const contact = e.target.closest(".contact");
+      const hashId = contact?.dataset.hash || state.dropTargetHash;
+      const peerName = contact?.dataset.name;
+      state.dropTargetHash = null;
+      if (!hashId || !e.dataTransfer?.files?.length) return;
+      await sendDroppedFiles(e.dataTransfer.files, hashId, peerName);
+    });
+  }
+
+  async function loadShareGrants() {
+    try {
+      const res = await fetch("/api/share/grants");
+      state.shareGrants = await res.json();
+    } catch (_) {
+      state.shareGrants = { local: [], remote: [] };
+    }
+  }
+
+  function renderShareGrants() {
+    const el = $("#share-grants-list");
+    if (!el) return;
+    const peer = state.selectedPeer;
+    const remote = (state.shareGrants.remote || []).filter(
+      (g) => !peer || g.owner_hash === peer
+    );
+    const local = (state.shareGrants.local || []).filter(
+      (g) => !peer || g.recipient_hash === peer
+    );
+    let html = "";
+    if (state.shareMode === "offer" && peer && isPeerLinked(peer)) {
+      const folder = state.settings.shared_folder || "";
+      html += `<div class="share-section">
+        <p class="share-section-title">Offer to ${escapeHtml(state.selectedName || "peer")}</p>
+        <p class="share-hint">Folder: ${escapeHtml(folder || "(default shared folder)")}</p>
+        <button type="button" class="action-btn" id="share-offer-btn">Offer shared folder (E2EE)</button>
+      </div>`;
+    }
+    if (remote.length) {
+      html += `<div class="share-section"><p class="share-section-title">Available from peers</p>`;
+      html += remote.map((g) => {
+        const owner = peerByHash(g.owner_hash);
+        return `<button type="button" class="share-grant-btn" data-owner="${escapeHtml(g.owner_hash)}" data-grant="${escapeHtml(g.grant_id)}">
+          ${escapeHtml(g.label || "shared")} · ${escapeHtml(owner?.name || g.owner_hash.slice(0, 8))}
+        </button>`;
+      }).join("");
+      html += "</div>";
+    }
+    if (local.length) {
+      html += `<div class="share-section"><p class="share-section-title">Your active offers</p>`;
+      html += local.map((g) => {
+        const recip = peerByHash(g.recipient_hash);
+        return `<div class="share-grant-item">${escapeHtml(g.label)} → ${escapeHtml(recip?.name || g.recipient_hash.slice(0, 8))}</div>`;
+      }).join("");
+      html += "</div>";
+    }
+    if (!html) {
+      html = '<div class="empty-hint">No shared folders yet. Connect to a trusted peer and offer a folder.</div>';
+    }
+    el.innerHTML = html;
+    $("#share-offer-btn")?.addEventListener("click", offerShareToSelected);
+    el.querySelectorAll(".share-grant-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        requestShareListing(btn.dataset.owner, btn.dataset.grant);
+      });
+    });
+  }
+
+  function renderShareEntries() {
+    const el = $("#share-entries");
+    if (!el) return;
+    const entries = state.shareListing.entries || [];
+    if (!entries.length) {
+      el.innerHTML = '<div class="empty-hint">Folder is empty or listing pending…</div>';
+      return;
+    }
+    el.innerHTML = entries.map((e) => {
+      if (e.type === "dir") {
+        return `<div class="share-entry dir">📁 ${escapeHtml(e.name)}</div>`;
+      }
+      return `<button type="button" class="share-entry file" data-path="${escapeHtml(e.path)}">
+        📄 ${escapeHtml(e.name)} <span class="share-size">${formatBytes(e.size || 0)}</span>
+      </button>`;
+    }).join("");
+    el.querySelectorAll(".share-entry.file").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        fetchShareFile(btn.dataset.path);
+      });
+    });
+  }
+
+  async function openShareModal(mode = "browse") {
+    state.shareMode = mode;
+    state.shareListing = { ownerHash: null, grantId: null, entries: [] };
+    await loadShareGrants();
+    renderShareGrants();
+    renderShareEntries();
+    $("#share-modal")?.classList.add("open");
+  }
+
+  function closeShareModal() {
+    $("#share-modal")?.classList.remove("open");
+  }
+
+  async function offerShareToSelected() {
+    if (!state.selectedPeer) {
+      toast("Select a peer first");
+      return;
+    }
+    if (!isPeerLinked(state.selectedPeer)) {
+      toast("Connect to peer before sharing");
+      await connectPeer(state.selectedPeer, false);
+      if (!isPeerLinked(state.selectedPeer)) return;
+    }
+    const res = await fetch("/api/share/peer/offer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recipient_hash: state.selectedPeer,
+        label: state.settings.shared_folder?.split("/").pop() || "shared",
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast(data.error || "Share offer failed");
+      return;
+    }
+    toast("Shared folder offered (E2EE)");
+    await loadShareGrants();
+    renderShareGrants();
+  }
+
+  async function requestShareListing(ownerHash, grantId) {
+    const res = await fetch("/api/share/peer/list", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ owner_hash: ownerHash, grant_id: grantId }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Could not list folder");
+      return;
+    }
+    state.shareListing = { ownerHash, grantId, entries: [] };
+    renderShareEntries();
+    toast("Loading folder listing…");
+  }
+
+  async function fetchShareFile(relPath) {
+    const { ownerHash, grantId } = state.shareListing;
+    if (!ownerHash || !grantId || !relPath) return;
+    const res = await fetch("/api/share/peer/fetch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ owner_hash: ownerHash, grant_id: grantId, path: relPath }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Download request failed");
+      return;
+    }
+    toast("Secure file transfer started");
+  }
+
+  function openWanModal(hashId) {
+    const peer = state.trusted.find((p) => p.hash_id === hashId);
+    if (!peer) return;
+    state.wanModalTarget = hashId;
+    $("#wan-host").value = peer.wan_host || "";
+    $("#wan-port").value = peer.wan_port || 7825;
+    $("#wan-enabled").checked = !!peer.wan_enabled;
+    $("#wan-mode").value = peer.connection_mode || "auto";
+    $("#wan-modal")?.classList.add("open");
+    closeContactMenu();
+  }
+
+  function closeWanModal() {
+    $("#wan-modal")?.classList.remove("open");
+    state.wanModalTarget = null;
+  }
+
+  async function saveWanSettings() {
+    const hashId = state.wanModalTarget;
+    if (!hashId) return;
+    const body = {
+      wan_host: $("#wan-host").value.trim(),
+      wan_port: parseInt($("#wan-port").value, 10) || 7825,
+      wan_enabled: $("#wan-enabled").checked,
+      connection_mode: $("#wan-mode").value,
+    };
+    const res = await fetch(`/api/trusted/${encodeURIComponent(hashId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast(data.error || "Failed to save WAN settings");
+      return;
+    }
+    toast("WAN endpoint saved");
+    closeWanModal();
+    loadPeers();
   }
 
   /* ── Render ── */
@@ -752,6 +1026,7 @@
     $("#set-incoming").value = settings.incoming_files_dir || "";
     $("#set-shared").value = settings.shared_folder || "";
     $("#set-auto-announce").checked = !!settings.auto_announce;
+    if ($("#set-wan-expose")) $("#set-wan-expose").checked = !!settings.wan_expose_port;
     if ($("#set-enable-serial")) $("#set-enable-serial").checked = !!settings.enable_serial;
     loadSerialSettings(settings.serial_port || "", settings.serial_baud || 57600);
     if ($("#set-timezone")) {
@@ -1216,9 +1491,13 @@
         <div class="file-progress-meta">${
           cancelled
             ? "Transfer cancelled"
-            : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr} · ${stateLabel}`
+            : failed
+              ? "Transfer failed"
+              : stateLabel === "complete"
+                ? `${formatBytes(size)} · complete`
+                : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr}`
         }</div>
-        <div class="progress-track chat-progress"><div class="progress-fill" style="width:${cancelled || failed ? 100 : pct}%"></div></div>
+        ${progressBar}
         ${stateLabel === "complete" ? downloadLink : ""}
       </div>
     </div>`;
@@ -1268,11 +1547,15 @@
           ? `${formatBytes(size)} · complete`
           : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speed}`;
     }
-    bubble.querySelectorAll(".progress-fill").forEach((fill) => {
-      fill.style.width = `${cancelled || failed ? 100 : pct}%`;
-    });
-    if (stateLabel === "complete") {
+    if (stateLabel === "complete" || cancelled || failed) {
+      bubble.querySelectorAll(".progress-track, .chat-progress").forEach((el) => el.remove());
       bubble.classList.remove("cancelled", "failed");
+      if (cancelled) bubble.classList.add("cancelled");
+      if (failed) bubble.classList.add("failed");
+    } else {
+      bubble.querySelectorAll(".progress-fill").forEach((fill) => {
+        fill.style.width = `${pct}%`;
+      });
     }
     return true;
   }
@@ -1682,6 +1965,7 @@
       shared_folder: $(`#${prefix}-shared`)?.value.trim() || "",
       lan_ip: $(`#${prefix}-lan-ip`)?.value || "",
       auto_announce: $(`#${prefix}-auto-announce`)?.checked || false,
+      wan_expose_port: $("#set-wan-expose")?.checked || false,
       enable_serial: $("#set-enable-serial")?.checked || false,
       serial_port: $("#set-serial-port")?.value || "",
       serial_baud: parseInt($("#set-serial-baud")?.value || "57600", 10),
@@ -1787,6 +2071,14 @@
       case "delete":
         await deleteTrusted(hashId, name);
         break;
+      case "wan":
+        openWanModal(hashId);
+        break;
+      case "share":
+        closeContactMenu();
+        if (state.selectedPeer !== hashId) selectPeer(hashId, name);
+        openShareModal("browse");
+        break;
       default:
         break;
     }
@@ -1799,6 +2091,16 @@
 
   $("#folder-cancel")?.addEventListener("click", () => $("#folder-modal").classList.remove("open"));
   $("#release-close")?.addEventListener("click", () => $("#release-modal").classList.remove("open"));
+  $("#btn-share-folder")?.addEventListener("click", () => openShareModal("offer"));
+  $("#share-close")?.addEventListener("click", closeShareModal);
+  $("#share-modal")?.addEventListener("click", (e) => {
+    if (e.target.id === "share-modal") closeShareModal();
+  });
+  $("#wan-save")?.addEventListener("click", saveWanSettings);
+  $("#wan-cancel")?.addEventListener("click", closeWanModal);
+  $("#wan-modal")?.addEventListener("click", (e) => {
+    if (e.target.id === "wan-modal") closeWanModal();
+  });
   $("#media-lightbox-close")?.addEventListener("click", closeMediaLightbox);
   $("#media-lightbox")?.addEventListener("click", (e) => {
     if (e.target.id === "media-lightbox") closeMediaLightbox();
@@ -1838,6 +2140,7 @@
   });
 
   /* ── Init ── */
+  setupDragDrop();
   connectWs();
   pollSystemStats();
   setInterval(pollSystemStats, 10000);
@@ -1862,6 +2165,13 @@
       showSetupIfNeeded(s);
       fillSettingsForm(s);
       applyClockVisibility();
+    })
+    .catch(() => {});
+
+  fetch("/api/version")
+    .then((r) => r.json())
+    .then((data) => {
+      if (data.version) $("#stat-version").textContent = `v${data.version}`;
     })
     .catch(() => {});
 

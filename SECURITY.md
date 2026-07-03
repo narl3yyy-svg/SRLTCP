@@ -4,8 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.15  | :white_check_mark: |
-| < 0.1.15 | :x:               |
+| 0.1.16  | :white_check_mark: |
+| < 0.1.16 | :x:               |
 
 ## Reporting a Vulnerability
 
@@ -50,6 +50,8 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 - Only trust peers whose hash IDs you have verified independently.
 - Keep SRLTCP updated; crypto and handshake behavior may change between minor versions.
 - Run the web UI on localhost; do not expose port 9876+ to untrusted networks without a reverse proxy and proper TLS.
+- For WAN use, forward only **TCP 7825** (encrypted messaging). Verify peer hash IDs before trusting manual endpoints.
+- Shared-folder grants are recipient-bound and time-limited; only use E2EE peer share for sensitive folders.
 - On Android, grant USB permissions only to known devices.
 
 ## Dependency Security

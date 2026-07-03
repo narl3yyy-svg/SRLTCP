@@ -6,7 +6,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.15
+**Current version:** 0.1.16
 
 ---
 
@@ -19,7 +19,9 @@
 | **Relay mode** | Optional headless server forwards opaque E2EE envelopes |
 | **Secure messaging** | Ed25519 identity + X25519 key exchange + AES-GCM |
 | **Fast file transfer** | Chunked streaming (256 KiB TCP / 8 KiB serial), zstd on TCP, resume support |
-| **Folder sharing** | Token-based HTTP browse/download API |
+| **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
+| **Drag-and-drop send** | Drop files onto a contact in the Web UI |
+| **WAN / manual peers** | Host + port per trusted contact; encrypted TCP 7825 |
 | **Web UI** | Localhost **HTTPS-only** chat UI (default port **9876**) |
 | **Settings** | First-run wizard + persistent config (folders, retention, LAN IP) |
 | **System stats** | CPU usage & temperature in the web UI status bar |
@@ -169,7 +171,8 @@ On first launch, the web UI shows a setup wizard. Settings persist in `~/.srltcp
 | Incoming files folder | Where received files are saved |
 | Shared folder | Default folder for browse/share |
 | LAN IP | Pinned interface for discovery & announce |
-| Auto-announce | Broadcast presence every 5 seconds |
+| Auto-announce | Broadcast presence every 5 seconds (LAN only) |
+| WAN port-forward | Acknowledge you will forward TCP **7825** for internet peers |
 | Timezone | Region for the status clock (time shown at top of sidebar) |
 | Show clock | Toggle live clock in the UI |
 
@@ -228,7 +231,9 @@ rsync -a --delete srltcp/ android/app/src/main/python/srltcp/
 cd android && ./gradlew assembleDebug
 ```
 
-Sideload `app/build/outputs/apk/debug/app-debug.apk` on arm64 devices.
+Sideload `app/build/outputs/apk/debug/SRLTCP-0.1.16.apk` (or latest from [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases)) on arm64 devices.
+
+**CI builds:** Push tag `v0.1.16` (or run the **Build Android APK** workflow manually) to produce a release APK attached to GitHub Releases.
 
 **Troubleshooting:**
 
@@ -240,6 +245,8 @@ Sideload `app/build/outputs/apk/debug/app-debug.apk` on arm64 devices.
 | Notification permission denied (Android 13+) | Grant when prompted, or enable in system settings — required for foreground service |
 | No peers / identities after reinstall | Uninstall clears app data; identities are stored in the app files directory |
 | USB serial not detected | USB-OTG adapter + cable; grant USB permission when device attaches |
+| Shared folder / WAN missing | Rebuild APK after `rsync`; ensure backend is **0.1.16+** (check status bar version) |
+| WAN peer won't connect | Confirm TCP 7825 forwarded on owner; use **WAN only** mode off-LAN; verify hash ID |
 
 ```bash
 adb logcat -s SRLTCP SRLTCPService
@@ -312,18 +319,95 @@ curl -k https://127.0.0.1:9876/api/transfers
 
 Transfers are **resumable** — if interrupted, the receiver's partial file offset is used on resume via `FILE_RESUME`.
 
-In the web UI, images and videos preview in chat during transfer. Click to enlarge in a lightbox; use **Download** to save the file. The transfer dock (progress bar above the composer) hides automatically when no transfers are active. Both peers must run **v0.1.15+** for best file-transfer stability.
+In the web UI, images and videos preview in chat during transfer. Click to enlarge in a lightbox; use **Download** to save the file. The transfer dock (progress bar above the composer) hides automatically when no transfers are active. **Drag files** from your file manager onto a contact in the sidebar to send. Both peers must run **v0.1.16+** for shared-folder and WAN features.
 
-### Folder sharing
+### E2EE shared folder (recommended)
+
+Share a folder with a **trusted, connected** peer over the encrypted link — no plaintext folder listing on the network.
+
+**Owner (machine A):**
+
+1. Open **Settings → Folders** and set **Default shared folder** (or use the default `~/.srltcp/shared`).
+2. Trust and connect to the peer on the LAN (or WAN — see below).
+3. Open the chat with that peer → click the **folder icon** in the header, or right-click the contact → **Share folder (E2EE)** → **Offer shared folder**.
+4. The peer receives an encrypted grant (2-hour TTL, bound to their hash ID).
+
+**Recipient (machine B):**
+
+1. When connected, open **Share folder** for that contact.
+2. Select the offered grant → browse files (listing arrives over E2EE).
+3. Click a file to start a **secure file transfer** (same encrypted pipeline as chat attachments).
+
+**API (peer share):**
+
+```bash
+# Offer folder to trusted peer (must be connected)
+curl -k -X POST https://127.0.0.1:9876/api/share/peer/offer \
+  -H 'Content-Type: application/json' \
+  -d '{"recipient_hash":"<peer_hash>","path":"/home/user/shared"}'
+
+# List remote folder (async — results via WebSocket share_listing)
+curl -k -X POST https://127.0.0.1:9876/api/share/peer/list \
+  -H 'Content-Type: application/json' \
+  -d '{"owner_hash":"<owner_hash>","grant_id":"<grant_id>"}'
+
+# Request file download
+curl -k -X POST https://127.0.0.1:9876/api/share/peer/fetch \
+  -H 'Content-Type: application/json' \
+  -d '{"owner_hash":"<owner_hash>","grant_id":"<grant_id>","path":"docs/readme.txt"}'
+```
+
+### Legacy HTTP share sessions (localhost only)
+
+For local tooling, token-based HTTP browse remains available on the **localhost HTTPS** UI only:
 
 ```bash
 curl -k -X POST https://127.0.0.1:9876/api/share/create \
   -H 'Content-Type: application/json' \
   -d '{"path":"/home/user/shared"}'
 
-# Browse (from peer)
 curl -k "https://127.0.0.1:9876/api/share/<session_id>/list?token=<token>"
 ```
+
+### WAN / manual peer connections (internet)
+
+SRLTCP does **not** broadcast your node to the public internet. WAN connectivity is **opt-in and manual** per trusted contact.
+
+#### Step 1 — Expose the encrypted messaging port (owner side)
+
+SRLTCP listens on **TCP 7825** by default for encrypted P2P messaging (handshake + E2EE payloads). This is **not** a VPN; it is an application-level encrypted channel similar in spirit to a WireGuard tunnel endpoint, without routing all system traffic.
+
+1. On the machine that will **receive** inbound WAN connections, open **Settings → Network**.
+2. Enable **I will port-forward TCP 7825 for WAN peers** (documents your intent).
+3. On your router/firewall, forward **TCP 7825** → that machine's LAN IP.
+4. Note your **public IP** or a **DNS name** pointing to it (e.g. `home.example.com`).
+
+**Safety:** Only forward **7825**, not the Web UI port (9876). The web UI stays on **localhost HTTPS** only.
+
+#### Step 2 — Configure the remote peer (dialer side)
+
+1. Trust the peer whose hash ID you verified **out-of-band** (in person, phone, etc.).
+2. Right-click the trusted contact → **WAN / manual endpoint**.
+3. Enter **Host or domain** (public IP or FQDN) and **TCP port** (default 7825).
+4. Enable **WAN endpoint** and choose connection mode:
+   - **Auto** — try LAN discovery first, then WAN if enabled
+   - **LAN only** — never use the WAN endpoint
+   - **WAN only** — dial only the manual endpoint (useful when off-LAN)
+5. Save and open the chat — SRLTCP dials the endpoint and completes the same E2EE handshake as on LAN.
+
+#### Security precautions
+
+| Risk | Mitigation |
+|------|------------|
+| Connecting to the wrong host | Verify peer **hash ID** before trusting; WAN host is stored per contact |
+| Private IP as WAN endpoint | Rejected — use LAN mode for `10.x` / `192.168.x` addresses |
+| Localhost / loopback WAN | Rejected |
+| DNS rebinding to private IP | Resolved address must be public |
+| WAN connection storms | Outbound WAN dials are rate-limited (1/s per endpoint) |
+| Web UI exposed to internet | **Do not** port-forward 9876; UI is localhost-only by design |
+| Untrusted inbound traffic | Only trusted peers complete handshake; others are ignored after crypto verify |
+
+**Both peers should run v0.1.16+** for WAN endpoint fields and share-folder messages.
 
 ---
 
@@ -372,6 +456,11 @@ pytest tests/ -v                # unit tests only
 ## Changelog
 
 See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
+
+### v0.1.16
+
+- Drag-and-drop file send; E2EE shared folders; manual WAN peer endpoints (TCP 7825)
+- Receiver transfer bar clears on complete; share/WAN WebSocket events; security hardening
 
 ### v0.1.15
 

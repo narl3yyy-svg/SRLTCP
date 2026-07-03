@@ -19,6 +19,10 @@ class TrustedPeer:
     public_key: str = ""
     tcp_host: str = ""
     tcp_port: int = 7825
+    wan_host: str = ""
+    wan_port: int = 7825
+    wan_enabled: bool = False
+    connection_mode: str = "auto"  # auto | lan | wan
     blocked: bool = False
     added_at: float = field(default_factory=time.time)
 
@@ -74,6 +78,12 @@ class TrustedStore:
         *,
         name: str | None = None,
         blocked: bool | None = None,
+        tcp_host: str | None = None,
+        tcp_port: int | None = None,
+        wan_host: str | None = None,
+        wan_port: int | None = None,
+        wan_enabled: bool | None = None,
+        connection_mode: str | None = None,
     ) -> TrustedPeer | None:
         peer = self._peers.get(hash_id)
         if not peer:
@@ -82,5 +92,17 @@ class TrustedStore:
             peer.name = name.strip() or peer.name
         if blocked is not None:
             peer.blocked = blocked
+        if tcp_host is not None:
+            peer.tcp_host = tcp_host.strip()
+        if tcp_port is not None:
+            peer.tcp_port = tcp_port
+        if wan_host is not None:
+            peer.wan_host = wan_host.strip()
+        if wan_port is not None:
+            peer.wan_port = wan_port
+        if wan_enabled is not None:
+            peer.wan_enabled = wan_enabled
+        if connection_mode is not None and connection_mode in ("auto", "lan", "wan"):
+            peer.connection_mode = connection_mode
         self.save()
         return peer
