@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "srltcp"
+version = "0.1.0"
+description = "Fast, secure peer-to-peer communication and file transfer over Serial (USB) and TCP/IP"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "SRLTCP Contributors" }]
+keywords = ["p2p", "file-transfer", "serial", "tcp", "encryption", "relay"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications",
+    "Topic :: System :: Networking",
+]
+dependencies = [
+    "aiohttp>=3.9",
+    "aiofiles>=24.1",
+    "cryptography>=42.0",
+    "pyserial>=3.5",
+    "zstandard>=0.22",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.8",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.3",
+]
+android = [
+    "chaquopy",
+]
+
+[project.scripts]
+srltcp = "srltcp.app:main"
+
+[project.urls]
+Homepage = "https://github.com/narl3yyy-svg/SRLTCP"
+Repository = "https://github.com/narl3yyy-svg/SRLTCP"
+Issues = "https://github.com/narl3yyy-svg/SRLTCP/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["srltcp*"]
+
+[tool.setuptools.package-data]
+srltcp = ["web/static/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
