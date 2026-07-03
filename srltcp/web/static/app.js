@@ -316,7 +316,6 @@
   function applyClockVisibility() {
     const show = state.settings.show_clock !== false;
     $("#header-clock-row")?.classList.toggle("hidden", !show);
-    $("#stat-clock")?.classList.toggle("hidden", !show);
   }
 
   function closeContactMenu() {
