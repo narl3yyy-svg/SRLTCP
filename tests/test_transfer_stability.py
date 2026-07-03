@@ -87,3 +87,10 @@ def test_connection_send_lock_exists() -> None:
     peer = TransportPeer(peer_id="p", address="127.0.0.1:1", transport="tcp")
     conn = Connection(peer, MagicMock(), MagicMock())
     assert hasattr(conn, "_send_lock")
+
+
+def test_transfer_cooldown(backend: MessagingBackend) -> None:
+    hash_id = "c" * 32
+    assert backend.in_transfer_cooldown(hash_id) is False
+    backend._mark_transfer_cooldown(hash_id)
+    assert backend.in_transfer_cooldown(hash_id) is True

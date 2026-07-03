@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import socket
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -103,6 +104,23 @@ class Connection:
         self._on_close: Callable[[TransportPeer], Awaitable[None]] | None = None
         self._closed = False
         self._send_lock = asyncio.Lock()
+        self._enable_keepalive(writer)
+
+    @staticmethod
+    def _enable_keepalive(writer: asyncio.StreamWriter) -> None:
+        sock = writer.get_extra_info("socket")
+        if not sock:
+            return
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            if hasattr(socket, "TCP_KEEPIDLE"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+            if hasattr(socket, "TCP_KEEPINTVL"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+            if hasattr(socket, "TCP_KEEPCNT"):
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
+        except OSError:
+            pass
 
     def set_frame_handler(self, handler: FrameHandler) -> None:
         self._on_frame = handler

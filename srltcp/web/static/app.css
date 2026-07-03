@@ -245,8 +245,9 @@ body {
   padding: 0.7rem 0.75rem;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s, border-color 0.15s;
   border: 1px solid transparent;
+  background: rgba(24, 28, 40, 0.55);
 }
 
 .contact:hover { background: var(--surface-hover); }
@@ -260,6 +261,7 @@ body {
 .contact-name {
   font-weight: 600;
   font-size: 0.9rem;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -288,7 +290,7 @@ body {
 
 .contact-preview {
   font-size: 0.75rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
@@ -297,12 +299,34 @@ body {
   align-items: center;
   gap: 0.2rem;
 }
-.contact-endpoint { color: var(--text-muted); }
+.contact-endpoint { color: var(--text-secondary); }
 
 .contact-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
   font-family: var(--mono);
   font-size: 0.62rem;
-  color: var(--text-muted);
+  color: var(--text-secondary);
+}
+
+.contact-online { color: var(--success); font-size: 0.7rem; }
+
+.unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  font-family: var(--font);
+  line-height: 1;
+  box-shadow: 0 0 0 2px var(--bg-elevated);
 }
 
 .contacts-empty {
@@ -811,6 +835,10 @@ body {
   max-height: calc(92vh - 4rem);
   overflow: auto;
 }
+.lightbox-media {
+  transform-origin: center center;
+  transition: transform 0.12s ease-out;
+}
 .lightbox-image {
   max-width: 100%;
   max-height: calc(92vh - 5rem);
@@ -822,6 +850,29 @@ body {
   max-height: calc(92vh - 5rem);
   border-radius: 8px;
   background: #000;
+}
+.media-lightbox-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.media-zoom-btn {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.media-zoom-btn:hover { background: var(--surface-hover); }
+.media-zoom-level {
+  min-width: 3.5rem;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-family: var(--mono);
 }
 .media-lightbox-close {
   position: absolute;
@@ -972,6 +1023,11 @@ body {
   gap: 0.5rem;
   pointer-events: none;
 }
+
+.toast-info { border-left: 3px solid var(--accent); }
+.toast-success { border-left: 3px solid var(--success); }
+.toast-warning { border-left: 3px solid var(--warning); }
+.toast-error { border-left: 3px solid var(--danger); }
 
 .toast {
   background: var(--surface);

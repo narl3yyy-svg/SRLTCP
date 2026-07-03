@@ -236,7 +236,7 @@ class MessagingBackend(
             return
 
         async def _reconnect() -> None:
-            delay = 2.0
+            delay = 5.0 if self.in_transfer_cooldown(hash_id) else 2.0
             try:
                 for attempt in range(6):
                     await asyncio.sleep(delay)
@@ -289,25 +289,36 @@ class MessagingBackend(
                 if self.config.relay_mode:
                     self.routing.remove_for_peer(event.peer.peer_id)
                 transfer_active = self.has_active_transfer_for(link_hash)
-                if transfer_active:
+                in_cooldown = self.in_transfer_cooldown(link_hash)
+                if transfer_active or in_cooldown:
                     log.info(
-                        "Suppressing link_down for %s — file transfer in progress",
+                        "Suppressing link_down for %s — %s",
                         link_hash[:8],
+                        "transfer active" if transfer_active else "post-transfer cooldown",
                     )
                 elif self._on_link_down:
                     await self._on_link_down(link_hash, link_name)
                 if not transfer_active:
                     self._schedule_reconnect(link_hash)
         if self._on_event:
-            await self._on_event(
-                {
-                    "kind": event.kind,
-                    "peer": event.peer.address if event.peer else None,
-                    "hash_id": link_hash,
-                    "name": link_name,
-                    "error": event.error,
-                }
+            suppress_ui = (
+                event.kind == "disconnected"
+                and link_hash
+                and (
+                    self.has_active_transfer_for(link_hash)
+                    or self.in_transfer_cooldown(link_hash)
+                )
             )
+            if not suppress_ui:
+                await self._on_event(
+                    {
+                        "kind": event.kind,
+                        "peer": event.peer.address if event.peer else None,
+                        "hash_id": link_hash,
+                        "name": link_name,
+                        "error": event.error,
+                    }
+                )
 
     async def _on_transport_frame(self, peer: TransportPeer, payload: bytes) -> None:
         try:

@@ -5,8 +5,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-if [[ ! -d .venv ]]; then
+if [[ ! -f .venv/bin/activate ]]; then
   echo "[srltcp] Creating virtual environment..."
+  rm -rf .venv
   python3 -m venv .venv
 fi
 

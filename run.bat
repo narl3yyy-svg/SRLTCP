@@ -3,8 +3,9 @@ setlocal EnableDelayedExpansion
 
 cd /d "%~dp0"
 
-if not exist .venv (
+if not exist .venv\Scripts\activate.bat (
     echo [srltcp] Creating virtual environment...
+    if exist .venv rmdir /s /q .venv
     python -m venv .venv
 )
 

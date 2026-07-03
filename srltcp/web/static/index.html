@@ -307,7 +307,7 @@
         <span class="stat-value">—</span>
       </div>
       <div class="stat-item hidden" id="stat-clock" aria-hidden="true"></div>
-      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.14</div>
+      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.15</div>
     </footer>
 
     <div class="modal-overlay" id="folder-modal">
@@ -343,6 +343,12 @@
     <div class="modal-overlay" id="media-lightbox" aria-hidden="true">
       <div class="media-lightbox-panel">
         <button type="button" class="media-lightbox-close" id="media-lightbox-close" aria-label="Close">&times;</button>
+        <div class="media-lightbox-toolbar">
+          <button type="button" class="media-zoom-btn" id="media-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
+          <span class="media-zoom-level" id="media-zoom-level">100%</span>
+          <button type="button" class="media-zoom-btn" id="media-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+          <button type="button" class="media-zoom-btn" id="media-zoom-reset" title="Reset zoom" aria-label="Reset zoom">Reset</button>
+        </div>
         <div id="media-lightbox-body" class="media-lightbox-body"></div>
         <a class="file-download media-lightbox-download" id="media-lightbox-download" href="#" download target="_blank" rel="noopener">Download</a>
       </div>

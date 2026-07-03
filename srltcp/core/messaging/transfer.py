@@ -16,6 +16,7 @@ from srltcp.core.messaging.constants import (
     COMPRESS_THRESHOLD,
     SERIAL_CHUNK_DELAY,
     SERIAL_CHUNK_SIZE,
+    TRANSFER_COOLDOWN,
 )
 from srltcp.core.messaging.models import FileTransfer, TransferState
 from srltcp.core.protocol.messages import (
@@ -54,6 +55,22 @@ class TransferMixin:
             self._transfer_dir = data_dir() / "transfers"
         ensure_dir(self._transfer_dir)
         self._transfer_started: dict[str, float] = {}
+        self._transfer_cooldown_until: dict[str, float] = {}
+
+    def _mark_transfer_cooldown(self: MessagingBackend, *hash_ids: str) -> None:
+        deadline = time.monotonic() + TRANSFER_COOLDOWN
+        for hash_id in hash_ids:
+            if hash_id:
+                self._transfer_cooldown_until[hash_id] = deadline
+
+    def in_transfer_cooldown(self: MessagingBackend, hash_id: str) -> bool:
+        deadline = self._transfer_cooldown_until.get(hash_id)
+        if not deadline:
+            return False
+        if time.monotonic() >= deadline:
+            self._transfer_cooldown_until.pop(hash_id, None)
+            return False
+        return True
 
     def _maybe_compress(
         self: MessagingBackend, data: bytes, *, transport: str = "tcp"
@@ -247,6 +264,7 @@ class TransferMixin:
             await self._send_raw(link.transport_peer_id, link.transport, packet)
             transfer.state = TransferState.COMPLETE
             log.info("Transfer complete: %s", transfer.filename)
+            self._mark_transfer_cooldown(hash_id, transfer.recipient_hash)
             if self._on_transfer_complete:
                 await self._on_transfer_complete(transfer.to_dict())
             await self._update_file_message(transfer.to_dict())
@@ -313,6 +331,7 @@ class TransferMixin:
             log.error("SHA256 mismatch for %s", transfer.filename)
             return
         transfer.state = TransferState.COMPLETE
+        self._mark_transfer_cooldown(hash_id, transfer.sender_hash)
         if self._on_transfer_complete:
             await self._on_transfer_complete(transfer.to_dict())
         await self._update_file_message(transfer.to_dict())

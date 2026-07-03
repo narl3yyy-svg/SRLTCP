@@ -1,5 +1,21 @@
 # SRLTCP Release Notes
 
+## v0.1.15 (2026-07-03)
+
+### Fixes
+- **UI flicker** — incremental transfer bubble updates instead of full chat re-render; throttled progress patches preserve image/video elements
+- **Transfer dock** — hides immediately on complete/cancel for sender and receiver
+- **Connection stability** — 45s post-transfer cooldown suppresses spurious link_down/reconnect; TCP keepalive; client ignores transient disconnects during cooldown
+- **Media viewer** — zoom in/out/reset and mouse-wheel zoom in lightbox
+
+### UX
+- **Unread counters** — badge on trusted peers; cleared when chat is opened
+- **Trusted peer list** — improved default contrast and readability
+- **Notifications** — typed toasts; browser notifications when tab is in background
+
+### Android
+- WebView pause/resume lifecycle; service thread guard; no WebView destroy on rotation
+
 ## v0.1.14 (2026-07-03)
 
 ### Fixes

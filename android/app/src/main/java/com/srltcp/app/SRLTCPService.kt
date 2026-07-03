@@ -16,6 +16,9 @@ import com.chaquo.python.Python
  * Keeps the Python SRLTCP node alive while the WebView UI is open.
  */
 class SRLTCPService : Service() {
+    @Volatile
+    private var serverThread: Thread? = null
+
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
@@ -24,7 +27,10 @@ class SRLTCPService : Service() {
         } catch (e: Exception) {
             Log.w(TAG, "startForeground failed — running without notification", e)
         }
-        Thread {
+        if (serverThread?.isAlive == true) {
+            return
+        }
+        serverThread = Thread {
             try {
                 val py = Python.getInstance()
                 val filesDir = applicationContext.filesDir.absolutePath
@@ -55,7 +61,12 @@ class SRLTCPService : Service() {
                 Log.e(TAG, "Server start failed", e)
                 updateNotification("SRLTCP failed to start")
             }
-        }.start()
+        }.also { it.name = "srltcp-service"; it.start() }
+    }
+
+    override fun onDestroy() {
+        serverThread = null
+        super.onDestroy()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

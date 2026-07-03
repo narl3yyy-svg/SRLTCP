@@ -46,7 +46,7 @@ class AppSettings:
     show_clock: bool = True
     clock_source: str = "system"  # system | ntp
     ntp_server: str = "pool.ntp.org"
-    version: str = "0.1.14"
+    version: str = "0.1.15"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

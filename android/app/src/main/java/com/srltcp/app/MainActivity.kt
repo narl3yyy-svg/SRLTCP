@@ -235,11 +235,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        webView?.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        webView?.onResume()
+        if (webView?.url.isNullOrBlank() && statusView?.visibility == android.view.View.VISIBLE) {
+            scheduleLoad(300)
+        }
+    }
+
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        webView?.destroy()
-        webView = null
         if (isFinishing) {
+            webView?.destroy()
+            webView = null
             stopService(Intent(this, SRLTCPService::class.java))
         }
         super.onDestroy()

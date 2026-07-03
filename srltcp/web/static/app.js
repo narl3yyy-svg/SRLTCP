@@ -25,7 +25,15 @@
     timezones: [],
     contactMenuTarget: null,
     connectPending: new Map(),
+    unread: {},
+    transferCooldownUntil: {},
+    mediaZoom: 1,
+    transferPatchTimer: null,
+    pendingTransferPatches: new Map(),
   };
+
+  const UNREAD_STORAGE_KEY = "srltcp-unread-v1";
+  const TRANSFER_COOLDOWN_MS = 45000;
 
   const COLORS = [
     "#5b8def", "#3ecf8e", "#f5a623", "#f07178",
@@ -74,12 +82,75 @@
     return d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
   }
 
-  function toast(msg) {
+  function loadUnreadState() {
+    try {
+      const raw = localStorage.getItem(UNREAD_STORAGE_KEY);
+      if (raw) state.unread = JSON.parse(raw) || {};
+    } catch (_) {
+      state.unread = {};
+    }
+  }
+
+  function saveUnreadState() {
+    try {
+      localStorage.setItem(UNREAD_STORAGE_KEY, JSON.stringify(state.unread));
+    } catch (_) { /* ignore */ }
+  }
+
+  function unreadCount(hashId) {
+    return state.unread[hashId] || 0;
+  }
+
+  function bumpUnread(hashId) {
+    if (!hashId) return;
+    state.unread[hashId] = (state.unread[hashId] || 0) + 1;
+    saveUnreadState();
+    renderContacts();
+  }
+
+  function clearUnread(hashId) {
+    if (!hashId || !state.unread[hashId]) return;
+    delete state.unread[hashId];
+    saveUnreadState();
+    renderContacts();
+  }
+
+  function inTransferCooldown(hashId) {
+    const until = state.transferCooldownUntil[hashId];
+    return until && Date.now() < until;
+  }
+
+  function markTransferCooldown(...hashIds) {
+    const until = Date.now() + TRANSFER_COOLDOWN_MS;
+    hashIds.filter(Boolean).forEach((id) => {
+      state.transferCooldownUntil[id] = until;
+    });
+  }
+
+  function toast(msg, type = "info") {
     const el = document.createElement("div");
-    el.className = "toast";
+    el.className = `toast toast-${type}`;
     el.textContent = msg;
     $("#toasts").appendChild(el);
-    setTimeout(() => el.remove(), 3200);
+    setTimeout(() => el.remove(), type === "error" ? 5200 : 3600);
+  }
+
+  function notifyUser(title, body, { tag, silent = false } = {}) {
+    if (!silent) toast(body, "info");
+    if (!document.hidden || silent) return;
+    if (!("Notification" in window)) return;
+    const show = () => {
+      try {
+        new Notification(title, { body, tag, icon: "/static/app.css" });
+      } catch (_) { /* ignore */ }
+    };
+    if (Notification.permission === "granted") {
+      show();
+    } else if (Notification.permission !== "denied") {
+      Notification.requestPermission().then((p) => {
+        if (p === "granted") show();
+      });
+    }
   }
 
   function logActivity(msg) {
@@ -214,13 +285,21 @@
           logActivity(`Link up: ${data.name || data.hash_id?.slice(0, 8)}`);
           break;
         case "link_down":
+          if (inTransferCooldown(data.hash_id)) {
+            if (state.selectedPeer === data.hash_id) refreshPeerStatus(data.hash_id);
+            break;
+          }
           delete state.links[data.hash_id];
           delete state.linkMetrics[data.hash_id];
           loadPeers();
           if (state.selectedPeer === data.hash_id) {
             refreshPeerStatus(data.hash_id);
           }
-          toast(`Disconnected from ${data.name || data.hash_id?.slice(0, 8)}`);
+          notifyUser(
+            "Disconnected",
+            data.name || data.hash_id?.slice(0, 8) || "Peer",
+            { tag: `down-${data.hash_id}` }
+          );
           logActivity(`Link down: ${data.name || data.hash_id?.slice(0, 8)}`);
           break;
         case "peer_metrics":
@@ -237,13 +316,28 @@
           updateTransferDock(data);
           if (state.selectedPeer) updateChatTransfer(data);
           if (type === "transfer_complete") {
-            toast(`Transfer complete: ${data.filename || "file"}`);
-            setTimeout(() => hideTransferDockIfDone(data.id), 600);
+            markTransferCooldown(data.sender_hash, data.recipient_hash);
+            notifyUser(
+              "Transfer complete",
+              data.filename || "File received",
+              { tag: `transfer-${data.id}` }
+            );
+            hideTransferDockIfDone(data.id);
+            if (state.selectedPeer) {
+              patchTransferBubble(data.id, data);
+            }
           }
           break;
         case "transport_event":
           logActivity(`Transport: ${data.kind}${data.hash_id ? ` (${data.hash_id.slice(0, 8)})` : ""}`);
           if (data.kind === "disconnected" && data.hash_id) {
+            if (inTransferCooldown(data.hash_id)) {
+              if (state.selectedPeer === data.hash_id) {
+                updatePeerStatus("Encrypted · Online");
+                $(".status-dot").className = "status-dot online";
+              }
+              break;
+            }
             delete state.links[data.hash_id];
             delete state.linkMetrics[data.hash_id];
             if (state.selectedPeer === data.hash_id) refreshPeerStatus(data.hash_id);
@@ -443,13 +537,13 @@
   }
 
   function refreshPeerStatus(hashId) {
-    const linked = isPeerLinked(hashId);
+    const linked = isPeerLinked(hashId) || inTransferCooldown(hashId);
     const latency = formatLatency(hashId);
     updateChatTransportBadge(hashId, linked);
-    if (linked && latency) {
+    if ((linked || inTransferCooldown(hashId)) && latency) {
       updatePeerStatus(`Encrypted · Online · ${latency}`);
       $(".status-dot").className = "status-dot online";
-    } else if (linked) {
+    } else if (linked || inTransferCooldown(hashId)) {
       updatePeerStatus("Encrypted · Online");
       $(".status-dot").className = "status-dot online";
     } else {
@@ -1012,7 +1106,7 @@
             <div class="contact-name">${escapeHtml(p.name)}</div>
             <div class="contact-preview">${meta}</div>
           </div>
-          <div class="contact-meta">${trustBtn}${linked ? "●" : ""}</div>
+          <div class="contact-meta">${trustBtn}${linked ? '<span class="contact-online" title="Connected">●</span>' : ""}${unreadCount(p.hash_id) ? `<span class="unread-badge">${unreadCount(p.hash_id) > 99 ? "99+" : unreadCount(p.hash_id)}</span>` : ""}</div>
         </button>`;
       })
       .join("");
@@ -1040,6 +1134,7 @@
   function selectPeer(hashId, name) {
     state.selectedPeer = hashId;
     state.selectedName = name;
+    clearUnread(hashId);
 
     $("#chat-empty").classList.add("hidden");
     $("#chat-active").classList.remove("hidden");
@@ -1055,7 +1150,7 @@
 
     renderContacts();
     loadMessages();
-    if (!isPeerLinked(hashId)) connectPeer(hashId, false);
+    if (!isPeerLinked(hashId) && !inTransferCooldown(hashId)) connectPeer(hashId, false);
   }
 
   function updatePeerStatus(text) {
@@ -1151,8 +1246,54 @@
     }
   }
 
-  function renderMessages(msgs) {
+  function isNearBottom(el, threshold = 80) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+  }
+
+  function patchTransferBubble(transferId, data) {
+    const bubble = document.querySelector(`[data-transfer="${CSS.escape(transferId)}"]`);
+    if (!bubble) return false;
+    const size = data.size || 0;
+    const offset = data.offset || 0;
+    const pct = size ? Math.min(100, Math.round((offset / size) * 100)) : 0;
+    const stateLabel = data.state || "transferring";
+    const speed = data.speed_mbps ? ` · ${Number(data.speed_mbps).toFixed(2)} MB/s` : "";
+    const cancelled = stateLabel === "cancelled";
+    const failed = stateLabel === "failed";
+    const meta = bubble.querySelector(".file-progress-meta");
+    if (meta) {
+      meta.textContent = cancelled
+        ? "Transfer cancelled"
+        : stateLabel === "complete"
+          ? `${formatBytes(size)} · complete`
+          : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speed}`;
+    }
+    bubble.querySelectorAll(".progress-fill").forEach((fill) => {
+      fill.style.width = `${cancelled || failed ? 100 : pct}%`;
+    });
+    if (stateLabel === "complete") {
+      bubble.classList.remove("cancelled", "failed");
+    }
+    return true;
+  }
+
+  function scheduleTransferPatch(transferId, data) {
+    state.pendingTransferPatches.set(transferId, data);
+    if (state.transferPatchTimer) return;
+    state.transferPatchTimer = setTimeout(() => {
+      state.transferPatchTimer = null;
+      state.pendingTransferPatches.forEach((patchData, tid) => {
+        if (!patchTransferBubble(tid, patchData)) {
+          renderMessages(state.messageCache, { preserveScroll: true });
+        }
+      });
+      state.pendingTransferPatches.clear();
+    }, 120);
+  }
+
+  function renderMessages(msgs, { preserveScroll = false } = {}) {
     const el = $("#messages");
+    const wasAtBottom = preserveScroll ? isNearBottom(el) : true;
     state.messageCache = msgs;
     let lastDate = "";
     let html = "";
@@ -1208,7 +1349,27 @@
         );
       });
     });
-    el.scrollTop = el.scrollHeight;
+    if (wasAtBottom) el.scrollTop = el.scrollHeight;
+  }
+
+  function applyMediaZoom() {
+    const body = $("#media-lightbox-body");
+    const level = $("#media-zoom-level");
+    const media = body?.querySelector(".lightbox-media");
+    if (!media) return;
+    const z = state.mediaZoom;
+    media.style.transform = `scale(${z})`;
+    if (level) level.textContent = `${Math.round(z * 100)}%`;
+  }
+
+  function setMediaZoom(delta) {
+    state.mediaZoom = Math.min(4, Math.max(0.25, state.mediaZoom + delta));
+    applyMediaZoom();
+  }
+
+  function resetMediaZoom() {
+    state.mediaZoom = 1;
+    applyMediaZoom();
   }
 
   function openMediaLightbox(url, kind, filename) {
@@ -1220,15 +1381,17 @@
       return;
     }
     const downloadUrl = `${url}${url.includes("?") ? "&" : "?"}download=1`;
+    state.mediaZoom = 1;
     if (kind === "video") {
-      body.innerHTML = `<video src="${url}" controls autoplay class="lightbox-video"></video>`;
+      body.innerHTML = `<video src="${url}" controls autoplay class="lightbox-video lightbox-media"></video>`;
     } else {
-      body.innerHTML = `<img src="${url}" alt="${escapeHtml(filename || "")}" class="lightbox-image" />`;
+      body.innerHTML = `<img src="${url}" alt="${escapeHtml(filename || "")}" class="lightbox-image lightbox-media" />`;
     }
     if (dl) {
       dl.href = downloadUrl;
       dl.setAttribute("download", filename || "");
     }
+    applyMediaZoom();
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
   }
@@ -1240,11 +1403,12 @@
     modal.classList.remove("open");
     modal.setAttribute("aria-hidden", "true");
     if (body) body.innerHTML = "";
+    state.mediaZoom = 1;
   }
 
   function updateChatTransfer(data) {
     if (!data.id) return;
-    state.transfers[data.id] = data;
+    state.transfers[data.id] = { ...state.transfers[data.id], ...data };
     const peer = state.selectedPeer;
     if (!peer) return;
     const relevant = data.sender_hash === peer || data.recipient_hash === peer;
@@ -1261,7 +1425,12 @@
         speed_mbps: data.speed_mbps ?? meta.speed_mbps,
         filename: data.filename ?? meta.filename,
       };
-      renderMessages(state.messageCache);
+      if (["complete", "failed", "cancelled"].includes(data.state)) {
+        patchTransferBubble(data.id, data);
+        if (data.state === "complete") hideTransferDockIfDone(data.id);
+        return;
+      }
+      scheduleTransferPatch(data.id, data);
     } else {
       loadMessages();
     }
@@ -1273,25 +1442,43 @@
 
     if (!forPeer) {
       if (!isOutgoing(m.sender_hash)) {
+        bumpUnread(m.sender_hash);
         const sender = peerByHash(m.sender_hash);
-        toast(`New message from ${sender?.name || m.sender_hash?.slice(0, 8) || "peer"}`);
+        notifyUser(
+          sender?.name || "New message",
+          m.msg_type === "text" ? (m.text || "").slice(0, 120) : `Sent a ${m.msg_type}`,
+          { tag: `msg-${m.sender_hash}` }
+        );
       }
       return;
     }
 
     if (m.msg_type === "file" || m.msg_type === "image" || m.msg_type === "video") {
+      const tid = m.metadata?.transfer_id;
       const idx = state.messageCache.findIndex((x) => x.id === m.id);
       if (idx >= 0) {
+        const prev = state.messageCache[idx];
         state.messageCache[idx] = m;
-        if (m.metadata?.transfer_id) state.transfers[m.metadata.transfer_id] = m.metadata;
-        renderMessages(state.messageCache);
+        if (tid) {
+          state.transfers[tid] = { ...state.transfers[tid], ...m.metadata, id: tid };
+          if (patchTransferBubble(tid, state.transfers[tid])) return;
+        }
+        if (prev.metadata?.state === m.metadata?.state
+            && prev.metadata?.offset === m.metadata?.offset) return;
+        renderMessages(state.messageCache, { preserveScroll: true });
       } else {
         loadMessages();
       }
       return;
     }
 
-    loadMessages();
+    const idx = state.messageCache.findIndex((x) => x.id === m.id);
+    if (idx >= 0) {
+      state.messageCache[idx] = m;
+      renderMessages(state.messageCache, { preserveScroll: true });
+    } else {
+      loadMessages();
+    }
   }
 
   async function renderTransfers() {
@@ -1364,9 +1551,11 @@
     const done = ["complete", "failed", "cancelled", "rejected"].includes(data.state);
     if (done) {
       if (data.state === "cancelled") {
-        toast(`Transfer cancelled: ${data.filename || "file"}`);
+        toast(`Transfer cancelled: ${data.filename || "file"}`, "warning");
+      } else if (data.state === "complete") {
+        markTransferCooldown(data.sender_hash, data.recipient_hash);
       }
-      syncTransferDockVisibility();
+      hideTransferDockIfDone(data.id);
       return;
     }
     if (!active) {
@@ -1614,6 +1803,16 @@
   $("#media-lightbox")?.addEventListener("click", (e) => {
     if (e.target.id === "media-lightbox") closeMediaLightbox();
   });
+  $("#media-zoom-in")?.addEventListener("click", () => setMediaZoom(0.25));
+  $("#media-zoom-out")?.addEventListener("click", () => setMediaZoom(-0.25));
+  $("#media-zoom-reset")?.addEventListener("click", resetMediaZoom);
+  $("#media-lightbox-body")?.addEventListener("wheel", (e) => {
+    if (!$("#media-lightbox")?.classList.contains("open")) return;
+    e.preventDefault();
+    setMediaZoom(e.deltaY < 0 ? 0.15 : -0.15);
+  }, { passive: false });
+
+  loadUnreadState();
 
   $("#btn-network-viz")?.addEventListener("click", async () => {
     $("#network-modal").classList.add("open");

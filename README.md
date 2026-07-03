@@ -6,7 +6,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.14
+**Current version:** 0.1.15
 
 ---
 
@@ -312,7 +312,7 @@ curl -k https://127.0.0.1:9876/api/transfers
 
 Transfers are **resumable** — if interrupted, the receiver's partial file offset is used on resume via `FILE_RESUME`.
 
-In the web UI, images and videos preview in chat during transfer. Click to enlarge in a lightbox; use **Download** to save the file. The transfer dock (progress bar above the composer) hides automatically when no transfers are active. Both peers must run **v0.1.14+** for best file-transfer stability.
+In the web UI, images and videos preview in chat during transfer. Click to enlarge in a lightbox; use **Download** to save the file. The transfer dock (progress bar above the composer) hides automatically when no transfers are active. Both peers must run **v0.1.15+** for best file-transfer stability.
 
 ### Folder sharing
 
@@ -372,6 +372,12 @@ pytest tests/ -v                # unit tests only
 ## Changelog
 
 See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
+
+### v0.1.15
+
+- No UI flicker during transfers; transfer dock hides on receiver; media lightbox zoom
+- Post-transfer connection cooldown; unread badges on trusted peers; improved notifications
+- Trusted contact list readability; Android lifecycle fixes
 
 ### v0.1.14
 
