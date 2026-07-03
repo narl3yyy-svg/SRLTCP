@@ -41,7 +41,10 @@ class TransferMixin:
         self._transfers = {}
         self._incoming_paths = {}
         self._transfer_tasks = {}
-        self._transfer_dir = data_dir() / "transfers"
+        if self.config.incoming_dir:
+            self._transfer_dir = Path(self.config.incoming_dir)
+        else:
+            self._transfer_dir = data_dir() / "transfers"
         ensure_dir(self._transfer_dir)
 
     def _maybe_compress(self: MessagingBackend, data: bytes) -> tuple[bytes, bool]:

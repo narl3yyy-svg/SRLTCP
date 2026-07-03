@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from srltcp.core.protocol.messages import (
     encode_payload,
     parse_header,
 )
+from srltcp.core.settings import prune_messages_by_retention
 from srltcp.transports.base import Transport, TransportEvent, TransportPeer
 from srltcp.transports.serial import SerialTransport
 from srltcp.transports.tcp import TCPTransport
@@ -49,6 +51,9 @@ class NodeConfig:
     serial_port: str = ""
     serial_baud: int = 115200
     announce: bool = True
+    lan_ip: str = ""
+    incoming_dir: str = ""
+    message_retention_hours: int = 168
 
 
 class MessagingBackend(
@@ -151,10 +156,12 @@ class MessagingBackend(
 
     async def stop(self) -> None:
         self._running = False
-        for task in getattr(self, "_announce_tasks", []):
+        tasks = list(getattr(self, "_announce_tasks", []))
+        tasks.extend(self._transfer_tasks.values())
+        for task in tasks:
             task.cancel()
-        for task in self._transfer_tasks.values():
-            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         if self.tcp_transport:
             await self.tcp_transport.stop()
         if self.serial_transport:
@@ -332,7 +339,13 @@ class MessagingBackend(
             for t, i in self.identities.items()
         }
 
+    def _prune_messages(self) -> None:
+        self._messages = prune_messages_by_retention(
+            self._messages, self.config.message_retention_hours
+        )
+
     def get_messages(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        self._prune_messages()
         return [m.to_dict() for m in self._messages[-limit:]]
 
     def get_discovered_peers(self) -> list[dict[str, Any]]:

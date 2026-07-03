@@ -1,4 +1,4 @@
-"""aiohttp web server for SRLTCP local UI."""
+"""aiohttp HTTPS web server for SRLTCP local UI (localhost only)."""
 
 from __future__ import annotations
 
@@ -13,14 +13,20 @@ from srltcp.routes.share import register_share_routes
 from srltcp.routes.ws import broadcast_event, register_ws_routes
 from srltcp.utils.logging import get_logger
 from srltcp.utils.ports import start_web_site
+from srltcp.utils.tls import create_ssl_context
+from srltcp.web.security import quiet_access_log, security_middleware
 
 log = get_logger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+STATIC_FILES = {
+    "app.css": "text/css",
+    "app.js": "application/javascript",
+}
 
 
 def create_app(node: SRLTCPNode) -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[security_middleware, quiet_access_log])
 
     async def index(_request: web.Request) -> web.Response:
         index_path = STATIC_DIR / "index.html"
@@ -28,15 +34,22 @@ def create_app(node: SRLTCPNode) -> web.Application:
             return web.FileResponse(index_path)
         return web.Response(text="SRLTCP Web UI", content_type="text/html")
 
+    async def static_file(request: web.Request) -> web.Response:
+        name = request.match_info["name"]
+        if name not in STATIC_FILES:
+            raise web.HTTPNotFound()
+        path = STATIC_DIR / name
+        if not path.is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(path, headers={"Cache-Control": "no-store"})
+
     app.router.add_get("/", index)
-    if STATIC_DIR.exists():
-        app.router.add_static("/static", STATIC_DIR)
+    app.router.add_get("/static/{name}", static_file)
 
     register_api_routes(app, node)
     register_share_routes(app, node)
     register_ws_routes(app, node)
 
-    # Wire backend callbacks to WebSocket broadcast
     async def on_message(data: dict) -> None:
         await broadcast_event(node, "message", data)
 
@@ -72,9 +85,15 @@ async def run_web_server(
     host: str = "127.0.0.1",
     port: int = WEB_PORT,
 ) -> tuple[web.AppRunner, int]:
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise ValueError("SRLTCP web UI must bind to localhost only for security")
+
+    ssl_ctx = create_ssl_context()
     app = create_app(node)
-    runner = web.AppRunner(app)
+    runner = web.AppRunner(app, access_log_format='%a %t "%r" %s %b')
     await runner.setup()
-    _site, bound_port = await start_web_site(runner, host, port)
-    log.info("Web UI at http://%s:%d", host, bound_port)
+    _site, bound_port = await start_web_site(
+        runner, host if host != "localhost" else "127.0.0.1", port, ssl_context=ssl_ctx
+    )
+    log.info("Web UI (HTTPS only): https://127.0.0.1:%d", bound_port)
     return runner, bound_port

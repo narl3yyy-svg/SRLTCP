@@ -99,6 +99,7 @@ async def start_web_site(
     host: str,
     port: int,
     *,
+    ssl_context: Any = None,
     max_attempts: int = DEFAULT_PORT_ATTEMPTS,
 ) -> tuple[Any, int]:
     """Start aiohttp TCPSite with port fallback."""
@@ -108,7 +109,7 @@ async def start_web_site(
     for offset in range(max_attempts):
         try_port = port + offset
         try:
-            site = web.TCPSite(runner, host, try_port)
+            site = web.TCPSite(runner, host, try_port, ssl_context=ssl_context)
             await site.start()
             if offset:
                 log.warning("Web UI port %d in use — serving on %d", port, try_port)

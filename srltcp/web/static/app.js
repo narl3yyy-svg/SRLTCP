@@ -12,6 +12,8 @@
     links: {},
     ws: null,
     search: "",
+    settings: {},
+    interfaces: [],
   };
 
   const COLORS = [
@@ -87,8 +89,8 @@
 
   /* ── WebSocket ── */
   function connectWs() {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    state.ws = new WebSocket(`${proto}//${location.host}/ws`);
+    const host = location.host || "127.0.0.1:9876";
+    state.ws = new WebSocket(`wss://${host}/ws`);
 
     state.ws.onopen = () => {
       $("#connection-status").textContent = "Connected";
@@ -203,10 +205,85 @@
   }
 
   /* ── Render ── */
+  async function loadInterfaces(selectEl, selectedIp) {
+    const res = await fetch("/api/interfaces");
+    const data = await res.json();
+    state.interfaces = data.interfaces || [];
+    selectEl.innerHTML = state.interfaces
+      .map((i) => `<option value="${escapeHtml(i.ip)}" ${i.ip === selectedIp ? "selected" : ""}>${escapeHtml(i.label)}</option>`)
+      .join("");
+    if (!state.interfaces.length) {
+      selectEl.innerHTML = '<option value="">127.0.0.1</option>';
+    }
+  }
+
+  function fillSettingsForm(settings) {
+    $("#set-name").value = settings.display_name || "";
+    $("#set-web-port").value = settings.web_port || 9876;
+    $("#set-retention").value = settings.message_retention_hours || 168;
+    $("#set-incoming").value = settings.incoming_files_dir || "";
+    $("#set-shared").value = settings.shared_folder || "";
+    $("#set-auto-announce").checked = settings.auto_announce !== false;
+    loadInterfaces($("#set-lan-ip"), settings.lan_ip || "");
+  }
+
+  async function saveSettings(formData, complete) {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...formData, setup_complete: complete }),
+    });
+    if (!res.ok) {
+      toast("Failed to save settings");
+      return false;
+    }
+    state.settings = await res.json();
+    toast(complete ? "Setup complete!" : "Settings saved");
+    if (complete) $("#setup-overlay").classList.add("hidden");
+    renderStatus(await (await fetch("/api/status")).json());
+    return true;
+  }
+
+  function showSetupIfNeeded(settings) {
+    if (!settings.setup_complete) {
+      $("#setup-overlay").classList.remove("hidden");
+      $("#setup-name").value = settings.display_name || "";
+      $("#setup-web-port").value = settings.web_port || 9876;
+      $("#setup-retention").value = settings.message_retention_hours || 168;
+      $("#setup-auto-announce").checked = settings.auto_announce !== false;
+      loadInterfaces($("#setup-lan-ip"), settings.lan_ip || "");
+    }
+  }
+
+  async function pollSystemStats() {
+    try {
+      const res = await fetch("/api/system");
+      const data = await res.json();
+      const cpuEl = $("#stat-cpu .stat-value");
+      const tempEl = $("#stat-temp .stat-value");
+      if (data.cpu_percent != null) {
+        cpuEl.textContent = `${data.cpu_percent}%`;
+        cpuEl.className = "stat-value" + (data.cpu_percent > 80 ? " hot" : data.cpu_percent > 50 ? " warn" : "");
+      }
+      if (data.cpu_temp_c != null) {
+        tempEl.textContent = `${data.cpu_temp_c}°C`;
+        tempEl.className = "stat-value" + (data.cpu_temp_c > 85 ? " hot" : data.cpu_temp_c > 70 ? " warn" : "");
+      }
+    } catch (_) { /* ignore */ }
+  }
+
   function renderStatus(data) {
     const ids = data.identities || {};
     state.myHashes = {};
+    state.settings = data.settings || state.settings;
     let primary = null;
+
+    if (data.version) $("#stat-version").textContent = `v${data.version}`;
+
+    if (state.settings && Object.keys(state.settings).length) {
+      fillSettingsForm(state.settings);
+      showSetupIfNeeded(state.settings);
+    }
 
     const idHtml = Object.entries(ids)
       .map(([t, id]) => {
@@ -435,8 +512,47 @@
     if (e.key === "Escape") closeDrawer();
   });
 
+  $("#settings-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await saveSettings({
+      display_name: $("#set-name").value.trim(),
+      web_port: parseInt($("#set-web-port").value, 10),
+      message_retention_hours: parseInt($("#set-retention").value, 10),
+      incoming_files_dir: $("#set-incoming").value.trim(),
+      shared_folder: $("#set-shared").value.trim(),
+      lan_ip: $("#set-lan-ip").value,
+      auto_announce: $("#set-auto-announce").checked,
+    }, true);
+  });
+
+  $("#setup-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const port = parseInt($("#setup-web-port").value, 10);
+    await saveSettings({
+      display_name: $("#setup-name").value.trim(),
+      web_port: port,
+      message_retention_hours: parseInt($("#setup-retention").value, 10),
+      incoming_files_dir: $("#setup-incoming").value.trim(),
+      shared_folder: $("#setup-shared").value.trim(),
+      lan_ip: $("#setup-lan-ip").value,
+      auto_announce: $("#setup-auto-announce").checked,
+    }, true);
+    if (port !== location.port) {
+      toast(`Restart with --port ${port} to apply new HTTPS port`);
+    }
+  });
+
   /* ── Init ── */
   connectWs();
+  pollSystemStats();
+  setInterval(pollSystemStats, 2000);
+  setInterval(loadPeers, 15000);
+
+  fetch("/api/settings")
+    .then((r) => r.json())
+    .then((s) => { state.settings = s; showSetupIfNeeded(s); fillSettingsForm(s); })
+    .catch(() => {});
+
   fetch("/api/status")
     .then((r) => r.json())
     .then(renderStatus)

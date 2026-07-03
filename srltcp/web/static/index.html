@@ -107,6 +107,38 @@
           </button>
         </header>
         <div class="drawer-body">
+          <form id="settings-form" class="settings-form">
+            <label class="field">
+              <span>Display name</span>
+              <input type="text" id="set-name" maxlength="64" required />
+            </label>
+            <label class="field">
+              <span>Web UI port (HTTPS)</span>
+              <input type="number" id="set-web-port" min="1024" max="65535" />
+              <small>Restart required after changing port</small>
+            </label>
+            <label class="field">
+              <span>Keep messages (hours)</span>
+              <input type="number" id="set-retention" min="1" max="8760" />
+            </label>
+            <label class="field">
+              <span>Incoming files folder</span>
+              <input type="text" id="set-incoming" placeholder="~/.srltcp/transfers/incoming" />
+            </label>
+            <label class="field">
+              <span>Default shared folder</span>
+              <input type="text" id="set-shared" placeholder="~/.srltcp/shared" />
+            </label>
+            <label class="field">
+              <span>Network interface / IP</span>
+              <select id="set-lan-ip"></select>
+            </label>
+            <label class="field checkbox-field">
+              <input type="checkbox" id="set-auto-announce" />
+              <span>Auto-announce on startup</span>
+            </label>
+            <button type="submit" class="action-btn save-btn">Save settings</button>
+          </form>
           <section class="drawer-section">
             <h4>Your Identities</h4>
             <div id="identities"></div>
@@ -122,6 +154,59 @@
         </div>
       </div>
     </aside>
+
+    <!-- First-run setup -->
+    <div class="setup-overlay hidden" id="setup-overlay">
+      <div class="setup-card">
+        <div class="setup-icon">SR</div>
+        <h2>Welcome to SRLTCP</h2>
+        <p class="setup-lead">Configure your node for secure peer-to-peer chat and file transfer.</p>
+        <form id="setup-form" class="settings-form">
+          <label class="field">
+            <span>Your display name</span>
+            <input type="text" id="setup-name" maxlength="64" required placeholder="e.g. archlinux" />
+          </label>
+          <label class="field">
+            <span>HTTPS port (localhost)</span>
+            <input type="number" id="setup-web-port" value="9876" min="1024" max="65535" />
+          </label>
+          <label class="field">
+            <span>Keep messages (hours)</span>
+            <input type="number" id="setup-retention" value="168" min="1" max="8760" />
+          </label>
+          <label class="field">
+            <span>Incoming files folder</span>
+            <input type="text" id="setup-incoming" placeholder="Default: ~/.srltcp/transfers/incoming" />
+          </label>
+          <label class="field">
+            <span>Default shared folder</span>
+            <input type="text" id="setup-shared" placeholder="Default: ~/.srltcp/shared" />
+          </label>
+          <label class="field">
+            <span>Network interface / IP</span>
+            <select id="setup-lan-ip" required></select>
+          </label>
+          <label class="field checkbox-field">
+            <input type="checkbox" id="setup-auto-announce" checked />
+            <span>Auto-announce on LAN</span>
+          </label>
+          <button type="submit" class="action-btn save-btn">Get started</button>
+        </form>
+        <p class="setup-foot">🔒 Localhost HTTPS only · E2EE · GPL v3</p>
+      </div>
+    </div>
+
+    <footer class="status-bar" id="status-bar">
+      <div class="stat-item" id="stat-cpu">
+        <span class="stat-label">CPU</span>
+        <span class="stat-value">—</span>
+      </div>
+      <div class="stat-item" id="stat-temp">
+        <span class="stat-label">Temp</span>
+        <span class="stat-value">—</span>
+      </div>
+      <div class="stat-item stat-version" id="stat-version">v0.1.1</div>
+    </footer>
 
     <div class="toast-container" id="toasts"></div>
   </div>
