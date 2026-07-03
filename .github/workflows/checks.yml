@@ -31,7 +31,7 @@ jobs:
       - name: Mypy type check (core security modules)
         run: |
           source .venv/bin/activate
-          mypy srltcp/core/protocol/ srltcp/core/messaging/connect.py srltcp/utils/platform.py
+          mypy srltcp/core/protocol/ srltcp/core/messaging/connect.py srltcp/utils/platform.py srltcp/utils/wan.py
 
       - name: Pytest with coverage
         run: |

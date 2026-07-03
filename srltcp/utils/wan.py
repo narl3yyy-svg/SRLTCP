@@ -71,7 +71,7 @@ def resolve_wan_endpoint(host: str, port: int) -> WanEndpoint:
         raise ValueError(f"cannot resolve {host}: {exc}") from exc
     if not infos:
         raise ValueError(f"cannot resolve {host}")
-    resolved = infos[0][4][0]
+    resolved = str(infos[0][4][0])
     if _is_private_ip(resolved):
         raise ValueError("resolved address is private — use LAN mode instead")
     return WanEndpoint(host=host, port=port, resolved_ip=resolved)
