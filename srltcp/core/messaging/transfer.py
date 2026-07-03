@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,8 +42,9 @@ class TransferMixin:
         self._transfers = {}
         self._incoming_paths = {}
         self._transfer_tasks = {}
-        self._transfer_dir = data_dir() / "transfers"
+        self._transfer_dir = getattr(self, "_incoming_dir", None) or (data_dir() / "incoming")
         ensure_dir(self._transfer_dir)
+        self._transfer_started: dict[str, float] = {}
 
     def _maybe_compress(self: MessagingBackend, data: bytes) -> tuple[bytes, bool]:
         if len(data) < COMPRESS_THRESHOLD:
@@ -130,6 +132,7 @@ class TransferMixin:
             return
         transfer.state = TransferState.TRANSFERRING
         transfer.offset = offset
+        self._transfer_started[transfer_id] = time.time()
         task = asyncio.create_task(self._send_file_chunks(hash_id, transfer))
         self._transfer_tasks[transfer_id] = task
 
@@ -166,6 +169,9 @@ class TransferMixin:
                     )
                     await self._send_raw(link.transport_peer_id, link.transport, packet)
                     transfer.offset += len(chunk)
+                    started = self._transfer_started.get(transfer.id, time.time())
+                    elapsed = max(time.time() - started, 0.001)
+                    transfer.speed_mbps = (transfer.offset / elapsed) / (1024 * 1024)
                     if self._on_transfer_progress:
                         await self._on_transfer_progress(transfer.to_dict())
 
@@ -204,6 +210,9 @@ class TransferMixin:
         await write_file_chunk(dest, offset, data)
         transfer.offset = max(transfer.offset, offset + len(data))
         transfer.state = TransferState.TRANSFERRING
+        started = self._transfer_started.setdefault(transfer_id, time.time())
+        elapsed = max(time.time() - started, 0.001)
+        transfer.speed_mbps = (transfer.offset / elapsed) / (1024 * 1024)
         if self._on_transfer_progress:
             await self._on_transfer_progress(transfer.to_dict())
 

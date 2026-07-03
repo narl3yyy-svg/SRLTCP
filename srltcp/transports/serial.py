@@ -35,6 +35,12 @@ class SerialTransport(Transport):
         self._frame_reader = FrameReader()
         self._running = False
         self._write_lock = asyncio.Lock()
+        self._bytes_rx = 0
+        self._bytes_tx = 0
+        self._frame_errors = 0
+        self._ping_ok = 0
+        self._ping_fail = 0
+        self._last_rtt_ms: float | None = None
 
     async def start(self) -> None:
         if self._running:
@@ -80,12 +86,14 @@ class SerialTransport(Transport):
                 if not data:
                     await asyncio.sleep(0.01)
                     continue
+                self._bytes_rx += len(data)
                 for frame in self._frame_reader.feed(data):
                     if self._peer:
                         await self._emit_frame(self._peer, frame)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self._frame_errors += 1
                 await self._emit_event(
                     TransportEvent(kind="error", error=str(exc), peer=self._peer)
                 )
@@ -99,6 +107,7 @@ class SerialTransport(Transport):
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._serial.write, frame)
             await loop.run_in_executor(None, self._serial.flush)
+            self._bytes_tx += len(frame)
 
     async def broadcast(self, payload: bytes) -> None:
         if self._peer:
@@ -110,3 +119,24 @@ class SerialTransport(Transport):
     def update_peer_metadata(self, metadata: dict[str, Any]) -> None:
         if self._peer:
             self._peer.metadata.update(metadata)
+
+    def record_ping_success(self, rtt_ms: float) -> None:
+        self._ping_ok += 1
+        self._last_rtt_ms = rtt_ms
+
+    def record_ping_fail(self) -> None:
+        self._ping_fail += 1
+
+    def last_rtt_ms(self) -> float | None:
+        return self._last_rtt_ms
+
+    def link_quality_pct(self) -> float:
+        total = self._ping_ok + self._ping_fail
+        if total > 0:
+            return round((self._ping_ok / total) * 100.0, 1)
+        total_bytes = self._bytes_rx + self._bytes_tx
+        if total_bytes == 0:
+            return 0.0
+        error_penalty = min(self._frame_errors * 5, 50)
+        base = 100.0 - error_penalty
+        return max(0.0, min(100.0, round(base, 1)))

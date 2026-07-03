@@ -19,6 +19,8 @@ class DiscoveredPeer:
     tcp_host: str = ""
     tcp_port: int = 7825
     last_seen: float = field(default_factory=time.time)
+    rtt_ms: float | None = None
+    link_quality_pct: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -31,6 +33,8 @@ class DiscoveredPeer:
             "tcp_host": self.tcp_host,
             "tcp_port": self.tcp_port,
             "last_seen": self.last_seen,
+            "rtt_ms": self.rtt_ms,
+            "link_quality_pct": self.link_quality_pct,
             "metadata": self.metadata,
         }
 
@@ -44,16 +48,18 @@ class DiscoveryRegistry:
 
     def upsert_from_announce(
         self, address: str, transport: str, payload: bytes
-    ) -> DiscoveredPeer | None:
+    ) -> tuple[DiscoveredPeer | None, bool]:
         try:
             data = decode_payload(payload)
         except Exception:
-            return None
+            return None, False
         if data.get("type") != "announce":
-            return None
+            return None, False
         hash_id = data.get("hash_id", "")
         if not hash_id:
-            return None
+            return None, False
+        is_new = hash_id not in self._peers
+        existing = self._peers.get(hash_id)
         peer = DiscoveredPeer(
             hash_id=hash_id,
             name=data.get("name", "unknown"),
@@ -63,10 +69,27 @@ class DiscoveryRegistry:
             tcp_host=data.get("tcp_host", ""),
             tcp_port=int(data.get("tcp_port", 7825)),
             last_seen=time.time(),
+            rtt_ms=existing.rtt_ms if existing else None,
+            link_quality_pct=existing.link_quality_pct if existing else None,
             metadata=data,
         )
         self._peers[hash_id] = peer
-        return peer
+        return peer, is_new
+
+    def update_metrics(
+        self,
+        hash_id: str,
+        *,
+        rtt_ms: float | None = None,
+        link_quality_pct: float | None = None,
+    ) -> None:
+        peer = self._peers.get(hash_id)
+        if not peer:
+            return
+        if rtt_ms is not None:
+            peer.rtt_ms = rtt_ms
+        if link_quality_pct is not None:
+            peer.link_quality_pct = link_quality_pct
 
     def get(self, hash_id: str) -> DiscoveredPeer | None:
         peer = self._peers.get(hash_id)

@@ -6,7 +6,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.0
+**Current version:** 0.1.2
 
 ---
 
@@ -21,6 +21,9 @@
 | **Fast file transfer** | 4 MiB chunked streaming, zstd compression, resume support |
 | **Folder sharing** | Token-based HTTP browse/download API |
 | **Web UI** | Local aiohttp server with WebSocket live updates |
+| **Trusted peers** | Trust-before-message security model |
+| **Ping / RTT** | Latency measurement in ms for network peers |
+| **Serial RF metrics** | Link quality % and RTT for USB/serial links |
 | **Cross-platform** | Linux, macOS, Windows CLI + Android (Chaquopy) |
 
 ---
@@ -35,6 +38,8 @@ srltcp/
   core/
     identity.py             # Per-transport Ed25519 identities
     discovery.py            # UDP/TCP peer discovery registry
+    settings.py             # Persistent app settings
+    trusted.py              # Trusted peer list
     node.py                 # Top-level node (messaging + sharing)
     protocol/
       framing.py            # Length + CRC32 frames
@@ -45,6 +50,7 @@ srltcp/
       links.py              # Peer link map
       connect.py            # Handshake + session keys
       announce.py           # Discovery broadcasts
+      ping.py               # RTT and link quality
       queue.py              # Offline message queue
       transfer.py           # Chunked file transfer
       routing.py            # Relay routing table
@@ -209,9 +215,9 @@ Start the web UI on two machines on the same LAN:
 ./run.sh web --name "bob"
 ```
 
-1. Click **Announce** on both machines
-2. Select a discovered peer in the sidebar
-3. Send encrypted messages in the chat panel
+1. Wait for peers to appear in **Discovered** (passive) or click **Announce** once
+2. Click **Trust** on a discovered peer
+3. Select the trusted peer and send encrypted messages
 
 ### Headless relay server
 
@@ -248,12 +254,15 @@ srltcp send --recipient <hash_id> --text "Hello" --host 10.0.0.5
 ### File transfer (API)
 
 ```bash
-# Send a file to a connected peer
+# Upload a file from the browser or CLI
+curl -X POST http://127.0.0.1:8743/api/upload -F "file=@/path/to/large.iso"
+
+# Send to a trusted peer (use path from upload response)
 curl -X POST http://127.0.0.1:8743/api/transfer \
   -H 'Content-Type: application/json' \
-  -d '{"recipient_hash":"<hash>","path":"/path/to/large.iso"}'
+  -d '{"recipient_hash":"<hash>","path":"/home/user/.srltcp/uploads/large.iso"}'
 
-# List transfers
+# List transfers (includes progress % and MB/s)
 curl http://127.0.0.1:8743/api/transfers
 ```
 
@@ -313,6 +322,19 @@ pytest tests/ -v                # unit tests only
 | `srltcp identity` | Show local hash IDs |
 
 ---
+
+## Changelog
+
+See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md) for full release notes. Click the **version badge** (top-left) in the web UI.
+
+### v0.1.2 highlights
+
+- Fixed discovery spam and auto-announce ignoring settings
+- Trusted peers required for messaging and file send
+- Ping/RTT (ms), serial RF link quality (%)
+- File upload + progress bar with MB/s speed
+- Settings panel: serial, folders, retention, restart
+- Identity create/regenerate/delete for TCP and serial
 
 ## Roadmap
 

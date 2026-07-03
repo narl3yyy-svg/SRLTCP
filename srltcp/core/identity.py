@@ -127,3 +127,10 @@ class IdentityStore:
         identity = Identity.generate(name, transport)
         self.save(identity)
         return identity
+
+    def delete(self, transport: TransportKind) -> bool:
+        path = self._path(transport)
+        if not path.exists():
+            return False
+        path.unlink()
+        return True

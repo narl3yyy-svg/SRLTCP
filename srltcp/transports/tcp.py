@@ -68,9 +68,6 @@ class TCPTransport(Transport):
         )
         log.info("UDP discovery on port %d", self.discovery_port)
 
-        if self._announce_payload:
-            asyncio.create_task(self._announce_loop())
-
     async def stop(self) -> None:
         self._running = False
         if self._discovery_transport:
@@ -125,11 +122,6 @@ class TCPTransport(Transport):
         conn.peer.peer_id = new_id
         conn.peer.metadata.update(metadata)
         self._connections[new_id] = conn
-
-    async def _announce_loop(self) -> None:
-        while self._running:
-            await self.broadcast_discovery(self._announce_payload)
-            await asyncio.sleep(5)
 
     async def broadcast_discovery(self, payload: bytes) -> None:
         if not self._discovery_transport or not self._discovery_protocol:

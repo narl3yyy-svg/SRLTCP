@@ -17,6 +17,7 @@ from srltcp.core.messaging.connect import ConnectMixin
 from srltcp.core.messaging.constants import COMPRESS_THRESHOLD
 from srltcp.core.messaging.links import PeerLinkMixin
 from srltcp.core.messaging.models import ChatMessage
+from srltcp.core.messaging.ping import PingMixin
 from srltcp.core.messaging.queue import QueueMixin
 from srltcp.core.messaging.relay import RelayMixin
 from srltcp.core.messaging.transfer import TransferMixin
@@ -28,10 +29,12 @@ from srltcp.core.protocol.messages import (
     encode_payload,
     parse_header,
 )
+from srltcp.core.trusted import TrustedStore
 from srltcp.transports.base import Transport, TransportEvent, TransportPeer
 from srltcp.transports.serial import SerialTransport
 from srltcp.transports.tcp import TCPTransport
 from srltcp.utils.logging import get_logger
+from srltcp.utils.platform import data_dir
 
 log = get_logger(__name__)
 
@@ -48,13 +51,14 @@ class NodeConfig:
     enable_serial: bool = False
     serial_port: str = ""
     serial_baud: int = 115200
-    announce: bool = True
+    announce: bool = False
 
 
 class MessagingBackend(
     PeerLinkMixin,
     ConnectMixin,
     AnnounceMixin,
+    PingMixin,
     QueueMixin,
     TransferMixin,
     RelayMixin,
@@ -64,8 +68,10 @@ class MessagingBackend(
     def __init__(self, config: NodeConfig) -> None:
         self.config = config
         self.identity_store = IdentityStore()
+        self.trusted = TrustedStore()
         self.identities: dict[str, Identity] = {}
         self.discovery = DiscoveryRegistry()
+        self._incoming_dir = data_dir() / "incoming"
         self.tcp_transport: TCPTransport | None = None
         self.serial_transport: SerialTransport | None = None
         self._running = False
@@ -83,6 +89,7 @@ class MessagingBackend(
         self._init_links()
         self._init_connect()
         self._init_announce()
+        self._init_ping()
         self._init_queue()
         self._init_transfer()
         self._init_relay()
@@ -140,6 +147,7 @@ class MessagingBackend(
 
         if self.config.announce:
             await self.start_announce_loop()
+        await self.start_ping_loop()
 
         log.info(
             "MessagingBackend started (tcp=%s, serial=%s, relay=%s)",
@@ -150,8 +158,8 @@ class MessagingBackend(
 
     async def stop(self) -> None:
         self._running = False
-        for task in getattr(self, "_announce_tasks", []):
-            task.cancel()
+        await self.stop_announce_loop()
+        await self.stop_ping_loop()
         for task in self._transfer_tasks.values():
             task.cancel()
         if self.tcp_transport:
@@ -199,7 +207,9 @@ class MessagingBackend(
         elif msg_type == MessageType.HANDSHAKE_ACK:
             await self._handle_handshake_ack(peer.peer_id, body)
         elif msg_type == MessageType.PING:
-            await self._reply_pong(peer)
+            await self._reply_pong_with_rtt(peer, body)
+        elif msg_type == MessageType.PONG:
+            await self._handle_pong(peer.peer_id, body)
         elif msg_type == MessageType.TEXT:
             await self._handle_text(peer.peer_id, body, flags)
         elif msg_type == MessageType.FILE_OFFER:
@@ -245,11 +255,6 @@ class MessagingBackend(
         if msg_type == MessageType.TEXT and link:
             await self._handle_text(peer_id, body, flags)
 
-    async def _reply_pong(self, peer: TransportPeer) -> None:
-        packet = build_header(MessageType.PONG)
-        transport = peer.transport
-        await self._send_raw(peer.peer_id, transport, packet)
-
     async def _handle_text(self, peer_id: str, body: bytes, flags: int) -> None:
         link = self.get_link_by_peer_id(peer_id)
         if not link or not link.handshake_complete:
@@ -274,6 +279,9 @@ class MessagingBackend(
         if self._on_message:
             await self._on_message(msg.to_dict())
 
+    def is_trusted(self, hash_id: str) -> bool:
+        return self.trusted.is_trusted(hash_id)
+
     async def send_message(
         self,
         recipient_hash: str,
@@ -281,6 +289,9 @@ class MessagingBackend(
         *,
         transport: str = "tcp",
     ) -> ChatMessage | None:
+        if not self.trusted.is_trusted(recipient_hash):
+            log.warning("Recipient %s not in trusted list", recipient_hash[:8])
+            return None
         link = self.get_link(recipient_hash)
         identity = self._identity_for_transport(transport)
         msg = ChatMessage.create(
@@ -337,8 +348,28 @@ class MessagingBackend(
     def get_discovered_peers(self) -> list[dict[str, Any]]:
         return [p.to_dict() for p in self.discovery.list_peers()]
 
+    def get_trusted_peers(self) -> list[dict[str, Any]]:
+        return [p.to_dict() for p in self.trusted.list_peers()]
+
+    def prune_messages(self, max_age_hours: int | None) -> int:
+        if max_age_hours is None:
+            return 0
+        if max_age_hours == 0:
+            removed = len(self._messages)
+            self._messages.clear()
+            return removed
+        import time
+
+        cutoff = time.time() - max_age_hours * 3600
+        before = len(self._messages)
+        self._messages = [m for m in self._messages if m.timestamp >= cutoff]
+        return before - len(self._messages)
+
     async def send_file(
         self, recipient_hash: str, path: Path, *, transport: str = "tcp"
     ) -> dict[str, Any] | None:
+        if not self.trusted.is_trusted(recipient_hash):
+            log.warning("Recipient %s not trusted for file send", recipient_hash[:8])
+            return None
         transfer = await self.offer_file(recipient_hash, path, transport=transport)
         return transfer.to_dict() if transfer else None

@@ -72,18 +72,34 @@ class AnnounceMixin:
             log.info("Announced on %s", t)
 
     async def start_announce_loop(self: MessagingBackend) -> None:
+        await self.stop_announce_loop()
         from srltcp.core.messaging.constants import ANNOUNCE_INTERVAL
 
         async def _loop() -> None:
-            while self._running:
+            while self._running and self.config.announce:
                 await self.announce()
                 await asyncio.sleep(ANNOUNCE_INTERVAL)
 
         self._announce_tasks.append(asyncio.create_task(_loop()))
 
+    async def stop_announce_loop(self: MessagingBackend) -> None:
+        for task in self._announce_tasks:
+            task.cancel()
+        self._announce_tasks.clear()
+
+    async def set_auto_announce(self: MessagingBackend, enabled: bool) -> None:
+        self.config.announce = enabled
+        if enabled:
+            await self.start_announce_loop()
+        else:
+            await self.stop_announce_loop()
+
     async def _handle_discovered(
         self: MessagingBackend, address: str, transport: str, payload: bytes
     ) -> None:
-        peer = self.discovery.upsert_from_announce(address, transport, payload)
-        if peer and self._on_peer_discovered:
+        own_hashes = {i.hash_id for i in self.identities.values()}
+        peer, is_new = self.discovery.upsert_from_announce(address, transport, payload)
+        if not peer or peer.hash_id in own_hashes:
+            return
+        if is_new and self._on_peer_discovered:
             await self._on_peer_discovered(peer.to_dict())

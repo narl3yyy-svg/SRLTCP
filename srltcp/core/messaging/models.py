@@ -82,6 +82,7 @@ class FileTransfer:
     offset: int = 0
     compressed: bool = False
     created: float = field(default_factory=time.time)
+    speed_mbps: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -120,5 +121,6 @@ class FileTransfer:
             "offset": self.offset,
             "compressed": self.compressed,
             "created": self.created,
+            "speed_mbps": round(self.speed_mbps, 2),
             "metadata": self.metadata,
         }
