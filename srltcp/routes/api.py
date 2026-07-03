@@ -358,6 +358,10 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response({"error": "invalid ttl_preset"}, status=400)
         if download_limit_preset not in SHARE_DOWNLOAD_LIMITS:
             return web.json_response({"error": "invalid download_limit_preset"}, status=400)
+        link = node.backend.get_link(recipient)
+        if not link or not link.handshake_complete:
+            await node.backend.connect_to_peer(recipient)
+            await node.backend.wait_for_handshake(recipient, timeout=10.0)
         try:
             result = await node.backend.offer_share_folder(
                 recipient,
@@ -392,10 +396,19 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         grant_id = data.get("grant_id", "")
         if not owner or not grant_id:
             return web.json_response({"error": "owner_hash and grant_id required"}, status=400)
-        ok = await node.backend.request_share_list(owner, grant_id)
-        if not ok:
-            return web.json_response({"error": "list request failed"}, status=400)
-        return web.json_response({"requested": True})
+        entries = await node.backend.request_share_list(owner, grant_id)
+        if entries is None:
+            return web.json_response(
+                {"error": "list request failed or timed out"},
+                status=408,
+            )
+        return web.json_response(
+            {
+                "owner_hash": owner,
+                "grant_id": grant_id,
+                "entries": entries,
+            }
+        )
 
     async def share_peer_fetch(request: web.Request) -> web.Response:
         data = await request.json()
@@ -520,9 +533,12 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
 
     async def cancel_transfer(request: web.Request) -> web.Response:
         transfer_id = request.match_info.get("transfer_id", "")
+        transfer = node.backend._transfers.get(transfer_id)
+        if not transfer:
+            return web.json_response({"error": "transfer not found"}, status=404)
         ok = await node.backend.cancel_transfer(transfer_id)
         if not ok:
-            return web.json_response({"error": "transfer not found"}, status=404)
+            return web.json_response({"error": "transfer already finished"}, status=409)
         return web.json_response({"cancelled": True, "id": transfer_id})
 
     async def system(_request: web.Request) -> web.Response:

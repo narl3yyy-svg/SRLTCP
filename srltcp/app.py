@@ -195,9 +195,9 @@ def is_android_server_ready() -> bool:
 
 
 def start_android_server() -> None:
-    """Entry point for Chaquopy Android app (background thread)."""
+    """Entry point for Chaquopy Android app (call from a background thread)."""
     import os
-    import threading
+    import sys
 
     global _android_server_ready, _android_server_started
     if _android_server_started:
@@ -205,17 +205,12 @@ def start_android_server() -> None:
     _android_server_started = True
     _android_server_ready = False
     os.environ["SRLTCP_ANDROID"] = "1"
-
-    def _run() -> None:
-        import sys
-
-        sys.argv = ["srltcp", "web", "--log-level", "INFO"]
-        try:
-            main()
-        except Exception:
-            log.exception("Android server failed")
-
-    threading.Thread(target=_run, name="srltcp-server", daemon=False).start()
+    sys.argv = ["srltcp", "web", "--log-level", "INFO"]
+    try:
+        main()
+    except Exception:
+        log.exception("Android server failed")
+        raise
 
 
 def main() -> None:

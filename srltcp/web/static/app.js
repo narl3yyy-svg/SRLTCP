@@ -332,7 +332,7 @@
             );
             hideTransferDockIfDone(data.id);
             if (state.selectedPeer) {
-              patchTransferBubble(data.id, data);
+              refreshTransferBubble(data.id, data, { scroll: true });
             }
           }
           break;
@@ -984,19 +984,34 @@
   }
 
   async function requestShareListing(ownerHash, grantId) {
+    state.shareListing = { ownerHash, grantId, entries: [] };
+    renderShareEntries();
+    toast("Loading folder listing…");
     const res = await fetch("/api/share/peer/list", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ owner_hash: ownerHash, grant_id: grantId }),
     });
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
       toast(data.error || "Could not list folder");
       return;
     }
-    state.shareListing = { ownerHash, grantId, entries: [] };
-    renderShareEntries();
-    toast("Loading folder listing…");
+    if (Array.isArray(data.entries)) {
+      state.shareListing = {
+        ownerHash: data.owner_hash || ownerHash,
+        grantId: data.grant_id || grantId,
+        entries: data.entries,
+      };
+      renderShareEntries();
+      if (data.error) {
+        toast(data.error, "warning");
+      } else if (!data.entries.length) {
+        toast("Folder is empty");
+      } else {
+        toast(`Listed ${data.entries.length} item${data.entries.length === 1 ? "" : "s"}`);
+      }
+    }
   }
 
   async function fetchShareFile(relPath, asFolder = false) {
@@ -1570,7 +1585,7 @@
     const failed = stateLabel === "failed";
     const stateClass = cancelled ? " cancelled" : failed ? " failed" : "";
     const canPreview = (m.msg_type === "image" || m.msg_type === "video") && fileUrl
-      && (out || offset > 0 || stateLabel === "complete" || stateLabel === "transferring");
+      && (out || offset > 0 || ["complete", "transferring", "accepted"].includes(stateLabel));
     const progressLine = stateLabel === "complete"
       ? `${formatBytes(size)} · complete`
       : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr}`;
@@ -1670,9 +1685,47 @@
     return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
   }
 
+  function scrollMessagesToBottom() {
+    const el = $("#messages");
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+
+  function messageForTransfer(transferId) {
+    return state.messageCache.find((m) => m.metadata?.transfer_id === transferId);
+  }
+
+  function bubbleNeedsMediaRender(msg, bubble, data) {
+    if (!msg || !bubble) return false;
+    if (msg.msg_type !== "image" && msg.msg_type !== "video") return false;
+    const stateLabel = data.state || "";
+    const hasMediaShell = bubble.classList.contains("image-bubble")
+      || bubble.classList.contains("video-bubble");
+    if (stateLabel === "complete" && !hasMediaShell) return true;
+    if (stateLabel === "transferring" && (data.offset || 0) > 0 && !hasMediaShell) return true;
+    return false;
+  }
+
+  function refreshTransferBubble(transferId, data, { scroll = false } = {}) {
+    const bubble = document.querySelector(`[data-transfer="${CSS.escape(transferId)}"]`);
+    const msg = messageForTransfer(transferId);
+    if (bubbleNeedsMediaRender(msg, bubble, data)) {
+      renderMessages(state.messageCache, { scrollToBottom: scroll });
+      return;
+    }
+    if (!patchTransferBubble(transferId, data)) {
+      renderMessages(state.messageCache, { scrollToBottom: scroll });
+      return;
+    }
+    if (scroll && msg && (msg.msg_type === "image" || msg.msg_type === "video") && data.state === "complete") {
+      scrollMessagesToBottom();
+    }
+  }
+
   function patchTransferBubble(transferId, data) {
     const bubble = document.querySelector(`[data-transfer="${CSS.escape(transferId)}"]`);
     if (!bubble) return false;
+    const msg = messageForTransfer(transferId);
+    if (bubbleNeedsMediaRender(msg, bubble, data)) return false;
     const size = data.size || 0;
     const offset = data.offset || 0;
     const pct = size ? Math.min(100, Math.round((offset / size) * 100)) : 0;
@@ -1711,17 +1764,15 @@
     state.transferPatchTimer = setTimeout(() => {
       state.transferPatchTimer = null;
       state.pendingTransferPatches.forEach((patchData, tid) => {
-        if (!patchTransferBubble(tid, patchData)) {
-          renderMessages(state.messageCache, { preserveScroll: true });
-        }
+        refreshTransferBubble(tid, patchData, { scroll: false });
       });
       state.pendingTransferPatches.clear();
     }, 120);
   }
 
-  function renderMessages(msgs, { preserveScroll = false } = {}) {
+  function renderMessages(msgs, { preserveScroll = false, scrollToBottom = false } = {}) {
     const el = $("#messages");
-    const wasAtBottom = preserveScroll ? isNearBottom(el) : true;
+    const wasAtBottom = scrollToBottom || (preserveScroll ? isNearBottom(el) : true);
     state.messageCache = msgs;
     let lastDate = "";
     let html = "";
@@ -1882,7 +1933,7 @@
         filename: data.filename ?? meta.filename,
       };
       if (["complete", "failed", "cancelled"].includes(data.state)) {
-        patchTransferBubble(data.id, data);
+        refreshTransferBubble(data.id, data, { scroll: data.state === "complete" });
         if (data.state === "complete") hideTransferDockIfDone(data.id);
         return;
       }
@@ -1931,7 +1982,7 @@
     const idx = state.messageCache.findIndex((x) => x.id === m.id);
     if (idx >= 0) {
       state.messageCache[idx] = m;
-      renderMessages(state.messageCache, { preserveScroll: true });
+      renderMessages(state.messageCache, { scrollToBottom: true });
     } else {
       loadMessages();
     }
@@ -2044,6 +2095,15 @@
     updateTransferDock(current);
   }
 
+  function pruneCompletedTransfers() {
+    Object.keys(state.transfers).forEach((id) => {
+      const t = state.transfers[id];
+      if (!t || !ACTIVE_TRANSFER_STATES.has(t.state)) {
+        delete state.transfers[id];
+      }
+    });
+  }
+
   function hideTransferDockIfDone(transferId) {
     if (transferId && state.transfers[transferId]) {
       const t = state.transfers[transferId];
@@ -2051,6 +2111,7 @@
         delete state.transfers[transferId];
       }
     }
+    pruneCompletedTransfers();
     syncTransferDockVisibility();
   }
 
@@ -2058,8 +2119,15 @@
     try {
       const res = await fetch("/api/transfers");
       const transfers = await res.json();
+      const activeIds = new Set();
       transfers.forEach((t) => {
-        state.transfers[t.id] = t;
+        if (ACTIVE_TRANSFER_STATES.has(t.state)) {
+          state.transfers[t.id] = t;
+          activeIds.add(t.id);
+        }
+      });
+      Object.keys(state.transfers).forEach((id) => {
+        if (!activeIds.has(id)) delete state.transfers[id];
       });
       syncTransferDockVisibility();
     } catch (_) { /* ignore */ }
@@ -2069,7 +2137,19 @@
     const dock = $("#transfer-dock");
     const id = dock?.dataset.transferId;
     if (!id) return;
-    await fetch(`/api/transfers/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+    const t = state.transfers[id];
+    if (!t || !ACTIVE_TRANSFER_STATES.has(t.state)) {
+      hideTransferDockIfDone(id);
+      syncTransferDockVisibility();
+      return;
+    }
+    const res = await fetch(`/api/transfers/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      toast(data.error || "Transfer already finished", "warning");
+      hideTransferDockIfDone(id);
+      return;
+    }
     toast("Transfer cancelled");
     hideTransferDockIfDone(id);
     renderTransfers();

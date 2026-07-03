@@ -1,5 +1,14 @@
 # SRLTCP Release Notes
 
+## v0.1.19 (2026-07-03)
+
+### Fixes
+- **Shared folder listing** — list API now waits for E2EE response and returns entries directly (no more stuck “Loading folder listing…”); auto-connects before list/offer; denied requests return empty listing with error
+- **Receiver image preview** — incoming screenshots/images re-render as inline previews when transfer completes (not just a file attachment bubble)
+- **Transfer dock** — progress bar hides after complete; polling no longer resurrects finished transfers; cancel (✕) blocked once transfer is done
+- **Chat scroll** — new text messages scroll to bottom after image/file transfers
+- **Android startup** — removed nested server thread (server runs in MainActivity worker thread only)
+
 ## v0.1.18 (2026-07-03)
 
 ### Critical fixes

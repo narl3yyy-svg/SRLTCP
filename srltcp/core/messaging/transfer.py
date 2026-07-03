@@ -358,6 +358,13 @@ class TransferMixin:
         transfer = self._transfers.get(transfer_id)
         if not transfer:
             return False
+        if transfer.state in (
+            TransferState.COMPLETE,
+            TransferState.CANCELLED,
+            TransferState.FAILED,
+            TransferState.REJECTED,
+        ):
+            return False
         transfer.state = TransferState.CANCELLED
         task = self._transfer_tasks.pop(transfer_id, None)
         if task and not task.done():

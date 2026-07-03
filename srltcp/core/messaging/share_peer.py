@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import secrets
 import tempfile
@@ -119,6 +120,7 @@ class SharePeerMixin:
     def _init_share_peer(self: MessagingBackend) -> None:
         self._share_grants = {}
         self._remote_share_grants = {}
+        self._share_listing_waiters: dict[str, asyncio.Future[list[dict[str, Any]]]] = {}
 
     def _share_root(self: MessagingBackend) -> Path:
         if self.config.incoming_dir:
@@ -229,15 +231,27 @@ class SharePeerMixin:
         return grant.to_public_dict(remote=False)
 
     async def request_share_list(
-        self: MessagingBackend, owner_hash: str, grant_id: str
-    ) -> bool:
+        self: MessagingBackend,
+        owner_hash: str,
+        grant_id: str,
+        *,
+        timeout: float = 12.0,
+    ) -> list[dict[str, Any]] | None:
         grant = self._remote_share_grants.get(grant_id)
         if not grant or grant.owner_hash != owner_hash or grant.revoked:
-            return False
+            return None
         link = self.get_link(owner_hash)
         if not link or not link.handshake_complete:
-            return False
+            transport = link.transport if link else "tcp"
+            await self.connect_to_peer(owner_hash, transport=transport)
+            await self.wait_for_handshake(owner_hash, timeout=10.0)
+            link = self.get_link(owner_hash)
+        if not link or not link.handshake_complete:
+            return None
         identity = self._identity_for_transport(link.transport)
+        loop = asyncio.get_running_loop()
+        waiter: asyncio.Future[list[dict[str, Any]]] = loop.create_future()
+        self._share_listing_waiters[grant_id] = waiter
         body = encode_payload(
             {
                 "action": "list",
@@ -245,9 +259,15 @@ class SharePeerMixin:
                 "requester_hash": identity.hash_id,
             }
         )
-        packet = await self._encrypt_for_link(link, MessageType.SHARE_REQUEST, body)
-        await self._send_raw(link.transport_peer_id, link.transport, packet)
-        return True
+        try:
+            packet = await self._encrypt_for_link(link, MessageType.SHARE_REQUEST, body)
+            await self._send_raw(link.transport_peer_id, link.transport, packet)
+            return await asyncio.wait_for(waiter, timeout=timeout)
+        except TimeoutError:
+            log.warning("Share listing timeout for grant %s", grant_id[:8])
+            return None
+        finally:
+            self._share_listing_waiters.pop(grant_id, None)
 
     async def request_share_file(
         self: MessagingBackend,
@@ -373,15 +393,19 @@ class SharePeerMixin:
                         "size": entry.get("size", 0),
                     }
                 )
+            waiter = self._share_listing_waiters.get(grant_id)
+            if waiter and not waiter.done():
+                waiter.set_result(normalized)
             if self._on_event:
-                await self._on_event(
-                    {
-                        "kind": "share_listing",
-                        "hash_id": hash_id,
-                        "grant_id": grant_id,
-                        "entries": normalized,
-                    }
-                )
+                payload: dict[str, Any] = {
+                    "kind": "share_listing",
+                    "hash_id": hash_id,
+                    "grant_id": grant_id,
+                    "entries": normalized,
+                }
+                if data.get("error"):
+                    payload["error"] = data["error"]
+                await self._on_event(payload)
 
     async def _handle_share_request(
         self: MessagingBackend, hash_id: str, body: bytes
@@ -390,17 +414,30 @@ class SharePeerMixin:
 
         data = decode_payload(body)
         grant_id = data.get("grant_id", "")
+        requester = str(data.get("requester_hash") or hash_id)
         grant = self._share_grants.get(grant_id)
-        if not grant or not grant.valid_for(hash_id):
-            log.warning(
-                "Share request denied for grant %s from %s",
-                grant_id[:8],
-                hash_id[:8],
-            )
-            return
         action = data.get("action", "")
         link = self.get_link(hash_id)
         if not link or not link.handshake_complete:
+            return
+
+        if not grant or not grant.valid_for(requester):
+            log.warning(
+                "Share request denied for grant %s from %s",
+                grant_id[:8],
+                requester[:8],
+            )
+            if action == "list" and grant_id:
+                denied = encode_payload(
+                    {
+                        "action": "listing",
+                        "grant_id": grant_id,
+                        "entries": [],
+                        "error": "access_denied",
+                    }
+                )
+                packet = await self._encrypt_for_link(link, MessageType.SHARE_LIST, denied)
+                await self._send_raw(link.transport_peer_id, link.transport, packet)
             return
 
         if action == "list":
