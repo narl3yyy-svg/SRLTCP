@@ -2022,6 +2022,7 @@
     let html = "";
 
     msgs.forEach((m) => {
+      try {
       const date = formatDate(m.timestamp);
       if (date !== lastDate) {
         html += `<div class="date-sep">${date}</div>`;
@@ -2047,6 +2048,7 @@
           </div>
         </div>
       </div>`;
+      } catch (_) { /* skip malformed message */ }
     });
 
     el.innerHTML = html || '<div class="empty-hint" style="text-align:center;padding:2rem">No messages yet — say hello!</div>';

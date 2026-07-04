@@ -295,9 +295,9 @@ class TransferMixin:
             transfer.state = TransferState.COMPLETE
             log.info("Transfer complete: %s", transfer.filename)
             self._mark_transfer_cooldown(hash_id, transfer.recipient_hash)
+            await self._emit_transfer_progress(transfer, force=True)
             if self._on_transfer_complete:
                 await self._on_transfer_complete(transfer.to_dict())
-            await self._emit_transfer_progress(transfer, force=True)
         except asyncio.CancelledError:
             transfer.state = TransferState.CANCELLED
             await self._emit_transfer_progress(transfer, force=True)
@@ -388,9 +388,9 @@ class TransferMixin:
         transfer.offset = transfer.size
         log.info("Transfer complete: %s", transfer.filename)
         self._mark_transfer_cooldown(transfer.sender_hash, transfer.recipient_hash)
+        await self._emit_transfer_progress(transfer, force=True)
         if self._on_transfer_complete:
             await self._on_transfer_complete(transfer.to_dict())
-        await self._emit_transfer_progress(transfer, force=True)
         self._transfer_progress_emit.pop(transfer_id, None)
         return True
 
