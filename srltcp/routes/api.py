@@ -369,12 +369,12 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         transfer = node.backend._transfers.get(transfer_id)
         if not transfer:
             return web.json_response({"error": "transfer not found"}, status=404)
+        incoming = node.backend._incoming_paths.get(transfer_id)
         path = transfer.path
-        if not path.is_file():
-            incoming = node.backend._incoming_paths.get(transfer_id)
-            if incoming and incoming.is_file():
-                path = incoming
-            elif path.exists() and path.stat().st_size > 0:
+        if incoming and incoming.is_file():
+            path = incoming
+        elif not path.is_file():
+            if path.exists() and path.stat().st_size > 0:
                 pass
             else:
                 return web.json_response({"error": "file not ready"}, status=404)

@@ -1,5 +1,12 @@
 # SRLTCP Release Notes
 
+## v0.1.46 (2026-07-03)
+
+### Media previews (receiver)
+- **Transfer state merge** — chat preview uses terminal `complete` from message metadata even when stale WS progress is cached (fixes receiver screenshots stuck as paperclip)
+- **Filename fallback** — infer image/video type from `.png`/`.mp4` extension when `msg_type` is generic `file`
+- **File API** — prefer `_incoming_paths` for received files when serving inline preview
+
 ## v0.1.45 (2026-07-03)
 
 ### Android CI

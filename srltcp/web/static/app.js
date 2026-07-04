@@ -53,6 +53,54 @@
   const ICON_COPY = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
   const ICON_TRASH = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>`;
   const ACTIVE_TRANSFER_STATES = new Set(["transferring", "accepted", "offered"]);
+  const TERMINAL_TRANSFER_STATES = new Set(["complete", "failed", "cancelled"]);
+
+  function mediaMsgType(msg) {
+    const t = msg?.msg_type;
+    if (t === "image" || t === "video") return t;
+    const name = String(msg?.metadata?.filename || msg?.text || "").toLowerCase();
+    if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(name)) return "image";
+    if (/\.(mp4|webm|mov|mkv|avi|m4v|ogv)$/.test(name)) return "video";
+    return t || "file";
+  }
+
+  /** Merge live WS transfer state with persisted message metadata (prefer terminal). */
+  function mergeTransferMeta(tid, meta = {}) {
+    const live = tid ? state.transfers[tid] : null;
+    const metaState = meta.state;
+    const liveState = live?.state;
+    let state = liveState || metaState || "transferring";
+    if (TERMINAL_TRANSFER_STATES.has(metaState)) state = metaState;
+    else if (TERMINAL_TRANSFER_STATES.has(liveState)) state = liveState;
+    return {
+      ...meta,
+      ...(live || {}),
+      transfer_id: tid || meta.transfer_id,
+      state,
+      offset: live?.offset ?? meta.offset ?? 0,
+      size: live?.size ?? meta.size ?? 0,
+      speed_mbps: live?.speed_mbps ?? meta.speed_mbps,
+      filename: live?.filename || meta.filename,
+    };
+  }
+
+  function syncTransferStateFromMessage(m) {
+    const tid = m?.metadata?.transfer_id;
+    if (!tid) return;
+    const meta = m.metadata || {};
+    const prev = state.transfers[tid] || {};
+    const metaState = meta.state;
+    const prevState = prev.state;
+    let state = prevState || metaState;
+    if (TERMINAL_TRANSFER_STATES.has(metaState)) state = metaState;
+    else if (TERMINAL_TRANSFER_STATES.has(prevState)) state = prevState;
+    state.transfers[tid] = {
+      ...prev,
+      ...meta,
+      id: tid,
+      state: state || metaState || prevState || "transferring",
+    };
+  }
 
   function hashColor(str) {
     let h = 0;
@@ -334,7 +382,7 @@
             );
             refreshTransferBubble(data.id, data, { scroll: !!state.selectedPeer });
             const msg = messageForTransfer(data.id);
-            if (msg && (msg.msg_type === "image" || msg.msg_type === "video")) {
+            if (msg && (mediaMsgType(msg) === "image" || mediaMsgType(msg) === "video")) {
               renderMessages(state.messageCache, { scrollToBottom: !!state.selectedPeer });
             }
           }
@@ -605,6 +653,7 @@
     const filtered = msgs.filter(
       (m) => m.sender_hash === state.selectedPeer || m.recipient_hash === state.selectedPeer
     );
+    filtered.forEach((m) => syncTransferStateFromMessage(m));
     renderMessages(filtered);
   }
 
@@ -1708,21 +1757,22 @@
   function renderFileBubble(m, out) {
     const meta = m.metadata || {};
     const tid = meta.transfer_id || "";
-    const live = state.transfers[tid] || meta;
-    const size = live.size || meta.size || 0;
-    const offset = live.offset || meta.offset || 0;
+    const live = mergeTransferMeta(tid, meta);
+    const mediaType = mediaMsgType(m);
+    const size = live.size || 0;
+    const offset = live.offset || 0;
     const pct = size ? Math.min(100, Math.round((offset / size) * 100)) : 0;
-    const speed = live.speed_mbps || meta.speed_mbps;
-    const stateLabel = live.state || meta.state || "transferring";
-    const filename = meta.filename || m.text || "file";
+    const speed = live.speed_mbps;
+    const stateLabel = live.state || "transferring";
+    const filename = live.filename || m.text || "file";
     const speedStr = speed ? ` · ${Number(speed).toFixed(2)} MB/s` : "";
     const fileUrl = tid ? `/api/transfers/${encodeURIComponent(tid)}/file` : "";
     const downloadUrl = fileUrl ? `${fileUrl}?download=1` : "";
     const cancelled = stateLabel === "cancelled";
     const failed = stateLabel === "failed";
     const stateClass = cancelled ? " cancelled" : failed ? " failed" : "";
-    const canPreviewImage = m.msg_type === "image" && fileUrl && stateLabel === "complete";
-    const canPreviewVideo = m.msg_type === "video" && fileUrl && stateLabel === "complete";
+    const canPreviewImage = mediaType === "image" && fileUrl && stateLabel === "complete";
+    const canPreviewVideo = mediaType === "video" && fileUrl && stateLabel === "complete";
     const previewUrl = canPreviewImage || canPreviewVideo
       ? `${fileUrl}?v=${encodeURIComponent(stateLabel)}`
       : fileUrl;
@@ -1838,13 +1888,20 @@
 
   function syncTransferMessage(data) {
     if (!data?.id) return;
+    state.transfers[data.id] = { ...state.transfers[data.id], ...data };
     const idx = state.messageCache.findIndex((m) => m.metadata?.transfer_id === data.id);
     if (idx < 0) return;
     const meta = state.messageCache[idx].metadata || {};
+    const metaState = meta.state;
+    const dataState = data.state;
+    let state = dataState ?? metaState;
+    if (TERMINAL_TRANSFER_STATES.has(metaState) && !TERMINAL_TRANSFER_STATES.has(dataState)) {
+      state = metaState;
+    }
     state.messageCache[idx].metadata = {
       ...meta,
       transfer_id: data.id,
-      state: data.state ?? meta.state,
+      state,
       offset: data.offset ?? meta.offset,
       size: data.size ?? meta.size,
       speed_mbps: data.speed_mbps ?? meta.speed_mbps,
@@ -1856,9 +1913,14 @@
 
   function bubbleNeedsMediaRender(msg, bubble, data) {
     if (!msg) return false;
-    if (msg.msg_type !== "image" && msg.msg_type !== "video") return false;
-    const stateLabel = data.state || msg.metadata?.state || "";
-    return stateLabel === "complete";
+    const mediaType = mediaMsgType(msg);
+    if (mediaType !== "image" && mediaType !== "video") return false;
+    const tid = msg.metadata?.transfer_id || data?.id || "";
+    const merged = mergeTransferMeta(tid, msg.metadata || {});
+    const stateLabel = data?.state || merged.state || "";
+    if (stateLabel !== "complete") return false;
+    if (!bubble) return true;
+    return !bubble.classList.contains("image-bubble") && !bubble.classList.contains("video-bubble");
   }
 
   function refreshTransferBubble(transferId, data, { scroll = false } = {}) {
@@ -1872,7 +1934,7 @@
       renderMessages(state.messageCache, { scrollToBottom: scroll });
       return;
     }
-    if (scroll && msg && (msg.msg_type === "image" || msg.msg_type === "video") && data.state === "complete") {
+    if (scroll && msg && (mediaMsgType(msg) === "image" || mediaMsgType(msg) === "video") && data.state === "complete") {
       scrollMessagesToBottom();
     }
   }
@@ -1940,7 +2002,8 @@
         lastDate = date;
       }
       const out = isOutgoing(m.sender_hash);
-      const isFile = m.msg_type === "file" || m.msg_type === "image" || m.msg_type === "video";
+      const mediaType = mediaMsgType(m);
+      const isFile = mediaType === "file" || mediaType === "image" || mediaType === "video";
       const body = isFile ? renderFileBubble(m, out) : escapeHtml(m.text);
       const actions = isFile
         ? ""
@@ -1949,7 +2012,7 @@
             <button type="button" class="bubble-action icon-only danger" data-del-msg="${escapeHtml(m.id)}" title="Delete" aria-label="Delete">${ICON_TRASH}</button>
           </div>`;
       html += `<div class="bubble-row ${out ? "out" : "in"}" data-msg-id="${escapeHtml(m.id)}">
-        <div class="bubble ${out ? "out" : "in"} ${m.msg_type === "image" ? "image" : ""}">
+        <div class="bubble ${out ? "out" : "in"} ${mediaType === "image" ? "image" : ""}">
           ${actions}
           ${body}
           <div class="bubble-meta">
@@ -2079,20 +2142,23 @@
     const idx = state.messageCache.findIndex((m) => m.metadata?.transfer_id === data.id);
     if (idx >= 0) {
       const meta = state.messageCache[idx].metadata || {};
+      const merged = mergeTransferMeta(data.id, meta);
       state.messageCache[idx].metadata = {
         ...meta,
         transfer_id: data.id || meta.transfer_id,
-        state: data.state ?? meta.state,
-        offset: data.offset ?? meta.offset,
-        size: data.size ?? meta.size,
-        speed_mbps: data.speed_mbps ?? meta.speed_mbps,
-        filename: data.filename ?? meta.filename,
+        state: merged.state,
+        offset: merged.offset,
+        size: merged.size,
+        speed_mbps: merged.speed_mbps,
+        filename: merged.filename,
       };
-      if (["complete", "failed", "cancelled"].includes(data.state)) {
-        refreshTransferBubble(data.id, data, { scroll: data.state === "complete" });
-        if (data.state === "complete") {
+      if (TERMINAL_TRANSFER_STATES.has(merged.state)) {
+        refreshTransferBubble(data.id, mergeTransferMeta(data.id, state.messageCache[idx].metadata), {
+          scroll: merged.state === "complete",
+        });
+        if (merged.state === "complete") {
           const msg = messageForTransfer(data.id);
-          if (msg && (msg.msg_type === "image" || msg.msg_type === "video")) {
+          if (msg && (mediaMsgType(msg) === "image" || mediaMsgType(msg) === "video")) {
             renderMessages(state.messageCache, { scrollToBottom: true });
           }
         }
@@ -2121,16 +2187,17 @@
       return;
     }
 
-    if (m.msg_type === "file" || m.msg_type === "image" || m.msg_type === "video") {
+    const msgMedia = mediaMsgType(m);
+    if (msgMedia === "file" || msgMedia === "image" || msgMedia === "video") {
       const tid = m.metadata?.transfer_id;
       const idx = state.messageCache.findIndex((x) => x.id === m.id);
       if (idx >= 0) {
         const prev = state.messageCache[idx];
         state.messageCache[idx] = m;
+        syncTransferStateFromMessage(m);
         if (tid) {
-          state.transfers[tid] = { ...state.transfers[tid], ...m.metadata, id: tid };
-          const done = ["complete", "failed", "cancelled"].includes(m.metadata?.state);
-          if (done && (m.msg_type === "image" || m.msg_type === "video")) {
+          const done = TERMINAL_TRANSFER_STATES.has(m.metadata?.state);
+          if (done && (msgMedia === "image" || msgMedia === "video")) {
             refreshTransferBubble(tid, state.transfers[tid], { scroll: m.metadata?.state === "complete" });
             return;
           }
