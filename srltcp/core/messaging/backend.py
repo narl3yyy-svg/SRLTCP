@@ -15,7 +15,7 @@ from srltcp.core.discovery import DiscoveryRegistry
 from srltcp.core.identity import Identity, IdentityStore
 from srltcp.core.messaging.announce import AnnounceMixin
 from srltcp.core.messaging.connect import ConnectMixin
-from srltcp.core.messaging.constants import COMPRESS_THRESHOLD
+from srltcp.core.messaging.constants import COMPRESS_THRESHOLD, DISCOVERY_PORT
 from srltcp.core.messaging.links import PeerLink, PeerLinkMixin
 from srltcp.core.messaging.models import ChatMessage
 from srltcp.core.messaging.ping import PingMixin
@@ -48,6 +48,8 @@ class NodeConfig:
     name: str = "srltcp-node"
     bind_host: str = "0.0.0.0"
     tcp_port: int = 7825
+    discovery_port: int = DISCOVERY_PORT
+    strict_ports: bool = True
     relay_mode: bool = False
     enable_tcp: bool = True
     enable_serial: bool = False
@@ -138,6 +140,8 @@ class MessagingBackend(
             self.tcp_transport = TCPTransport(
                 host=self.config.bind_host,
                 port=self.config.tcp_port,
+                discovery_port=self.config.discovery_port,
+                strict_ports=self.config.strict_ports,
             )
             self._wire_transport(self.tcp_transport)
 
@@ -151,7 +155,8 @@ class MessagingBackend(
 
         if self.tcp_transport:
             await self.tcp_transport.start()
-            self.config.tcp_port = self.tcp_transport.port
+            if not self.config.strict_ports:
+                self.config.tcp_port = self.tcp_transport.port
         if self.serial_transport:
             try:
                 await self.serial_transport.start()

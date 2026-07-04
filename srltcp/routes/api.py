@@ -245,16 +245,11 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                 {"error": exc.reason, "transport": exc.transport},
                 status=503,
             )
-        from srltcp.core.messaging.announce import SERIAL_ANNOUNCE_BURSTS
-
-        burst_count = (
-            SERIAL_ANNOUNCE_BURSTS if raw == "serial" else ANNOUNCE_BURSTS
-        )
         return web.json_response(
             {
                 "announced": True,
                 "transports": announced,
-                "bursts": burst_count,
+                "bursts": ANNOUNCE_BURSTS,
             }
         )
 
@@ -519,6 +514,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         if preset not in ("forever", "restart"):
             updated.message_retention_hours = max(1, min(updated.message_retention_hours, 8760))
         updated.web_port = max(1024, min(updated.web_port, 65535))
+        updated.tcp_port = max(1024, min(updated.tcp_port, 65535))
+        updated.discovery_port = max(1024, min(updated.discovery_port, 65535))
         if updated.clock_source not in ("system", "ntp"):
             updated.clock_source = "system"
         if updated.ntp_server:

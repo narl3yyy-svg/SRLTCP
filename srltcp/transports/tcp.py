@@ -24,11 +24,13 @@ class TCPTransport(Transport):
         port: int = 7825,
         *,
         discovery_port: int = 7826,
+        strict_ports: bool = False,
     ) -> None:
         super().__init__()
         self.host = host
         self.port = port
         self.discovery_port = discovery_port
+        self.strict_ports = strict_ports
         self._server: asyncio.AbstractServer | None = None
         self._discovery_protocol: _DiscoveryProtocol | None = None
         self._discovery_transport: asyncio.DatagramTransport | None = None
@@ -61,16 +63,20 @@ class TCPTransport(Transport):
             await self._emit_event(TransportEvent(kind="connected", peer=peer))
             log.info("TCP peer connected: %s (%s)", peer_id[:8], address)
 
-        self._server, self.port = await start_tcp_server(_handle, self.host, self.port)
+        self._server, self.port = await start_tcp_server(
+            _handle, self.host, self.port, strict=self.strict_ports
+        )
         log.info("TCP transport listening on %s:%d", self.host, self.port)
 
         loop = asyncio.get_running_loop()
         self._discovery_protocol = _DiscoveryProtocol(self)
+        requested_discovery = self.discovery_port
         self._discovery_transport, self.discovery_port = await bind_udp_port(
             loop,
             lambda: self._discovery_protocol,
             "0.0.0.0",
-            self.discovery_port,
+            requested_discovery,
+            strict=self.strict_ports,
         )
         log.info("UDP discovery on port %d", self.discovery_port)
 

@@ -33,6 +33,7 @@ async def start_tcp_server(
     port: int,
     *,
     max_attempts: int = DEFAULT_PORT_ATTEMPTS,
+    strict: bool = False,
 ) -> tuple[Any, int]:
     """
     Start an asyncio TCP server, trying successive ports if busy.
@@ -40,8 +41,9 @@ async def start_tcp_server(
     """
     import asyncio
 
+    attempts = 1 if strict else max_attempts
     last_err: OSError | None = None
-    for offset in range(max_attempts):
+    for offset in range(attempts):
         try_port = port + offset
         try:
             server = await asyncio.start_server(factory, host, try_port)
@@ -59,8 +61,9 @@ async def start_tcp_server(
             last_err = exc
     raise OSError(
         errno.EADDRINUSE,
-        f"Could not bind TCP port {port}–{port + max_attempts - 1}. "
-        "Another SRLTCP instance may be running.",
+        f"Could not bind TCP port {port}"
+        + ("" if strict else f"–{port + attempts - 1}")
+        + ". Another SRLTCP instance may be running.",
     ) from last_err
 
 
@@ -71,10 +74,12 @@ async def bind_udp_port(
     port: int,
     *,
     max_attempts: int = DEFAULT_PORT_ATTEMPTS,
+    strict: bool = False,
 ) -> tuple[Any, int]:
     """Bind a UDP datagram endpoint with port fallback."""
+    attempts = 1 if strict else max_attempts
     last_err: OSError | None = None
-    for offset in range(max_attempts):
+    for offset in range(attempts):
         try_port = port + offset
         try:
             transport, _ = await loop.create_datagram_endpoint(
@@ -90,7 +95,9 @@ async def bind_udp_port(
             last_err = exc
     raise OSError(
         errno.EADDRINUSE,
-        f"Could not bind UDP port {port}–{port + max_attempts - 1}.",
+        f"Could not bind UDP port {port}"
+        + ("" if strict else f"–{port + attempts - 1}.")
+        + ("." if strict else ""),
     ) from last_err
 
 
@@ -101,12 +108,14 @@ async def start_web_site(
     *,
     ssl_context: Any = None,
     max_attempts: int = DEFAULT_PORT_ATTEMPTS,
+    strict: bool = False,
 ) -> tuple[Any, int]:
     """Start aiohttp TCPSite with port fallback."""
     from aiohttp import web
 
+    attempts = 1 if strict else max_attempts
     last_err: OSError | None = None
-    for offset in range(max_attempts):
+    for offset in range(attempts):
         try_port = port + offset
         try:
             site = web.TCPSite(runner, host, try_port, ssl_context=ssl_context)
@@ -120,5 +129,7 @@ async def start_web_site(
             last_err = exc
     raise OSError(
         errno.EADDRINUSE,
-        f"Could not bind web port {port}–{port + max_attempts - 1}.",
+        f"Could not bind web port {port}"
+        + ("" if strict else f"–{port + attempts - 1}")
+        + ". Stop the other process using this port or disable strict ports.",
     ) from last_err

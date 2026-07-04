@@ -8,7 +8,12 @@ import sys
 
 from srltcp import __version__
 from srltcp.core.messaging.backend import NodeConfig
-from srltcp.core.messaging.constants import DEFAULT_TCP_PORT, RELAY_TCP_PORT, WEB_PORT
+from srltcp.core.messaging.constants import (
+    DEFAULT_TCP_PORT,
+    DISCOVERY_PORT,
+    RELAY_TCP_PORT,
+    WEB_PORT,
+)
 from srltcp.core.node import SRLTCPNode
 from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.utils.logging import get_logger, setup_logging
@@ -38,7 +43,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help=f"HTTPS web UI port (default from settings or {WEB_PORT})",
     )
-    web.add_argument("--tcp-port", type=int, default=DEFAULT_TCP_PORT, help="TCP transport port")
+    web.add_argument(
+        "--tcp-port",
+        type=int,
+        default=0,
+        help=f"TCP transport port (default from settings or {DEFAULT_TCP_PORT})",
+    )
+    web.add_argument(
+        "--discovery-port",
+        type=int,
+        default=0,
+        help=f"UDP discovery port (default from settings or {DISCOVERY_PORT})",
+    )
     web.add_argument("--bind", default="0.0.0.0", help="TCP transport bind address")
     web.add_argument("--serial", action="store_true", help="Enable USB serial transport")
     web.add_argument("--serial-port", default="", help="Serial device path")
@@ -72,10 +88,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) -> NodeConfig:
     name = args.name or settings.display_name
+    tcp_port = args.tcp_port or settings.tcp_port or DEFAULT_TCP_PORT
+    discovery_port = args.discovery_port or settings.discovery_port or DISCOVERY_PORT
     return NodeConfig(
         name=name,
         bind_host=args.bind,
-        tcp_port=args.tcp_port,
+        tcp_port=tcp_port,
+        discovery_port=discovery_port,
+        strict_ports=settings.strict_ports,
         relay_mode=args.relay,
         enable_tcp=not args.no_tcp,
         enable_serial=args.serial or settings.enable_serial,
@@ -93,8 +113,7 @@ async def run_web(args: argparse.Namespace) -> None:
     settings = store.load()
     settings.version = __version__
 
-    web_port = args.port or settings.web_port or WEB_PORT
-    settings.web_port = web_port
+    requested_web_port = args.port or settings.web_port or WEB_PORT
     if args.name:
         settings.display_name = args.name
 
@@ -119,16 +138,28 @@ async def run_web(args: argparse.Namespace) -> None:
     shutdown.add_hook(cleanup)
 
     await node.start()
-    runner, site, bound_port = await run_web_server(node, host="127.0.0.1", port=web_port)
+    runner, site, bound_port = await run_web_server(
+        node,
+        host="127.0.0.1",
+        port=requested_web_port,
+        strict=settings.strict_ports,
+    )
     web_holder["runner"] = runner
     web_holder["site"] = site
-    settings.web_port = bound_port
+    settings.web_port = requested_web_port
     store.save(settings)
     _android_web_port["port"] = bound_port
     global _android_server_ready
     _android_server_ready = True
 
     log.info("SRLTCP v%s running — https://127.0.0.1:%d", __version__, bound_port)
+    if bound_port != requested_web_port:
+        log.warning(
+            "Configured web port %d was busy — bound %d instead. "
+            "Stop other SRLTCP instances or enable strict ports.",
+            requested_web_port,
+            bound_port,
+        )
     log.info("Press Ctrl+C to stop")
 
     await shutdown.wait()

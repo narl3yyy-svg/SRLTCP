@@ -17,8 +17,6 @@ log = get_logger(__name__)
 
 ANNOUNCE_BURSTS = 3
 ANNOUNCE_BURST_DELAY = 0.12
-SERIAL_ANNOUNCE_BURSTS = 5
-SERIAL_ANNOUNCE_BURST_DELAY = 0.25
 
 
 class AnnounceError(Exception):
@@ -39,12 +37,9 @@ class AnnounceMixin:
         self._announce_tasks = []
 
     def build_announce_payload(self: MessagingBackend, transport: str) -> bytes:
-        identity = self.identities.get(transport)
+        identity = self.identities.get(transport) or self.identities.get("tcp")
         if not identity:
-            raise AnnounceError(
-                transport,
-                f"No {transport} identity — enable {transport} transport first",
-            )
+            raise AnnounceError(transport, f"No identity for transport: {transport}")
         discovery_port = (
             self.tcp_transport.discovery_port
             if self.tcp_transport
@@ -90,7 +85,11 @@ class AnnounceMixin:
                     "Serial transport is not open — check port and permissions",
                 )
             packet = build_header(MessageType.ANNOUNCE, body=payload)
-            await self.serial_transport.broadcast(packet)
+            peers = self.serial_transport.peers()
+            if peers:
+                await self.serial_transport.send(peers[0].peer_id, packet)
+            else:
+                await self.serial_transport.broadcast(packet)
         log.info("Announced on %s", transport_name)
 
     async def announce(
@@ -110,19 +109,9 @@ class AnnounceMixin:
 
         announced: list[str] = []
         for t in transports:
-            bursts = (
-                SERIAL_ANNOUNCE_BURSTS
-                if t == "serial"
-                else ANNOUNCE_BURSTS
-            )
-            delay = (
-                SERIAL_ANNOUNCE_BURST_DELAY
-                if t == "serial"
-                else ANNOUNCE_BURST_DELAY
-            )
-            for _ in range(bursts):
+            for _ in range(ANNOUNCE_BURSTS):
                 await self._send_announce(t)
-                await asyncio.sleep(delay)
+                await asyncio.sleep(ANNOUNCE_BURST_DELAY)
             announced.append(t)
         return announced
 

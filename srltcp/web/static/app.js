@@ -614,7 +614,7 @@
       toast(data.error || `Announce ${transport.toUpperCase()} failed`);
       return;
     }
-    const bursts = data.bursts || (transport === "serial" ? 5 : 3);
+    const bursts = data.bursts || 3;
     toast(`Announced on ${transport.toUpperCase()} (${bursts}× burst)`);
     logActivity(`Announced on ${transport}`);
     setTimeout(loadPeers, 800);
@@ -1219,6 +1219,13 @@
   function fillSettingsForm(settings) {
     $("#set-name").value = settings.display_name || "";
     $("#set-web-port").value = settings.web_port || 9876;
+    if ($("#set-tcp-port")) $("#set-tcp-port").value = settings.tcp_port || 7825;
+    if ($("#set-discovery-port")) {
+      $("#set-discovery-port").value = settings.discovery_port || 7826;
+    }
+    if ($("#set-strict-ports")) {
+      $("#set-strict-ports").checked = settings.strict_ports !== false;
+    }
     const preset = settings.message_retention_preset || "1w";
     if ($("#set-retention")) $("#set-retention").value = preset;
     $("#set-incoming").value = settings.incoming_files_dir || "";
@@ -1248,6 +1255,7 @@
   }
 
   async function saveSettings(formData, complete) {
+    const prev = { ...state.settings };
     const res = await fetch("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1258,7 +1266,14 @@
       return false;
     }
     state.settings = await res.json();
-    toast(complete ? "Setup complete!" : "Settings saved");
+    const portsChanged = ["web_port", "tcp_port", "discovery_port", "strict_ports"].some(
+      (k) => prev[k] !== state.settings[k]
+    );
+    if (portsChanged) {
+      toast("Settings saved — restart SRLTCP to apply port changes");
+    } else {
+      toast(complete ? "Setup complete!" : "Settings saved");
+    }
     if (complete) $("#setup-overlay").classList.add("hidden");
     renderStatus(await (await fetch("/api/status")).json());
     return true;
@@ -2362,6 +2377,9 @@
     return {
       display_name: $(`#${prefix}-name`).value.trim(),
       web_port: parseInt($(`#${prefix}-web-port`).value, 10),
+      tcp_port: parseInt($("#set-tcp-port")?.value || "7825", 10),
+      discovery_port: parseInt($("#set-discovery-port")?.value || "7826", 10),
+      strict_ports: $("#set-strict-ports")?.checked !== false,
       message_retention_preset: $(`#${prefix}-retention`)?.value || "1w",
       incoming_files_dir: $(`#${prefix}-incoming`)?.value.trim() || "",
       shared_folder: $(`#${prefix}-shared`)?.value.trim() || "",

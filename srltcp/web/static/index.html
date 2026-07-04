@@ -167,7 +167,21 @@
             <label class="field">
               <span>Web UI port (HTTPS)</span>
               <input type="number" id="set-web-port" min="1024" max="65535" />
-              <small>Restart required after changing port</small>
+              <small>Default 9876 — restart required</small>
+            </label>
+            <label class="field">
+              <span>TCP peer port</span>
+              <input type="number" id="set-tcp-port" min="1024" max="65535" />
+              <small>Default 7825 — restart required; use the same on every peer</small>
+            </label>
+            <label class="field">
+              <span>UDP discovery port</span>
+              <input type="number" id="set-discovery-port" min="1024" max="65535" />
+              <small>Default 7826 — restart required; use the same on every peer</small>
+            </label>
+            <label class="field checkbox-field">
+              <input type="checkbox" id="set-strict-ports" checked />
+              <span>Use exact ports (fail if busy instead of auto-incrementing)</span>
             </label>
             <label class="field">
               <span>Network interface / IP</span>

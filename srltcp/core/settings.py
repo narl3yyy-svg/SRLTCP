@@ -8,7 +8,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from srltcp.core.messaging.constants import WEB_PORT
+from srltcp.core.messaging.constants import (
+    DEFAULT_TCP_PORT,
+    DISCOVERY_PORT,
+    WEB_PORT,
+)
 from srltcp.utils.files import ensure_dir
 from srltcp.utils.platform import data_dir
 
@@ -32,6 +36,9 @@ class AppSettings:
     setup_complete: bool = False
     display_name: str = "srltcp-node"
     web_port: int = WEB_PORT
+    tcp_port: int = DEFAULT_TCP_PORT
+    discovery_port: int = DISCOVERY_PORT
+    strict_ports: bool = True
     message_retention_hours: int = 168
     message_retention_preset: str = "1w"
     incoming_files_dir: str = ""
@@ -47,7 +54,7 @@ class AppSettings:
     clock_source: str = "system"  # system | ntp
     ntp_server: str = "pool.ntp.org"
     wan_expose_port: bool = False
-    version: str = "0.1.36"
+    version: str = "0.1.37"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

@@ -1,5 +1,18 @@
 # SRLTCP Release Notes
 
+## v0.1.37 (2026-07-03)
+
+### Ports
+- **Configurable ports** — Settings → Network: Web UI (9876), TCP (7825), UDP discovery (7826)
+- **Strict ports** — enabled by default; no silent fallback to 9878/7827 when your chosen port is busy
+- **Web port fix** — configured port is no longer overwritten when a fallback bind occurs
+
+### Discovery
+- **Announce** — restored v0.1.19-style identity + serial framing; kept Linux interface netmask fix
+
+### Android CI
+- **sdkmanager** — legacy `tools/bin/sdkmanager` symlink for Buildozer; NDK path verified before build
+
 ## v0.1.36 (2026-07-03)
 
 ### Discovery
