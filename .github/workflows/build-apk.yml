@@ -29,13 +29,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK (This fixes sdkmanager)
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: |
-            platforms;android-35
-            build-tools;35.0.0
-            ndk;26.1.10909125
+          cmdline-tools-version: 16.0   # More stable version
+          packages: platform-tools,platforms;android-35,build-tools;35.0.0,ndk;26.1.10909125
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -45,10 +43,8 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential git zip unzip autoconf automake libtool pkg-config \
-            zlib1g-dev libncurses-dev libtinfo6 cmake libffi-dev libssl-dev \
-            libltdl-dev gettext autopoint
+          sudo apt-get install -y build-essential git zip unzip autoconf automake libtool pkg-config \
+            zlib1g-dev libncurses-dev libtinfo6 cmake libffi-dev libssl-dev libltdl-dev gettext autopoint
 
       - name: Install Rust
         run: |
@@ -62,40 +58,29 @@ jobs:
 
       - name: Verify buildozer.spec
         working-directory: android
-        run: |
-          echo "=== buildozer.spec content ==="
-          cat buildozer.spec
-          grep -E 'python3==3\.12|android\.api = 35|android\.archs = arm64-v8a' buildozer.spec || echo "Some required settings missing!"
+        run: cat buildozer.spec
 
       - name: Clean previous builds
-        run: |
-          rm -rf ~/.buildozer/android/platform/build-*
-          rm -rf android/.buildozer
+        run: rm -rf ~/.buildozer android/.buildozer
 
-      - name: Build APK with Buildozer
+      - name: Build APK
         working-directory: android
         run: |
-          echo "=== Starting Build ==="
           buildozer -v android debug 2>&1 | tee ../buildozer.log
-          echo "=== Build finished ==="
-          ls -la bin/ || echo "WARNING: No APK folder found!"
 
-      - name: Upload build log (always)
+      - name: Upload build log
         uses: actions/upload-artifact@v4
         with:
           name: buildozer-log
           path: buildozer.log
 
-      - name: Rename APK
+      - name: Rename & Upload APK
         run: |
           pip install -e .
           VERSION=$(python -c "import srltcp; print(srltcp.__version__)" || echo "0.1.30")
           APK=$(find android/bin -name "*.apk" | head -1)
           if [ -n "$APK" ]; then
             cp "$APK" "android/bin/SRLTCP-${VERSION}.apk"
-            echo "APK ready: SRLTCP-${VERSION}.apk"
-          else
-            echo "No APK found!"
           fi
 
       - name: Upload APK artifact
