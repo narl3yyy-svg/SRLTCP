@@ -599,14 +599,22 @@
   }
 
   async function announceTransport(transport) {
-    const res = await fetch(`/api/announce?transport=${transport}`, { method: "POST" });
-    if (!res.ok) {
-      toast(`Announce ${transport.toUpperCase()} failed`);
+    const btn = transport === "tcp" ? $("#btn-announce-tcp") : $("#btn-announce-serial");
+    if (btn?.disabled) {
+      toast(`Enable ${transport.toUpperCase()} in settings first`);
       return;
     }
-    toast(`Announced on ${transport.toUpperCase()}`);
+    const res = await fetch(`/api/announce?transport=${transport}`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast(data.error || `Announce ${transport.toUpperCase()} failed`);
+      return;
+    }
+    const bursts = data.bursts || 3;
+    toast(`Announced on ${transport.toUpperCase()} (${bursts}× burst)`);
     logActivity(`Announced on ${transport}`);
     setTimeout(loadPeers, 800);
+    setTimeout(loadPeers, 2000);
   }
 
   function formatLatency(hashId) {
@@ -1496,6 +1504,12 @@
       .join("");
 
     $("#identities").innerHTML = idHtml || '<div class="empty-hint">No identities</div>';
+
+    const tcpBtn = $("#btn-announce-tcp");
+    if (tcpBtn) {
+      tcpBtn.disabled = !ids.tcp;
+      tcpBtn.title = ids.tcp ? "Announce on TCP/LAN" : "TCP transport unavailable";
+    }
 
     const serialBtn = $("#btn-announce-serial");
     if (serialBtn) {

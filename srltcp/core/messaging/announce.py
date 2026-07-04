@@ -13,6 +13,18 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
+ANNOUNCE_BURSTS = 3
+ANNOUNCE_BURST_DELAY = 0.12
+
+
+class AnnounceError(Exception):
+    """Raised when a manual announce cannot be sent on the requested transport."""
+
+    def __init__(self, transport: str, reason: str) -> None:
+        self.transport = transport
+        self.reason = reason
+        super().__init__(reason)
+
 
 class AnnounceMixin:
     """Broadcast node presence on enabled transports."""
@@ -23,7 +35,12 @@ class AnnounceMixin:
         self._announce_tasks = []
 
     def build_announce_payload(self: MessagingBackend, transport: str) -> bytes:
-        identity = self._identity_for_transport(transport)
+        identity = self.identities.get(transport)
+        if not identity:
+            raise AnnounceError(
+                transport,
+                f"No {transport} identity — enable {transport} transport first",
+            )
         return encode_payload(
             {
                 "type": "announce",
@@ -51,33 +68,52 @@ class AnnounceMixin:
             return "127.0.0.1"
 
     async def _send_announce(self: MessagingBackend, transport_name: str) -> None:
+        transport_name = transport_name.lower()
+        if transport_name not in ("tcp", "serial"):
+            raise AnnounceError(transport_name, f"Unknown transport: {transport_name}")
+
         payload = self.build_announce_payload(transport_name)
-        if transport_name == "tcp" and self.tcp_transport:
+        if transport_name == "tcp":
+            if not self.tcp_transport:
+                raise AnnounceError(transport_name, "TCP transport is not enabled")
             self.tcp_transport.set_announce_payload(payload)
-            await self.tcp_transport.broadcast_discovery(payload)
-        elif transport_name == "serial" and self.serial_transport:
+            if not await self.tcp_transport.broadcast_discovery(payload):
+                raise AnnounceError(
+                    transport_name,
+                    "UDP discovery socket is not available — restart the node",
+                )
+        elif transport_name == "serial":
+            if not self.serial_transport:
+                raise AnnounceError(
+                    transport_name,
+                    "Serial transport is not open — check port and permissions",
+                )
             packet = build_header(MessageType.ANNOUNCE, body=payload)
-            peers = self.serial_transport.peers()
-            if peers:
-                await self.serial_transport.send(peers[0].peer_id, packet)
-            else:
-                await self.serial_transport.broadcast(packet)
+            await self.serial_transport.broadcast(packet)
         log.info("Announced on %s", transport_name)
 
-    async def announce(self: MessagingBackend, transport: str | None = None) -> None:
+    async def announce(
+        self: MessagingBackend, transport: str | None = None
+    ) -> list[str]:
         transports: list[str] = []
         if transport:
-            transports = [transport]
+            transports = [transport.strip().lower()]
         else:
             if self.tcp_transport:
                 transports.append("tcp")
             if self.serial_transport:
                 transports.append("serial")
 
+        if not transports:
+            raise AnnounceError("all", "No transports are available to announce on")
+
+        announced: list[str] = []
         for t in transports:
-            for _ in range(3):
+            for _ in range(ANNOUNCE_BURSTS):
                 await self._send_announce(t)
-                await asyncio.sleep(0.12)
+                await asyncio.sleep(ANNOUNCE_BURST_DELAY)
+            announced.append(t)
+        return announced
 
     async def start_announce_loop(self: MessagingBackend) -> None:
         await self.stop_announce_loop()

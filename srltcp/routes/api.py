@@ -232,10 +232,22 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         await node.backend.ping_peer(hash_id)
         return web.json_response(node.backend.get_peer_metrics(hash_id))
 
-    async def announce(_request: web.Request) -> web.Response:
-        transport = _request.rel_url.query.get("transport")
-        await node.backend.announce(transport)
-        return web.json_response({"announced": True})
+    async def announce(request: web.Request) -> web.Response:
+        from srltcp.core.messaging.announce import ANNOUNCE_BURSTS, AnnounceError
+
+        raw = (request.rel_url.query.get("transport") or "").strip().lower()
+        if raw and raw not in ("tcp", "serial"):
+            return web.json_response({"error": f"invalid transport: {raw}"}, status=400)
+        try:
+            announced = await node.backend.announce(raw or None)
+        except AnnounceError as exc:
+            return web.json_response(
+                {"error": exc.reason, "transport": exc.transport},
+                status=503,
+            )
+        return web.json_response(
+            {"announced": True, "transports": announced, "bursts": ANNOUNCE_BURSTS}
+        )
 
     async def upload_file(request: web.Request) -> web.Response:
         reader = await request.multipart()

@@ -138,9 +138,9 @@ class TCPTransport(Transport):
         conn.peer.metadata.update(metadata)
         self._connections[new_id] = conn
 
-    async def broadcast_discovery(self, payload: bytes) -> None:
+    async def broadcast_discovery(self, payload: bytes) -> bool:
         if not self._discovery_transport:
-            return
+            return False
         import socket as sock_mod
 
         sock = self._discovery_transport.get_extra_info("socket")
@@ -149,6 +149,7 @@ class TCPTransport(Transport):
             sock.setsockopt(sock_mod.SOL_SOCKET, sock_mod.SO_REUSEADDR, 1)
         for target in broadcast_targets():
             self._discovery_transport.sendto(payload, (target, self.discovery_port))
+        return True
 
 
 class _DiscoveryProtocol(asyncio.DatagramProtocol):

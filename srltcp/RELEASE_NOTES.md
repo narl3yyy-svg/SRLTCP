@@ -1,5 +1,14 @@
 # SRLTCP Release Notes
 
+## v0.1.35 (2026-07-03)
+
+### Discovery
+- **Manual announce** — TCP/Serial buttons now validate transport availability and return clear errors when discovery cannot send (e.g. UDP socket down, serial port closed)
+- **Announce feedback** — UI shows API error messages and confirms 3× burst; buttons disable when transport is unavailable
+
+### Android CI
+- **APK build restored** — runner SDK bootstrap with Buildozer symlink, `ANDROIDSDK`/`ANDROIDNDK` env vars, Python 3.12.8 pin; workflow fails if no APK is produced
+
 ## v0.1.31 (2026-07-03)
 
 ### File transfer
