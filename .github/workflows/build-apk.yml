@@ -25,6 +25,10 @@ jobs:
           ndk-version: 'r27c'
           build-tools: '35.0.0'
 
+      - name: Install required Android platform
+        run: |
+          sdkmanager "platforms;android-35"
+
       - name: Install python-for-android
         run: |
           pip install --upgrade pip
@@ -34,6 +38,7 @@ jobs:
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+          ANDROIDAPI: 35
         run: |
           p4a apk \
             --private . \
