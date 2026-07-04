@@ -1,5 +1,11 @@
 # SRLTCP Release Notes
 
+## v0.1.45 (2026-07-03)
+
+### Android CI
+- **grp module** — local p4a recipe disables `grp` via `Modules/Setup.local` (fixes `setgrent` compile failure on arm64-v8a with Python 3.12.8)
+- **serial_access** — tolerates missing `grp` on Android
+
 ## v0.1.44 (2026-07-03)
 
 ### Android CI

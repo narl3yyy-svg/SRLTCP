@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-import grp
 import os
 import platform
+
+try:
+    import grp
+except ModuleNotFoundError:
+    grp = None  # Android builds omit grp (no setgrent in NDK)
 
 
 def serial_access_group() -> str | None:
     """Return the OS group that owns serial devices, if known."""
+    if grp is None:
+        return None
     for name in ("dialout", "uucp"):
         try:
             grp.getgrnam(name)

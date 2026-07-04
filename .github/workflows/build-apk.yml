@@ -57,6 +57,8 @@ jobs:
           grep -E 'python3==3\.12' buildozer.spec
           grep -E 'android\.api = 35' buildozer.spec
           grep -E 'android\.archs = arm64-v8a' buildozer.spec
+          grep -E 'p4a\.local_recipes = p4a-recipes' buildozer.spec
+          test -f p4a-recipes/python3/__init__.py
           python --version | grep '3.12'
           python - <<'PY'
           from configparser import ConfigParser
