@@ -51,6 +51,7 @@ android/local.properties
 Thumbs.db
 
 # Test / coverage
+.pytest-tmp/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
