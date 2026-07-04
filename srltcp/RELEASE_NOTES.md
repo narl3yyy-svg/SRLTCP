@@ -1,5 +1,10 @@
 # SRLTCP Release Notes
 
+## v0.1.47 (2026-07-03)
+
+### Android CI
+- **p4a python3 override** — `get_recipe_dir()` points at upstream patch files (fixes missing `reproducible-buildinfo.diff` in local recipe)
+
 ## v0.1.46 (2026-07-03)
 
 ### Media previews (receiver)

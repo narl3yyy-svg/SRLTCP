@@ -59,6 +59,23 @@ jobs:
           grep -E 'android\.archs = arm64-v8a' buildozer.spec
           grep -E 'p4a\.local_recipes = p4a-recipes' buildozer.spec
           test -f p4a-recipes/python3/__init__.py
+          python - <<'PY'
+          import pythonforandroid
+          from os.path import dirname, join, isfile
+          from importlib.util import spec_from_file_location, module_from_spec
+          spec = spec_from_file_location(
+              "srltcp_p4a_python3",
+              "p4a-recipes/python3/__init__.py",
+          )
+          mod = module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          recipe = mod.recipe
+          recipe.ctx = type("Ctx", (), {"local_recipes": "p4a-recipes"})()
+          upstream = join(dirname(pythonforandroid.__file__), "recipes", "python3")
+          assert recipe.get_recipe_dir() == upstream
+          patch = join(upstream, "patches", "reproducible-buildinfo.diff")
+          assert isfile(patch), patch
+          PY
           python --version | grep '3.12'
           python - <<'PY'
           from configparser import ConfigParser

@@ -1,14 +1,21 @@
 """Disable stdlib grp when cross-compiling for Android (NDK lacks setgrent)."""
 
-from os.path import exists, join
+import pythonforandroid
+from os.path import dirname, exists, join
 
 from pythonforandroid.logger import info
 from pythonforandroid.recipes.python3 import Python3Recipe as _BasePython3Recipe
 from pythonforandroid.util import ensure_dir
 
+_UPSTREAM_RECIPE_DIR = join(dirname(pythonforandroid.__file__), "recipes", "python3")
+
 
 class Python3Recipe(_BasePython3Recipe):
     _GRP_SETUP_LINE = "*grp*\n"
+
+    def get_recipe_dir(self):
+        # Local override has no patches/ tree — use upstream p4a recipe files.
+        return _UPSTREAM_RECIPE_DIR
 
     def _ensure_grp_disabled(self, arch):
         build_dir = self.get_build_dir(arch.arch)
