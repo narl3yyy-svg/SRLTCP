@@ -13,24 +13,39 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build APK with Buildozer
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install system dependencies
         run: |
-          docker run --rm \
-            -v "$PWD":/app \
-            -w /app/android \
-            ghcr.io/kivy/buildozer \
-            bash -c '
-              apt-get update -qq && apt-get install -y -qq expect
-              export BUILDOZER_ALLOW_ROOT=1
-              expect -c "
-                set timeout 600
-                spawn buildozer android debug
-                expect {
-                  -re \"Are you sure you want to continue\" { send \"y\r\"; exp_continue }
-                  eof
-                }
-              "
-            '
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            autoconf automake libtool pkg-config \
+            libffi-dev libssl-dev python3-dev build-essential \
+            openjdk-17-jdk
+
+      - name: Setup Android SDK + NDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 35
+          ndk-version: 'r27c'
+          build-tools: '35.0.0'
+
+      - name: Install Buildozer
+        run: |
+          pip install --upgrade pip
+          pip install buildozer
+
+      - name: Build APK
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+        run: |
+          cd android
+          buildozer android debug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
