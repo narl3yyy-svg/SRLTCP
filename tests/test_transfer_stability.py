@@ -94,3 +94,40 @@ def test_transfer_cooldown(backend: MessagingBackend) -> None:
     assert backend.in_transfer_cooldown(hash_id) is False
     backend._mark_transfer_cooldown(hash_id)
     assert backend.in_transfer_cooldown(hash_id) is True
+
+
+@pytest.mark.asyncio
+async def test_incoming_transfer_auto_finalizes_when_all_bytes_received(
+    backend: MessagingBackend, tmp_path: Path
+) -> None:
+    sender = "d" * 32
+    recipient = "e" * 32
+    payload = b"png-bytes-here"
+    dest = tmp_path / "shot.png"
+    dest.write_bytes(payload)
+    import hashlib
+
+    digest = hashlib.sha256(payload).hexdigest()
+    transfer = FileTransfer(
+        id="tid-auto",
+        sender_hash=sender,
+        recipient_hash=recipient,
+        filename="shot.png",
+        path=dest,
+        size=len(payload),
+        sha256=digest,
+        transport="tcp",
+        state=TransferState.TRANSFERRING,
+        offset=len(payload),
+    )
+    backend._transfers["tid-auto"] = transfer
+    backend._incoming_paths["tid-auto"] = dest
+    backend._on_transfer_complete = AsyncMock()
+
+    with patch("srltcp.core.messaging.transfer.fsync_file", AsyncMock()):
+        ok = await backend._maybe_finalize_incoming_transfer(
+            "tid-auto", peer_hash=sender
+        )
+    assert ok is True
+    assert transfer.state == TransferState.COMPLETE
+    backend._on_transfer_complete.assert_awaited_once()

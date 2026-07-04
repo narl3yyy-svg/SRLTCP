@@ -1,5 +1,12 @@
 # SRLTCP Release Notes
 
+## v0.1.48 (2026-07-03)
+
+### File transfers (receiver)
+- **Auto-finalize** — incoming transfers mark `complete` when all bytes are on disk, even if `FILE_COMPLETE` is lost on link drop
+- **Disconnect recovery** — finalize or fail stuck incoming transfers when the peer disconnects (unblocks preview/UI)
+- **File send** — uses active link transport (TCP vs serial) instead of discovery default
+
 ## v0.1.47 (2026-07-03)
 
 ### Android CI

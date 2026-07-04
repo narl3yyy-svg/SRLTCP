@@ -855,7 +855,7 @@
       body: JSON.stringify({
         recipient_hash: hashId,
         path: uploaded.path,
-        transport: peerTransport(hashId),
+        transport: activeLinkTransport(hashId),
       }),
     });
     if (!res.ok) {

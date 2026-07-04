@@ -334,6 +334,8 @@ class MessagingBackend(
                 self._pending_handshakes.pop(link_hash, None)
                 if self.config.relay_mode:
                     self.routing.remove_for_peer(event.peer.peer_id)
+                if self.has_active_transfer_for(link_hash):
+                    await self._recover_incoming_transfers_for_peer(link_hash)
                 transfer_active = self.has_active_transfer_for(link_hash)
                 in_cooldown = self.in_transfer_cooldown(link_hash)
                 if transfer_active or in_cooldown:

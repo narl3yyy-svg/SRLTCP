@@ -344,6 +344,85 @@ class TransferMixin:
         elapsed = max(time.time() - started, 0.001)
         transfer.speed_mbps = (transfer.offset / elapsed) / (1024 * 1024)
         await self._emit_transfer_progress(transfer)
+        if transfer.offset >= transfer.size:
+            await self._maybe_finalize_incoming_transfer(
+                transfer_id, peer_hash=hash_id
+            )
+
+    async def _maybe_finalize_incoming_transfer(
+        self: MessagingBackend,
+        transfer_id: str,
+        *,
+        peer_hash: str | None = None,
+    ) -> bool:
+        """Mark a received file complete when all bytes are on disk."""
+        transfer = self._transfers.get(transfer_id)
+        if not transfer:
+            return False
+        if transfer.state == TransferState.COMPLETE:
+            return True
+        if transfer.state in (TransferState.FAILED, TransferState.CANCELLED):
+            return False
+        if peer_hash and transfer.sender_hash != peer_hash:
+            return False
+
+        dest = self._incoming_paths.get(transfer_id, transfer.path)
+        if not dest.is_file():
+            return False
+        on_disk = dest.stat().st_size
+        if on_disk < transfer.size or transfer.offset < transfer.size:
+            return False
+
+        await fsync_file(dest)
+        actual = await sha256_file(dest)
+        if actual != transfer.sha256:
+            transfer.state = TransferState.FAILED
+            log.error("SHA256 mismatch for %s", transfer.filename)
+            await self._emit_transfer_progress(transfer, force=True)
+            self._transfer_progress_emit.pop(transfer_id, None)
+            return False
+
+        transfer.state = TransferState.COMPLETE
+        transfer.offset = transfer.size
+        log.info("Transfer complete: %s", transfer.filename)
+        self._mark_transfer_cooldown(transfer.sender_hash, transfer.recipient_hash)
+        if self._on_transfer_complete:
+            await self._on_transfer_complete(transfer.to_dict())
+        await self._emit_transfer_progress(transfer, force=True)
+        self._transfer_progress_emit.pop(transfer_id, None)
+        return True
+
+    async def _recover_incoming_transfers_for_peer(
+        self: MessagingBackend, peer_hash: str
+    ) -> None:
+        """Finalize or fail incoming transfers when the sender link drops."""
+        for transfer_id, transfer in list(self._transfers.items()):
+            if transfer.sender_hash != peer_hash:
+                continue
+            if transfer.state in (
+                TransferState.COMPLETE,
+                TransferState.FAILED,
+                TransferState.CANCELLED,
+            ):
+                continue
+            if await self._maybe_finalize_incoming_transfer(
+                transfer_id, peer_hash=peer_hash
+            ):
+                continue
+            if transfer.state in (
+                TransferState.TRANSFERRING,
+                TransferState.ACCEPTED,
+                TransferState.OFFERED,
+            ):
+                log.warning(
+                    "Incoming transfer incomplete after disconnect: %s (%d/%d bytes)",
+                    transfer.filename,
+                    transfer.offset,
+                    transfer.size,
+                )
+                transfer.state = TransferState.FAILED
+                await self._emit_transfer_progress(transfer, force=True)
+                self._transfer_progress_emit.pop(transfer_id, None)
 
     async def _handle_file_complete(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
@@ -353,17 +432,11 @@ class TransferMixin:
             return
         dest = self._incoming_paths.get(transfer_id, transfer.path)
         await fsync_file(dest)
-        actual = await sha256_file(dest)
-        if actual != data.get("sha256", transfer.sha256):
-            transfer.state = TransferState.FAILED
-            log.error("SHA256 mismatch for %s", transfer.filename)
-            return
-        transfer.state = TransferState.COMPLETE
-        self._mark_transfer_cooldown(hash_id, transfer.sender_hash)
-        if self._on_transfer_complete:
-            await self._on_transfer_complete(transfer.to_dict())
-        await self._emit_transfer_progress(transfer, force=True)
-        self._transfer_progress_emit.pop(transfer_id, None)
+        if dest.is_file():
+            transfer.offset = max(transfer.offset, dest.stat().st_size)
+        await self._maybe_finalize_incoming_transfer(
+            transfer_id, peer_hash=hash_id
+        )
 
     async def resume_transfer(self: MessagingBackend, transfer_id: str) -> bool:
         transfer = self._transfers.get(transfer_id)
