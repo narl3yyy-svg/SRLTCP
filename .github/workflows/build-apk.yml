@@ -65,19 +65,31 @@ jobs:
         working-directory: android
         run: |
           set -e
-          mkdir -p "$HOME/.android"
+          mkdir -p "$HOME/.android/licenses"
+          printf '24333f8a63b6825ea9c5514f83c2829b52d4d789\n' > "$HOME/.android/licenses/android-sdk-license"
+          printf '84831b9409646a918e30561babd6857c\n' > "$HOME/.android/licenses/android-sdk-preview-license"
+          printf 'd975f451698547eaa9f5f62cc9c1b58c\n' > "$HOME/.android/licenses/android-sdk-arm-dbt-license"
           touch "$HOME/.android/repositories.cfg"
-          buildozer android update
+          yes | buildozer android update
           SDK="$HOME/.buildozer/android/platform/android-sdk"
-          SDKMGR=$(find "$SDK/cmdline-tools" -name sdkmanager -type f | head -1)
+          mkdir -p "$SDK/licenses"
+          cp "$HOME/.android/licenses/"* "$SDK/licenses/"
+          SDKMGR=$(find "$SDK" -name sdkmanager -type f 2>/dev/null | head -1)
           if [ -z "$SDKMGR" ]; then
             echo "sdkmanager not found under $SDK"
             find "$SDK" -maxdepth 5 -type f 2>/dev/null | head -30
             exit 1
           fi
           chmod +x "$SDKMGR"
-          yes | "$SDKMGR" --licenses
-          "$SDKMGR" "build-tools;34.0.0" "build-tools;37.0.0" "platforms;android-34"
+          yes | "$SDKMGR" --sdk_root="$SDK" --licenses
+          "$SDKMGR" --sdk_root="$SDK" "build-tools;34.0.0" "platforms;android-34"
+          AIDL=$(find "$SDK/build-tools" -name aidl -type f 2>/dev/null | head -1)
+          if [ -z "$AIDL" ]; then
+            echo "Aidl not found after SDK bootstrap"
+            ls -la "$SDK/build-tools/" 2>/dev/null || true
+            exit 1
+          fi
+          echo "Found aidl at $AIDL"
 
       - name: Build debug APK with python-for-android
         working-directory: android

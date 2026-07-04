@@ -367,10 +367,10 @@ class TransferMixin:
             TransferState.ACCEPTED,
             TransferState.TRANSFERRING,
         )
-        transfers = self._transfers.values()
+        items = list(self._transfers.values())
         if active_only:
-            transfers = (t for t in transfers if t.state in active_states)
-        return [t.to_dict() for t in transfers]
+            items = [t for t in items if t.state in active_states]
+        return [t.to_dict() for t in items]
 
     async def cancel_transfer(self: MessagingBackend, transfer_id: str) -> bool:
         transfer = self._transfers.get(transfer_id)
