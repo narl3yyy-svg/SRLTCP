@@ -29,17 +29,17 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Manual Android SDK Setup (Stable)
+      - name: Manual Android SDK Setup
         run: |
           mkdir -p $ANDROID_HOME/cmdline-tools
           cd $ANDROID_HOME/cmdline-tools
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
           unzip -q cmdline-tools.zip -d latest
           rm cmdline-tools.zip
-          echo "export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:\$PATH" >> $GITHUB_ENV
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-          # Accept licenses and install packages
-          mkdir -p ~/.android
+          # Create licenses directory and accept licenses
+          mkdir -p ~/.android/licenses
           echo "24333f8a63b6825ea9c5514f83c2829b52d4d789" > ~/.android/licenses/android-sdk-license
           echo "84831b9409646a918e30561babd6857c" > ~/.android/licenses/android-sdk-preview-license
           echo "d975f451698547eaa9f5f62cc9c1b58c" > ~/.android/licenses/android-sdk-arm-dbt-license
@@ -68,10 +68,9 @@ jobs:
           pip install "buildozer>=1.5.0" "cython==0.29.34" setuptools
           pip install "git+https://github.com/kivy/python-for-android@${P4A_RELEASE_TAG}"
 
-      - name: Verify & Build
+      - name: Build APK
         working-directory: android
         run: |
-          cat buildozer.spec
           buildozer -v android debug 2>&1 | tee ../buildozer.log
 
       - name: Upload build log
@@ -80,7 +79,7 @@ jobs:
           name: buildozer-log
           path: buildozer.log
 
-      - name: Rename & Upload APK
+      - name: Rename APK
         run: |
           pip install -e .
           VERSION=$(python -c "import srltcp; print(getattr(srltcp, '__version__', '0.1.30'))" 2>/dev/null || echo "0.1.30")
