@@ -1,5 +1,11 @@
 # SRLTCP Release Notes
 
+## v0.1.44 (2026-07-03)
+
+### Android CI
+- **SDK/NDK paths** — removed invalid `%(ENV_ANDROIDSDK)s` from spec; CI symlinks runner SDK + NDK into `~/.buildozer/android/platform/`
+- **platform-tools** — installed so buildozer's `adb` check passes
+
 ## v0.1.43 (2026-07-03)
 
 ### Android CI

@@ -39,6 +39,7 @@ The workflow:
 - Builds **arm64-v8a** only (avoids armeabi-v7a Python `grp` compile failures)
 - Clears stale P4A Python 3.14 / multi-arch build caches before compiling
 - **`android.archs` must be in `[app]`** — buildozer ignores a separate `[android]` section (defaults to dual-arch otherwise)
+- **SDK/NDK** — do not use `%(ENV_…)` in spec; CI symlinks the runner SDK to `~/.buildozer/android/platform/android-sdk` and NDK to `android-ndk-r26b`
 - Uploads `buildozer.log` if the build fails
 
 ## Local build (Linux)

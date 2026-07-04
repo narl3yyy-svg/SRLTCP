@@ -6,7 +6,7 @@ source.dir = ..
 source.include_exts = py,png,jpg,jpeg,kv,atlas,json,css,js,html,md,txt
 source.include_patterns = srltcp/*,android/service/*
 source.exclude_dirs = tests,.venv,.git,.github,.mypy_cache,.pytest_cache,.ruff_cache,android/bin,android/.buildozer
-version = 0.1.43
+version = 0.1.44
 # Pin Android runtime + host Python — P4A master defaults to 3.14 which breaks aiohttp Cython builds.
 requirements = python3==3.12.8,hostpython3==3.12.8,aiohttp==3.10.11,aiofiles,cryptography,pyopenssl,zstandard,android
 orientation = portrait
@@ -15,9 +15,8 @@ p4a.branch = master
 p4a.bootstrap = sdl2
 
 # Android options MUST live under [app] — buildozer ignores a separate [android] section.
+# SDK/NDK paths: use buildozer defaults (~/.buildozer/android/platform/…); CI symlinks the runner SDK there.
 android.accept_sdk_license = True
-android.sdk_path = %(ENV_ANDROIDSDK)s
-android.ndk_path = %(ENV_ANDROIDNDK)s
 android.build_tools = 35.0.0
 android.api = 35
 android.minapi = 24

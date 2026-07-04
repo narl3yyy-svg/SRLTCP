@@ -94,6 +94,7 @@ jobs:
           cp "$HOME/.android/licenses/"* "$SDK/licenses/"
           yes | "$SDKMGR" --sdk_root="$SDK" --licenses
           "$SDKMGR" --sdk_root="$SDK" \
+            "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0" \
             "ndk;26.1.10909125"
@@ -113,19 +114,21 @@ jobs:
           echo "ANDROIDNDK=$SDK/ndk/26.1.10909125" >> "$GITHUB_ENV"
           mkdir -p "$HOME/.buildozer/android/platform"
           rm -rf "$HOME/.buildozer/android/platform/android-sdk"
+          rm -rf "$HOME/.buildozer/android/platform/android-ndk-r26b"
           ln -sfn "$SDK" "$HOME/.buildozer/android/platform/android-sdk"
+          ln -sfn "$SDK/ndk/26.1.10909125" "$HOME/.buildozer/android/platform/android-ndk-r26b"
+          test -x "$HOME/.buildozer/android/platform/android-sdk/platform-tools/adb"
+          test -d "$HOME/.buildozer/android/platform/android-ndk-r26b"
           ls -la "$HOME/.buildozer/android/platform/android-sdk/build-tools/"
           ls -la "$HOME/.buildozer/android/platform/android-sdk/ndk/"
 
       - name: Build debug APK with python-for-android
         working-directory: android
-        env:
-          ANDROIDSDK: /usr/local/lib/android/sdk
-          ANDROIDNDK: /usr/local/lib/android/sdk/ndk/26.1.10909125
         run: |
           set -o pipefail
-          test -d "$ANDROIDNDK"
-          test -x "$ANDROIDSDK/tools/bin/sdkmanager"
+          test -x "$HOME/.buildozer/android/platform/android-sdk/platform-tools/adb"
+          test -d "$HOME/.buildozer/android/platform/android-ndk-r26b"
+          test -x "$HOME/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager"
           buildozer -v android debug 2>&1 | tee ../buildozer.log
           if grep -E 'build-arm64-v8a_armeabi|Creating build for arch armeabi' ../buildozer.log; then
             echo "Unexpected armeabi-v7a build — android.archs must be under [app] in buildozer.spec"
