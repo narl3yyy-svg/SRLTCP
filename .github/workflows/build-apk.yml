@@ -13,11 +13,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Android APK with Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        with:
-          workdir: android
-          command: buildozer android debug
+      - name: Build APK with Buildozer (Docker)
+        run: |
+          docker run --rm \
+            -v "$PWD":/app \
+            -w /app/android \
+            ghcr.io/kivy/buildozer \
+            buildozer android debug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
