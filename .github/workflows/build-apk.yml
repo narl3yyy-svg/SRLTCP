@@ -19,17 +19,28 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12.8"
-
-      - uses: actions/setup-java@v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Setup Android SDK (includes sdkmanager)
+        uses: android-actions/setup-android@v4
+        with:
+          packages: |
+            platforms;android-35
+            build-tools;35.0.0
+            ndk;26.1.10909125
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Install system dependencies
         run: |
@@ -44,101 +55,26 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Install Buildozer toolchain
+      - name: Install Buildozer + python-for-android
         run: |
-          python --version
           pip install "buildozer>=1.5.0" "cython==0.29.34" setuptools
           pip install "git+https://github.com/kivy/python-for-android@${P4A_RELEASE_TAG}"
 
-      - name: Verify Android Python pin
+      - name: Verify config
         working-directory: android
         run: |
           grep -E 'python3==3\.12' buildozer.spec
           grep -E 'android\.api = 35' buildozer.spec
           grep -E 'android\.archs = arm64-v8a' buildozer.spec
-          python --version | grep '3.12'
 
-      - name: Clean stale P4A builds
+      - name: Clean stale builds
         run: |
-          rm -rf ~/.buildozer/android/platform/build-python3
-          rm -rf ~/.buildozer/android/platform/build-arm64-v8a*
-          rm -rf ~/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a*
-          rm -rf android/.buildozer/android/platform/build-python3
-          rm -rf android/.buildozer/android/platform/build-arm64-v8a*
-          rm -rf android/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a*
+          rm -rf ~/.buildozer/android/platform/build-*
+          rm -rf android/.buildozer/android/platform/build-*
 
-      - name: Bootstrap Android SDK (API 35 / Android 15)
-        run: |
-          set -e
-          SDK="$ANDROID_HOME"
-          SDKMGR="$SDK/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SDKMGR" ]; then
-            SDKMGR=$(find "$SDK" -name sdkmanager -type f 2>/dev/null | head -1)
-          fi
-          if [ -z "$SDKMGR" ] || [ ! -x "$SDKMGR" ]; then
-            echo "sdkmanager not found under $SDK"
-            find "$SDK" -maxdepth 5 -type f 2>/dev/null | head -30
-            exit 1
-          fi
-          mkdir -p "$HOME/.android/licenses"
-          printf '24333f8a63b6825ea9c5514f83c2829b52d4d789\n' > "$HOME/.android/licenses/android-sdk-license"
-          printf '84831b9409646a918e30561babd6857c\n' > "$HOME/.android/licenses/android-sdk-preview-license"
-          printf 'd975f451698547eaa9f5f62cc9c1b58c\n' > "$HOME/.android/licenses/android-sdk-arm-dbt-license"
-          touch "$HOME/.android/repositories.cfg"
-          mkdir -p "$SDK/licenses"
-          cp "$HOME/.android/licenses/"* "$SDK/licenses/"
-          yes | "$SDKMGR" --sdk_root="$SDK" --licenses
-          "$SDKMGR" --sdk_root="$SDK" \
-            "platforms;android-35" \
-            "build-tools;35.0.0" \
-            "ndk;26.1.10909125"
-          AIDL=$(find "$SDK/build-tools" -name aidl -type f 2>/dev/null | head -1)
-          if [ -z "$AIDL" ]; then
-            echo "Aidl not found after SDK bootstrap"
-            ls -la "$SDK/build-tools/" 2>/dev/null || true
-            exit 1
-          fi
-          echo "Found aidl at $AIDL"
-          echo "ANDROIDSDK=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROIDNDK=$SDK/ndk/26.1.10909125" >> "$GITHUB_ENV"
-          mkdir -p "$HOME/.buildozer/android/platform"
-          rm -rf "$HOME/.buildozer/android/platform/android-sdk"
-          ln -sfn "$SDK" "$HOME/.buildozer/android/platform/android-sdk"
-          ls -la "$HOME/.buildozer/android/platform/android-sdk/build-tools/"
-
-      - name: Build debug APK with python-for-android
+      - name: Build APK with Buildozer
         working-directory: android
         run: |
-          set -o pipefail
           buildozer -v android debug 2>&1 | tee ../buildozer.log
 
       - name: Upload build log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: buildozer-log
-          path: buildozer.log
-
-      - name: Rename APK
-        run: |
-          pip install -e .
-          VERSION=$(python -c "import srltcp; print(srltcp.__version__)")
-          APK=$(find android/bin -maxdepth 1 -name '*.apk' | head -1)
-          test -n "$APK"
-          cp "$APK" "android/bin/SRLTCP-${VERSION}.apk"
-          ls -la android/bin/
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: srltcp-apk
-          path: android/bin/SRLTCP-*.apk
-
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: android/bin/SRLTCP-*.apk
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
