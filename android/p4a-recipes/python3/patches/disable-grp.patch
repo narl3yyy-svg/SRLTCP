@@ -1,5 +1,0 @@
---- a/Modules/Setup.local
-+++ b/Modules/Setup.local
-@@ -0,0 +1,2 @@
-+# Android NDK lacks setgrent/getgrent — exclude grp extension module.
-+*grp*
