@@ -3,23 +3,25 @@ SRLTCP - Android App
 Main entry point for the Kivy application
 """
 
-import kivy
-kivy.require('2.2.0')
-
-from kivy.app import App
-from kivy.uix.label import Label
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
-from kivy.uix.textinput import TextInput
-from kivy.uix.scrollview import ScrollView
-from kivy.clock import Clock
+import os
+import sys
 import threading
 import socket
-import sys
-import os
+
+import kivy
+from kivy.app import App
+from kivy.clock import Clock
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.textinput import TextInput
+
+kivy.require('2.2.0')
 
 # Add the parent directory to path to import srltcp
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 class SRLTCPApp(App):
     def build(self):
@@ -88,6 +90,7 @@ class SRLTCPApp(App):
         self.status_label.text = status
         self.status_label.color = (0, 1, 0, 1)
         self.log_text.text += f"{status}\n"
+
 
 if __name__ == '__main__':
     SRLTCPApp().run()

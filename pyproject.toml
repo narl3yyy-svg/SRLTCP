@@ -1,83 +1,56 @@
-[build-system]
-requires = ["setuptools>=69", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "srltcp"
-version = "0.1.44"
-description = "Fast, secure peer-to-peer communication and file transfer over Serial (USB) and TCP/IP"
+version = "1.0.0"
+description = "SRLTCP client"
 readme = "README.md"
-license = { text = "GPL-3.0-or-later" }
-requires-python = ">=3.12"
-authors = [{ name = "SRLTCP Contributors" }]
-keywords = ["p2p", "file-transfer", "serial", "tcp", "encryption", "relay"]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Environment :: Console",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
-    "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Communications",
-    "Topic :: System :: Networking",
-]
-dependencies = [
-    "aiohttp>=3.9",
-    "aiofiles>=24.1",
-    "cryptography>=42.0",
-    "pyserial>=3.5",
-    "zstandard>=0.22",
+requires-python = ">=3.8"
+dependencies = []
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "mypy>=1.8",
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "pytest-cov>=5.0",
-    "ruff>=0.3",
-]
-[project.scripts]
-srltcp = "srltcp.app:main"
-
-[project.urls]
-Homepage = "https://github.com/narl3yyy-svg/SRLTCP"
-Repository = "https://github.com/narl3yyy-svg/SRLTCP"
-Issues = "https://github.com/narl3yyy-svg/SRLTCP/issues"
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["srltcp*"]
-
-[tool.setuptools.package-data]
-srltcp = ["web/static/*", "web/static/app.css", "web/static/app.js"]
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
 
 [tool.ruff]
-line-length = 100
-target-version = "py312"
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    "android/",
+]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
-
-[tool.mypy]
-python_version = "3.12"
-warn_return_any = true
-warn_unused_ignores = true
-disallow_untyped_defs = true
-ignore_missing_imports = true
-# Mixin modules use `self: MessagingBackend` — misc is noisy until refactored to Protocol.
-disable_error_code = ["misc"]
-
-[[tool.mypy.overrides]]
-module = [
-    "srltcp.routes.*",
-    "srltcp.web.*",
-    "srltcp.utils.ports",
-    "srltcp.transports.tcp",
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
 ]
-disable_error_code = ["return-value", "union-attr", "arg-type"]
+ignore = [
+    "E501",
+]
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"

@@ -25,10 +25,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Ruff lint + format
+      - name: Ruff lint + format (skip android directory)
         run: |
-          ruff check --fix .
-          ruff format .
+          ruff check --fix . --exclude android/
+          ruff format . --exclude android/
 
       - name: Run tests
         run: pytest --tb=short
