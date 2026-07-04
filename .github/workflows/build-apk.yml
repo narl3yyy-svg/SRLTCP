@@ -31,6 +31,9 @@ jobs:
           pip install python-for-android
 
       - name: Build APK with python-for-android
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
         run: |
           p4a apk \
             --private . \
@@ -42,6 +45,7 @@ jobs:
             --arch=arm64-v8a \
             --api=35 \
             --ndk-api=24 \
+            --ignore-setup-py \
             --permission=INTERNET \
             --permission=ACCESS_NETWORK_STATE
 
