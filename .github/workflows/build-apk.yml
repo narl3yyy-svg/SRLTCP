@@ -19,10 +19,18 @@ jobs:
             -v "$PWD":/app \
             -w /app/android \
             ghcr.io/kivy/buildozer \
-            script -qec '
+            bash -c '
+              apt-get update -qq && apt-get install -y -qq expect
               export BUILDOZER_ALLOW_ROOT=1
-              buildozer android debug
-            ' /dev/null
+              expect -c "
+                set timeout 600
+                spawn buildozer android debug
+                expect {
+                  -re \"Are you sure you want to continue\" { send \"y\r\"; exp_continue }
+                  eof
+                }
+              "
+            '
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
