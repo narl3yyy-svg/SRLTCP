@@ -32,7 +32,6 @@ jobs:
           zlib1g-dev \
           libncurses5-dev \
           libncursesw5-dev \
-          libtinfo5 \
           cmake \
           libffi-dev \
           libssl-dev \
@@ -41,7 +40,8 @@ jobs:
           libjpeg-dev \
           libgl1-mesa-dev \
           libgles2-mesa-dev \
-          llvm
+          llvm \
+          liblzma-dev
     
     - name: Set up Android SDK
       uses: android-actions/setup-android@v3
