@@ -59,3 +59,4 @@ Thumbs.db
 .ruff_cache/
 htmlcov/
 .coverage
+.aider*

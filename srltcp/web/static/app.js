@@ -91,14 +91,15 @@
     const prev = state.transfers[tid] || {};
     const metaState = meta.state;
     const prevState = prev.state;
-    let state = prevState || metaState;
-    if (TERMINAL_TRANSFER_STATES.has(metaState)) state = metaState;
-    else if (TERMINAL_TRANSFER_STATES.has(prevState)) state = prevState;
+    const mergedState = prevState || metaState;
+    let bestState = mergedState;
+    if (TERMINAL_TRANSFER_STATES.has(metaState)) bestState = metaState;
+    else if (TERMINAL_TRANSFER_STATES.has(prevState)) bestState = prevState;
     state.transfers[tid] = {
       ...prev,
       ...meta,
       id: tid,
-      state: state || metaState || prevState || "transferring",
+      state: bestState || "transferring",
     };
   }
 
@@ -1934,14 +1935,14 @@
     const meta = state.messageCache[idx].metadata || {};
     const metaState = meta.state;
     const dataState = data.state;
-    let state = dataState ?? metaState;
-    if (TERMINAL_TRANSFER_STATES.has(metaState) && !TERMINAL_TRANSFER_STATES.has(dataState)) {
-      state = metaState;
-    }
+    const mergedState = dataState ?? metaState;
+    const bestState = (TERMINAL_TRANSFER_STATES.has(metaState) && !TERMINAL_TRANSFER_STATES.has(dataState))
+      ? metaState
+      : mergedState;
     state.messageCache[idx].metadata = {
       ...meta,
       transfer_id: data.id,
-      state,
+      state: bestState,
       offset: data.offset ?? meta.offset,
       size: data.size ?? meta.size,
       speed_mbps: data.speed_mbps ?? meta.speed_mbps,
