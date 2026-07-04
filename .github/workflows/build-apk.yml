@@ -36,16 +36,17 @@ jobs:
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
           unzip -q cmdline-tools.zip -d latest
           rm cmdline-tools.zip
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-          # Create licenses directory and accept licenses
+          SDKMGR="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          # Licenses
           mkdir -p ~/.android/licenses
           echo "24333f8a63b6825ea9c5514f83c2829b52d4d789" > ~/.android/licenses/android-sdk-license
           echo "84831b9409646a918e30561babd6857c" > ~/.android/licenses/android-sdk-preview-license
           echo "d975f451698547eaa9f5f62cc9c1b58c" > ~/.android/licenses/android-sdk-arm-dbt-license
 
-          yes | sdkmanager --licenses
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;26.1.10909125"
+          yes | $SDKMGR --licenses
+          $SDKMGR "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;26.1.10909125"
 
       - name: Setup Python
         uses: actions/setup-python@v5
