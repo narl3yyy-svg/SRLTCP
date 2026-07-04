@@ -5,7 +5,7 @@ package.domain = org.srltcp
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
 version = 1.0.0
-requirements = python3==3.11.0,kivy==2.2.1
+requirements = python3,kivy==2.2.1
 orientation = portrait
 fullscreen = 0
 android.permissions = INTERNET
@@ -16,7 +16,6 @@ android.ndk_api = 21
 android.accept_sdk_license = True
 android.archs = arm64-v8a
 android.copy_libs = 1
-android.add_src =
 
 [buildozer]
 log_level = 2
