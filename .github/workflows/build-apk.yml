@@ -13,27 +13,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build APK with Buildozer (forced root)
+      - name: Build APK with Buildozer
         run: |
           docker run --rm \
             -v "$PWD":/app \
             -w /app/android \
             ghcr.io/kivy/buildozer \
-            bash -c '
+            script -qec '
               export BUILDOZER_ALLOW_ROOT=1
-              python3 -c "
-from buildozer import Buildozer
-import sys
-
-b = Buildozer()
-b.warn_on_root = False
-b.allow_root = True
-
-# Run the android debug command directly
-sys.argv = ['buildozer', 'android', 'debug']
-b.run_command(sys.argv[1:])
-"
-            '
+              buildozer android debug
+            ' /dev/null
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
