@@ -18,7 +18,7 @@ env:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 150   # increased a bit
+    timeout-minutes: 150
 
     steps:
       - uses: actions/checkout@v4
@@ -29,11 +29,23 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          # Let it use the latest stable without forcing version
-          packages: platform-tools,platforms;android-35,build-tools;35.0.0,ndk;26.1.10909125
+      - name: Manual Android SDK Setup (Stable)
+        run: |
+          mkdir -p $ANDROID_HOME/cmdline-tools
+          cd $ANDROID_HOME/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+          unzip -q cmdline-tools.zip -d latest
+          rm cmdline-tools.zip
+          echo "export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:\$PATH" >> $GITHUB_ENV
+
+          # Accept licenses and install packages
+          mkdir -p ~/.android
+          echo "24333f8a63b6825ea9c5514f83c2829b52d4d789" > ~/.android/licenses/android-sdk-license
+          echo "84831b9409646a918e30561babd6857c" > ~/.android/licenses/android-sdk-preview-license
+          echo "d975f451698547eaa9f5f62cc9c1b58c" > ~/.android/licenses/android-sdk-arm-dbt-license
+
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;26.1.10909125"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -51,25 +63,16 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Install Buildozer + python-for-android
+      - name: Install Buildozer + P4A
         run: |
           pip install "buildozer>=1.5.0" "cython==0.29.34" setuptools
           pip install "git+https://github.com/kivy/python-for-android@${P4A_RELEASE_TAG}"
 
-      - name: Verify buildozer.spec
-        working-directory: android
-        run: cat buildozer.spec
-
-      - name: Clean previous builds
-        run: rm -rf ~/.buildozer android/.buildozer
-
-      - name: Build APK
+      - name: Verify & Build
         working-directory: android
         run: |
-          echo "=== Starting Buildozer ==="
+          cat buildozer.spec
           buildozer -v android debug 2>&1 | tee ../buildozer.log
-          echo "=== Build finished ==="
-          ls -la bin/ || echo "No APK generated"
 
       - name: Upload build log
         uses: actions/upload-artifact@v4
@@ -77,23 +80,22 @@ jobs:
           name: buildozer-log
           path: buildozer.log
 
-      - name: Rename APK
+      - name: Rename & Upload APK
         run: |
           pip install -e .
           VERSION=$(python -c "import srltcp; print(getattr(srltcp, '__version__', '0.1.30'))" 2>/dev/null || echo "0.1.30")
           APK=$(find android/bin -name "*.apk" | head -1)
           if [ -n "$APK" ]; then
             cp "$APK" "android/bin/SRLTCP-${VERSION}.apk"
-            echo "APK created: SRLTCP-${VERSION}.apk"
           fi
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: srltcp-apk
           path: android/bin/SRLTCP-*.apk
 
-      - name: Create GitHub Release
+      - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
