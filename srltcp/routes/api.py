@@ -219,7 +219,11 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         return web.json_response({"disconnected": ok})
 
     async def serial_ports(_request: web.Request) -> web.Response:
-        return web.json_response({"ports": list_serial_ports()})
+        from srltcp.utils.serial_access import serial_group_status
+
+        return web.json_response(
+            {"ports": list_serial_ports(), "group": serial_group_status()}
+        )
 
     async def serial_baud_rates(_request: web.Request) -> web.Response:
         return web.json_response({"rates": baud_rates()})
@@ -532,7 +536,9 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         updated.version = __version__
         store.save(updated)
         await node.apply_settings(updated)
-        return web.json_response(updated.to_dict())
+        payload = updated.to_dict()
+        payload["transports"] = node.backend.get_transport_status()
+        return web.json_response(payload)
 
     async def browse_folders(request: web.Request) -> web.Response:
         path = request.rel_url.query.get("path")

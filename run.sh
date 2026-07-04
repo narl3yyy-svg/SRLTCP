@@ -5,6 +5,29 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+maybe_refresh_serial_group() {
+  [[ -n "${SRLTCP_SERIAL_GROUP_REFRESH:-}" ]] && return 0
+  local group=""
+  if getent group uucp &>/dev/null; then
+    group=uucp
+  elif getent group dialout &>/dev/null; then
+    group=dialout
+  else
+    return 0
+  fi
+  if id -nG | grep -qw "$group"; then
+    return 0
+  fi
+  if ! groups "$USER" 2>/dev/null | grep -qw "$group"; then
+    return 0
+  fi
+  echo "[srltcp] Activating '$group' group for serial port access (log out/in to skip this step)..."
+  export SRLTCP_SERIAL_GROUP_REFRESH=1
+  exec sg "$group" -c "export SRLTCP_SERIAL_GROUP_REFRESH=1; $(printf '%q ' "$0") $(printf '%q ' "$@")"
+}
+
+maybe_refresh_serial_group "$@"
+
 if [[ ! -f .venv/bin/activate ]]; then
   echo "[srltcp] Creating virtual environment..."
   rm -rf .venv

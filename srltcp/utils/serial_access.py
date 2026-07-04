@@ -18,14 +18,36 @@ def serial_access_group() -> str | None:
     return None
 
 
+def serial_group_status() -> dict[str, object]:
+    """Whether the serial device group is available in this process session."""
+    group = serial_access_group()
+    if not group:
+        return {"group": None, "in_account": False, "in_session": False, "needs_relogin": False}
+    group_gid = grp.getgrnam(group).gr_gid
+    in_account = os.getuid() in grp.getgrnam(group).gr_mem
+    in_session = group_gid in os.getgroups()
+    return {
+        "group": group,
+        "in_account": in_account,
+        "in_session": in_session,
+        "needs_relogin": in_account and not in_session,
+    }
+
+
 def format_serial_permission_help(port: str, error: Exception | str | None = None) -> str:
     """Human-readable steps to open a serial device."""
     err = str(error or "")
     group = serial_access_group()
+    status = serial_group_status()
     system = platform.system()
     lines = [f"Cannot open {port}"]
     if "Permission denied" in err or "Errno 13" in err:
-        if group:
+        if status.get("needs_relogin") and group:
+            lines.append(
+                f"You are in '{group}' but this session has not picked it up — "
+                "log out and back in, or restart via ./run.sh web (auto-refreshes the group)"
+            )
+        elif group:
             lines.append(
                 f"Add your user to the '{group}' group, log out/in, then restart SRLTCP:"
             )

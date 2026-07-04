@@ -1187,13 +1187,27 @@
       const portsData = await portsRes.json();
       const baudData = await baudRes.json();
       const ports = portsData.ports || [];
+      const group = portsData.group || {};
       portEl.innerHTML = ports.length
-        ? ports.map((p) =>
-            `<option value="${escapeHtml(p.device)}" ${p.device === selectedPort ? "selected" : ""}>${escapeHtml(p.description)}</option>`
-          ).join("")
+        ? ports.map((p) => {
+            const access = p.accessible ? "" : " — no permission";
+            return `<option value="${escapeHtml(p.device)}" ${p.device === selectedPort ? "selected" : ""}>${escapeHtml(p.description)}${access}</option>`;
+          }).join("")
         : `<option value="">No serial devices detected</option>`;
       if (selectedPort && !ports.some((p) => p.device === selectedPort)) {
         portEl.innerHTML += `<option value="${escapeHtml(selectedPort)}" selected>${escapeHtml(selectedPort)} (saved)</option>`;
+      }
+      const hintEl = $("#set-serial-hint");
+      if (hintEl) {
+        if (group.needs_relogin && group.group) {
+          hintEl.textContent = `You are in '${group.group}' but this session has not picked it up — restart via ./run.sh web or log out/in.`;
+        } else if (group.group && !group.in_session && !group.in_account) {
+          hintEl.textContent = `Add your user to '${group.group}' (Arch: uucp, Debian/Ubuntu: dialout), log out/in, then restart SRLTCP.`;
+        } else if (ports.length && ports.every((p) => !p.accessible)) {
+          hintEl.textContent = `Serial device(s) detected but not readable — check ${group.group || "uucp/dialout"} group permissions.`;
+        } else {
+          hintEl.innerHTML = "Both peers need serial enabled and the port open to send/receive RF announces.";
+        }
       }
       baudEl.innerHTML = (baudData.rates || [115200]).map((r) =>
         `<option value="${r}" ${r === selectedBaud ? "selected" : ""}>${r}</option>`
@@ -1266,11 +1280,18 @@
       return false;
     }
     state.settings = await res.json();
+    const serialStatus = state.settings.transports?.serial;
+    if (serialStatus) {
+      state.transportStatus = state.settings.transports;
+      delete state.settings.transports;
+    }
     const portsChanged = ["web_port", "tcp_port", "discovery_port", "strict_ports"].some(
       (k) => prev[k] !== state.settings[k]
     );
     if (portsChanged) {
       toast("Settings saved — restart SRLTCP to apply port changes");
+    } else if (formData.enable_serial && serialStatus && !serialStatus.active) {
+      toast(serialStatus.error || "Serial port could not be opened — check permissions");
     } else {
       toast(complete ? "Setup complete!" : "Settings saved");
     }
