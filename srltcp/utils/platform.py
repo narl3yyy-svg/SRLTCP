@@ -21,6 +21,11 @@ def set_android_data_dir(path: str) -> None:
 
 def data_dir() -> Path:
     """Return persistent data directory for identities and transfers."""
+    override = os.environ.get("SRLTCP_DATA_DIR", "").strip()
+    if override:
+        base = Path(override)
+        base.mkdir(parents=True, exist_ok=True)
+        return base
     if is_android():
         base = Path(
             _android_data_dir

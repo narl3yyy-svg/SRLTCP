@@ -15,11 +15,14 @@ QUIET_PATHS = frozenset(
     }
 )
 
+_QUIET_PREFIXES = ("/api/transfers/",)
+
 
 class QuietAccessLogger(AccessLogger):
     """Skip logging for polling/WebSocket endpoints."""
 
     def log(self, request, response, time):  # type: ignore[no-untyped-def]
-        if request.path in QUIET_PATHS:
+        path = request.path
+        if path in QUIET_PATHS or path.startswith(_QUIET_PREFIXES):
             return
         super().log(request, response, time)

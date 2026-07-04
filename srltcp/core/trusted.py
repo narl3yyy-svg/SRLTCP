@@ -13,6 +13,28 @@ from srltcp.utils.platform import data_dir
 
 _HASH_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _GENERIC_NAMES = frozenset({"peer", "trusted", "serial-peer", "tcp-peer", "unknown"})
+_FIXTURE_HASHES = frozenset(
+    {
+        "deadbeefdeadbeefdeadbeefdeadbeef",
+        "abababababababababababababababab",
+        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    }
+)
+
+
+def is_fixture_peer(peer: TrustedPeer) -> bool:
+    """Detect pytest/dev fixture peers that leaked into the live data dir."""
+    if peer.hash_id in _FIXTURE_HASHES:
+        return True
+    if peer.name.strip().lower() in _GENERIC_NAMES and peer.tcp_host in {
+        "",
+        "127.0.0.1",
+        "10.0.0.5",
+    }:
+        return True
+    return False
 
 
 def is_valid_hash_id(hash_id: str) -> bool:
@@ -58,6 +80,8 @@ class TrustedStore:
             if not is_valid_hash_id(peer.hash_id):
                 continue
             peer.hash_id = peer.hash_id.lower()
+            if is_fixture_peer(peer):
+                continue
             existing = cleaned.get(peer.hash_id)
             if not existing or peer.added_at >= existing.added_at:
                 cleaned[peer.hash_id] = peer

@@ -6,6 +6,11 @@ import logging
 import sys
 
 
+class _QuietAsyncioSSLFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "SSL connection is closed" not in record.getMessage()
+
+
 def setup_logging(level: str = "INFO", *, debug: bool = False) -> None:
     """Configure root logger for CLI and web server."""
     if debug:
@@ -18,8 +23,10 @@ def setup_logging(level: str = "INFO", *, debug: bool = False) -> None:
         stream=sys.stderr,
         force=True,
     )
+    asyncio_logger = logging.getLogger("asyncio")
+    asyncio_logger.addFilter(_QuietAsyncioSSLFilter())
     if debug:
-        logging.getLogger("asyncio").setLevel(logging.DEBUG)
+        asyncio_logger.setLevel(logging.DEBUG)
         logging.getLogger("aiohttp").setLevel(logging.DEBUG)
         logging.getLogger("srltcp").setLevel(logging.DEBUG)
 

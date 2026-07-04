@@ -351,6 +351,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         }.get(ext, "application/octet-stream")
 
     async def transfer_file(request: web.Request) -> web.Response:
+        from srltcp.core.messaging.models import TransferState
+
         transfer_id = request.match_info.get("transfer_id", "")
         transfer = node.backend._transfers.get(transfer_id)
         if not transfer:
@@ -368,6 +370,11 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
 
         fname = transfer.filename or path.name
         download = request.rel_url.query.get("download") in ("1", "true", "yes")
+        if not download and transfer.state != TransferState.COMPLETE:
+            return web.json_response(
+                {"error": "transfer in progress — preview when complete"},
+                status=409,
+            )
         disp_type = "attachment" if download else "inline"
         disposition = (
             f'{disp_type}; filename="{quote(fname)}"; filename*=UTF-8\'\'{quote(fname)}'

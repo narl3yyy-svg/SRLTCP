@@ -7,7 +7,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.37
+**Current version:** 0.1.41
 
 ---
 
@@ -19,7 +19,7 @@
 | **P2P mode** | Direct encrypted links between peers on LAN or serial cable |
 | **Relay mode** | Optional headless server forwards opaque E2EE envelopes |
 | **Secure messaging** | Ed25519 identity + X25519 key exchange + AES-GCM |
-| **Fast file transfer** | Chunked streaming (256 KiB TCP / 8 KiB serial), zstd on TCP, resume support |
+| **Fast file transfer** | Chunked streaming (1 MiB TCP / 8 KiB serial), zstd on TCP, resume support |
 | **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
 | **Drag-and-drop send** | Drop files onto a contact in the Web UI |
 | **WAN / manual peers** | Host + port per trusted contact; encrypted TCP 7825 |
@@ -27,7 +27,7 @@
 | **Settings** | First-run wizard + persistent config (folders, retention, LAN IP) |
 | **System stats** | CPU usage & temperature in the web UI status bar |
 | **Trusted peers** | Trust-before-message security model |
-| **Ping / RTT** | Latency in ms; serial RF link quality % |
+| **Ping / RTT** | Latency in ms; serial link quality % (RTT-based estimate, not RF RSSI) |
 | **Cross-platform** | Linux, macOS, Windows CLI + Android (python-for-android) |
 
 ---
@@ -238,17 +238,19 @@ buildozer android debug
 adb install -r bin/*debug*.apk
 ```
 
-**CI / releases:** Push to `main` or tag `v0.1.30` (or run **Build Android APK** workflow) — APK is attached to [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases) on tags.
+**CI / releases:** Push to `main` or tag `v*` (or run **Build Android APK** workflow) — APK is attached to [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases) on tags. CI builds **arm64-v8a only** (avoids armeabi-v7a `grpmodule` failures on GitHub runners).
 
 **Troubleshooting:**
 
 | Symptom | What to do |
 |---------|------------|
+| CI build fails at `grpmodule.o` | Ensure workflow uses `--arch arm64-v8a` and a clean `android/.buildozer` |
 | App closes on launch | `adb logcat -s SRLTCP python:D PythonService:D` |
 | White screen | Wait 10–30s for Python service to bind HTTPS; app tries ports 9876–9878 |
 | No serial on Android | Expected — serial transport is disabled on Android |
 | No peers after reinstall | Uninstall clears app data (identities in app files dir) |
 | No discovered peers | **Announce TCP** on both devices, or **Add Contact** with hash ID |
+| Phantom trusted peers (`peer`, `deadbeef…`) | Leftover pytest fixtures — restart SRLTCP (v0.1.41+ auto-removes them) |
 
 ```bash
 adb logcat -s SRLTCP python:D PythonService:D
@@ -425,7 +427,7 @@ SRLTCP listens on **TCP 7825** by default for encrypted P2P messaging (handshake
 
 | Setting | Value | Rationale |
 |---------|-------|-----------|
-| Chunk size | 256 KiB TCP / 8 KiB serial | Balances throughput and connection stability |
+| Chunk size | 1 MiB TCP / 8 KiB serial | Higher LAN throughput; E2EE unchanged |
 | Compression | zstd level 3, ≥ 64 KiB | Fast ratio for text/logs; skips already-compressed data |
 | Frame CRC | CRC32 | Cheap integrity check per frame |
 | Async I/O | aiofiles + asyncio | Non-blocking disk and network |
@@ -446,6 +448,7 @@ SRLTCP listens on **TCP 7825** by default for encrypted P2P messaging (handshake
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pre-commit install  # optional
+# Tests use SRLTCP_DATA_DIR automatically — do not run pytest against ~/.srltcp
 
 ./run.sh web                    # dev server
 bash scripts/check.sh           # ruff + pytest
@@ -466,6 +469,15 @@ pytest tests/ -v                # unit tests only
 ## Changelog
 
 See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
+
+### v0.1.41
+
+- **Video receive fix** — MP4 preview only after transfer completes (partial files cannot play in browsers)
+- **Transfer UI** — throttled progress updates; no full chat re-render every chunk
+- **TCP throughput** — 1 MiB chunks, no artificial send delay (encryption unchanged)
+- **Serial link %** — RTT-based estimate (554 ms ≈ 40–60% link, not misleading 100%)
+- **Trusted list** — auto-removes pytest fixture peers (`deadbeef…`, `peer`, etc.)
+- **Android CI** — arm64-v8a only build; clean `.buildozer` cache each run
 
 ### v0.1.35
 

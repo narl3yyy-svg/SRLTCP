@@ -133,13 +133,25 @@ class SerialTransport(Transport):
     def last_rtt_ms(self) -> float | None:
         return self._last_rtt_ms
 
-    def link_quality_pct(self) -> float:
-        total = self._ping_ok + self._ping_fail
-        if total > 0:
-            return round((self._ping_ok / total) * 100.0, 1)
-        total_bytes = self._bytes_rx + self._bytes_tx
-        if total_bytes == 0:
-            return 0.0
-        error_penalty = min(self._frame_errors * 5, 50)
-        base = 100.0 - error_penalty
-        return max(0.0, min(100.0, round(base, 1)))
+    def link_quality_pct(self, *, rtt_ms: float | None = None) -> float:
+        """Estimate serial link quality from RTT and errors (not true RF RSSI)."""
+        ping_total = self._ping_ok + self._ping_fail
+        ping_score = 100.0
+        if ping_total > 0:
+            ping_score = (self._ping_ok / ping_total) * 100.0
+        rtt_score = 100.0
+        effective_rtt = rtt_ms if rtt_ms is not None else self._last_rtt_ms
+        if effective_rtt is not None:
+            if effective_rtt <= 80:
+                rtt_score = 95.0
+            elif effective_rtt <= 200:
+                rtt_score = 82.0
+            elif effective_rtt <= 400:
+                rtt_score = 62.0
+            elif effective_rtt <= 800:
+                rtt_score = 42.0
+            else:
+                rtt_score = max(15.0, 100.0 - effective_rtt * 0.08)
+        error_penalty = min(self._frame_errors * 8, 40)
+        combined = min(ping_score, rtt_score) - error_penalty
+        return max(0.0, min(100.0, round(combined, 1)))

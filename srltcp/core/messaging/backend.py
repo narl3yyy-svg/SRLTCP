@@ -700,7 +700,9 @@ class MessagingBackend(
         if self._on_message:
             await self._on_message(msg.to_dict())
 
-    async def _update_file_message(self, transfer: dict[str, Any]) -> None:
+    async def _update_file_message(
+        self, transfer: dict[str, Any], *, notify: bool = True
+    ) -> None:
         transfer_id = transfer.get("id")
         for msg in reversed(self._messages):
             if msg.metadata.get("transfer_id") == transfer_id:
@@ -716,7 +718,7 @@ class MessagingBackend(
                 if meta.get("is_folder_zip"):
                     msg.metadata["is_folder_zip"] = True
                     msg.metadata["folder_name"] = meta.get("folder_name")
-                if self._on_message:
+                if notify and self._on_message:
                     await self._on_message(msg.to_dict())
                 return
 

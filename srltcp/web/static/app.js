@@ -583,7 +583,7 @@
     const data = await res.json();
     const parts = [];
     if (data.rtt_ms != null) parts.push(`${Math.round(data.rtt_ms)} ms`);
-    if (data.link_quality_pct != null) parts.push(`${data.link_quality_pct}% RF`);
+    if (data.link_quality_pct != null) parts.push(`${data.link_quality_pct}% link`);
     toast(parts.length ? `Ping: ${parts.join(" · ")}` : "Ping sent");
     loadPeers();
   }
@@ -1636,7 +1636,7 @@
         const rtt = lm.rtt_ms ?? p.rtt_ms;
         if (rtt != null) metrics.push(`${Math.round(rtt)}ms`);
         const lq = lm.link_quality_pct ?? p.link_quality_pct;
-        if (p.transport === "serial" && lq != null) metrics.push(`${lq}%`);
+        if (p.transport === "serial" && lq != null) metrics.push(`${lq}% link`);
         const linked = isPeerLinked(p.hash_id);
         if (linked && !metrics.length) metrics.push("online");
         const endpoint = peerEndpoint(p);
@@ -1719,8 +1719,11 @@
     const cancelled = stateLabel === "cancelled";
     const failed = stateLabel === "failed";
     const stateClass = cancelled ? " cancelled" : failed ? " failed" : "";
-    const canPreview = (m.msg_type === "image" || m.msg_type === "video") && fileUrl
+    const canPreviewImage = m.msg_type === "image" && fileUrl
       && (out || offset > 0 || ["complete", "transferring", "accepted"].includes(stateLabel));
+    const canPreviewVideo = m.msg_type === "video" && fileUrl
+      && (out ? offset > 0 || ["complete", "transferring", "accepted"].includes(stateLabel)
+        : stateLabel === "complete");
     const progressLine = stateLabel === "complete"
       ? `${formatBytes(size)} · complete`
       : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr}`;
@@ -1733,7 +1736,7 @@
       ? `<a class="file-download" href="${downloadUrl}" download="${escapeHtml(filename)}" target="_blank" rel="noopener">${downloadLabel}</a>`
       : "";
 
-    if (canPreview && m.msg_type === "image") {
+    if (canPreviewImage) {
       return `<div class="file-bubble image-bubble${stateClass}" data-transfer="${escapeHtml(tid)}">
         <button type="button" class="media-preview-btn" data-media-open="${escapeHtml(fileUrl)}" data-media-kind="image" data-media-name="${escapeHtml(filename)}">
           <img src="${fileUrl}" alt="${escapeHtml(filename)}" class="chat-image" loading="lazy" />
@@ -1745,10 +1748,10 @@
       </div>`;
     }
 
-    if (canPreview && m.msg_type === "video") {
+    if (canPreviewVideo) {
       return `<div class="file-bubble video-bubble${stateClass}" data-transfer="${escapeHtml(tid)}">
         <button type="button" class="media-preview-btn" data-media-open="${escapeHtml(fileUrl)}" data-media-kind="video" data-media-name="${escapeHtml(filename)}">
-          <video src="${fileUrl}" class="chat-video" controls preload="metadata"></video>
+          <video src="${fileUrl}" class="chat-video" controls preload="metadata" playsinline></video>
         </button>
         <div class="file-name">${escapeHtml(filename)}</div>
         <div class="file-progress-meta">${cancelled ? "Transfer cancelled" : progressLine}</div>
@@ -1856,7 +1859,8 @@
     const hasMediaShell = bubble.classList.contains("image-bubble")
       || bubble.classList.contains("video-bubble");
     if (stateLabel === "complete" && !hasMediaShell) return true;
-    if (stateLabel === "transferring" && (data.offset || 0) > 0 && !hasMediaShell) return true;
+    if (msg.msg_type === "image" && stateLabel === "transferring"
+        && (data.offset || 0) > 0 && !hasMediaShell) return true;
     return false;
   }
 
@@ -1922,7 +1926,7 @@
         refreshTransferBubble(tid, patchData, { scroll: false });
       });
       state.pendingTransferPatches.clear();
-    }, 120);
+    }, 200);
   }
 
   function renderMessages(msgs, { preserveScroll = false, scrollToBottom = false } = {}) {
@@ -2124,6 +2128,10 @@
         if (tid) {
           state.transfers[tid] = { ...state.transfers[tid], ...m.metadata, id: tid };
           if (patchTransferBubble(tid, state.transfers[tid])) return;
+          if (["transferring", "accepted", "offered"].includes(m.metadata?.state)) {
+            scheduleTransferPatch(tid, state.transfers[tid]);
+            return;
+          }
         }
         if (prev.metadata?.state === m.metadata?.state
             && prev.metadata?.offset === m.metadata?.offset) return;

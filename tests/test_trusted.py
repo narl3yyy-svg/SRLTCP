@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from srltcp.core.trusted import TrustedPeer, TrustedStore, is_valid_hash_id
+from srltcp.core.trusted import (
+    TrustedPeer,
+    TrustedStore,
+    is_fixture_peer,
+    is_valid_hash_id,
+)
 
 
 def _hash(seed: str) -> str:
@@ -87,6 +92,38 @@ def test_is_valid_hash_id() -> None:
     assert not is_valid_hash_id("short")
     assert not is_valid_hash_id("g" * 32)
     assert not is_valid_hash_id("a" * 64)
+
+
+def test_fixture_peer_detection() -> None:
+    peer = TrustedPeer(
+        hash_id="deadbeef" * 4,
+        name="peer",
+        transport="tcp",
+        tcp_host="127.0.0.1",
+    )
+    assert is_fixture_peer(peer) is True
+    real = TrustedPeer(
+        hash_id="f582abe442e8e2a7c67039ec0e329d6d",
+        name="339sdf",
+        transport="tcp",
+        tcp_host="10.0.30.101",
+    )
+    assert is_fixture_peer(real) is False
+
+
+def test_trusted_load_strips_fixture_peers(tmp_path: Path) -> None:
+    path = tmp_path / "trusted.json"
+    path.write_text(
+        '{"peers": ['
+        '{"hash_id": "deadbeefdeadbeefdeadbeefdeadbeef", "name": "peer", "transport": "tcp", "tcp_host": "127.0.0.1"},'
+        '{"hash_id": "f582abe442e8e2a7c67039ec0e329d6d", "name": "339sdf", "transport": "tcp", "tcp_host": "10.0.30.101"}'
+        "]}",
+        encoding="utf-8",
+    )
+    store = TrustedStore(path=path)
+    ids = {p.hash_id for p in store.list_peers()}
+    assert "deadbeefdeadbeefdeadbeefdeadbeef" not in ids
+    assert "f582abe442e8e2a7c67039ec0e329d6d" in ids
 
 
 def test_trusted_manual_add_with_host(tmp_path: Path) -> None:

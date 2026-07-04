@@ -14,6 +14,7 @@ from srltcp.core.messaging.constants import (
     CHUNK_SEND_DELAY,
     CHUNK_SIZE,
     COMPRESS_THRESHOLD,
+    PROGRESS_EMIT_INTERVAL,
     SERIAL_CHUNK_DELAY,
     SERIAL_CHUNK_SIZE,
     TRANSFER_COOLDOWN,
@@ -62,6 +63,7 @@ class TransferMixin:
         ensure_dir(self._transfer_dir)
         self._transfer_started: dict[str, float] = {}
         self._transfer_cooldown_until: dict[str, float] = {}
+        self._transfer_progress_emit: dict[str, float] = {}
 
     def _mark_transfer_cooldown(self: MessagingBackend, *hash_ids: str) -> None:
         deadline = time.monotonic() + TRANSFER_COOLDOWN
@@ -93,6 +95,24 @@ class TransferMixin:
         if transport == "serial":
             return SERIAL_CHUNK_SIZE, SERIAL_CHUNK_DELAY
         return CHUNK_SIZE, CHUNK_SEND_DELAY
+
+    async def _emit_transfer_progress(
+        self: MessagingBackend, transfer: FileTransfer, *, force: bool = False
+    ) -> None:
+        now = time.monotonic()
+        last = self._transfer_progress_emit.get(transfer.id, 0.0)
+        terminal = transfer.state in (
+            TransferState.COMPLETE,
+            TransferState.FAILED,
+            TransferState.CANCELLED,
+        )
+        if not force and not terminal and (now - last) < PROGRESS_EMIT_INTERVAL:
+            return
+        self._transfer_progress_emit[transfer.id] = now
+        payload = transfer.to_dict()
+        if self._on_transfer_progress:
+            await self._on_transfer_progress(payload)
+        await self._update_file_message(payload, notify=terminal)
 
     def _maybe_decompress(self: MessagingBackend, data: bytes, compressed: bool) -> bytes:
         if not compressed:
@@ -191,8 +211,7 @@ class TransferMixin:
         transfer.state = TransferState.TRANSFERRING
         transfer.offset = offset
         self._transfer_started[transfer_id] = time.time()
-        if self._on_transfer_progress:
-            await self._on_transfer_progress(transfer.to_dict())
+        await self._emit_transfer_progress(transfer, force=True)
         task = asyncio.create_task(self._send_file_chunks(hash_id, transfer))
         self._transfer_tasks[transfer_id] = task
 
@@ -256,9 +275,7 @@ class TransferMixin:
                     started = self._transfer_started.get(transfer.id, time.time())
                     elapsed = max(time.time() - started, 0.001)
                     transfer.speed_mbps = (transfer.offset / elapsed) / (1024 * 1024)
-                    if self._on_transfer_progress:
-                        await self._on_transfer_progress(transfer.to_dict())
-                    await self._update_file_message(transfer.to_dict())
+                    await self._emit_transfer_progress(transfer)
                     if chunk_delay > 0:
                         await asyncio.sleep(chunk_delay)
 
@@ -278,20 +295,18 @@ class TransferMixin:
             self._mark_transfer_cooldown(hash_id, transfer.recipient_hash)
             if self._on_transfer_complete:
                 await self._on_transfer_complete(transfer.to_dict())
-            await self._update_file_message(transfer.to_dict())
+            await self._emit_transfer_progress(transfer, force=True)
         except asyncio.CancelledError:
             transfer.state = TransferState.CANCELLED
-            if self._on_transfer_progress:
-                await self._on_transfer_progress(transfer.to_dict())
+            await self._emit_transfer_progress(transfer, force=True)
             raise
         except Exception as exc:
             log.warning("Transfer failed for %s: %s", transfer.filename, exc)
             transfer.state = TransferState.FAILED
-            if self._on_transfer_progress:
-                await self._on_transfer_progress(transfer.to_dict())
-            await self._update_file_message(transfer.to_dict())
+            await self._emit_transfer_progress(transfer, force=True)
         finally:
             self._transfer_tasks.pop(transfer.id, None)
+            self._transfer_progress_emit.pop(transfer.id, None)
             temp_zip = transfer.metadata.get("temp_zip_path")
             if temp_zip:
                 with contextlib.suppress(OSError):
@@ -328,9 +343,7 @@ class TransferMixin:
         started = self._transfer_started.setdefault(transfer_id, time.time())
         elapsed = max(time.time() - started, 0.001)
         transfer.speed_mbps = (transfer.offset / elapsed) / (1024 * 1024)
-        if self._on_transfer_progress:
-            await self._on_transfer_progress(transfer.to_dict())
-        await self._update_file_message(transfer.to_dict())
+        await self._emit_transfer_progress(transfer)
 
     async def _handle_file_complete(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
@@ -349,7 +362,8 @@ class TransferMixin:
         self._mark_transfer_cooldown(hash_id, transfer.sender_hash)
         if self._on_transfer_complete:
             await self._on_transfer_complete(transfer.to_dict())
-        await self._update_file_message(transfer.to_dict())
+        await self._emit_transfer_progress(transfer, force=True)
+        self._transfer_progress_emit.pop(transfer_id, None)
 
     async def resume_transfer(self: MessagingBackend, transfer_id: str) -> bool:
         transfer = self._transfers.get(transfer_id)
@@ -413,9 +427,8 @@ class TransferMixin:
                 )
             except (KeyError, RuntimeError, OSError) as exc:
                 log.warning("Could not notify cancel to peer: %s", exc)
-        if self._on_transfer_progress:
-            await self._on_transfer_progress(transfer.to_dict())
-        await self._update_file_message(transfer.to_dict())
+        await self._emit_transfer_progress(transfer, force=True)
+        self._transfer_progress_emit.pop(transfer_id, None)
         return True
 
     async def _handle_file_reject(self: MessagingBackend, hash_id: str, body: bytes) -> None:
@@ -428,9 +441,8 @@ class TransferMixin:
         task = self._transfer_tasks.pop(transfer_id, None)
         if task and not task.done():
             task.cancel()
-        if self._on_transfer_progress:
-            await self._on_transfer_progress(transfer.to_dict())
-        await self._update_file_message(transfer.to_dict())
+        await self._emit_transfer_progress(transfer, force=True)
+        self._transfer_progress_emit.pop(transfer_id, None)
 
     def has_active_transfer_for(self: MessagingBackend, hash_id: str) -> bool:
         for transfer in self._transfers.values():
