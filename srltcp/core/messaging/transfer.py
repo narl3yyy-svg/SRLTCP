@@ -51,11 +51,13 @@ class TransferMixin:
     _transfers: dict[str, FileTransfer]
     _incoming_paths: dict[str, Path]
     _transfer_tasks: dict[str, asyncio.Task[None]]
+    _pending_chunk_tasks: dict[str, set[asyncio.Task[None]]]
 
     def _init_transfer(self: MessagingBackend) -> None:
         self._transfers = {}
         self._incoming_paths = {}
         self._transfer_tasks = {}
+        self._pending_chunk_tasks = {}
         if self.config.incoming_dir:
             self._transfer_dir = Path(self.config.incoming_dir)
         else:
@@ -392,10 +394,42 @@ class TransferMixin:
         self._transfer_progress_emit.pop(transfer_id, None)
         return True
 
+    def _track_chunk_task(
+        self: MessagingBackend, peer_hash: str, task: asyncio.Task[None]
+    ) -> None:
+        pending = self._pending_chunk_tasks.setdefault(peer_hash, set())
+        pending.add(task)
+
+        def _done(done_task: asyncio.Task[None]) -> None:
+            pending.discard(done_task)
+            if not pending:
+                self._pending_chunk_tasks.pop(peer_hash, None)
+
+        task.add_done_callback(_done)
+
+    async def _drain_pending_chunk_tasks(
+        self: MessagingBackend, peer_hash: str, *, timeout: float = 5.0
+    ) -> None:
+        pending = list(self._pending_chunk_tasks.get(peer_hash, ()))
+        if not pending:
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*pending, return_exceptions=True),
+                timeout=timeout,
+            )
+        except TimeoutError:
+            log.warning(
+                "Timed out waiting for %d pending file chunks from %s",
+                len(pending),
+                peer_hash[:8],
+            )
+
     async def _recover_incoming_transfers_for_peer(
         self: MessagingBackend, peer_hash: str
     ) -> None:
-        """Finalize or fail incoming transfers when the sender link drops."""
+        """Finalize incoming transfers when the sender link drops."""
+        await self._drain_pending_chunk_tasks(peer_hash)
         for transfer_id, transfer in list(self._transfers.items()):
             if transfer.sender_hash != peer_hash:
                 continue
@@ -414,15 +448,12 @@ class TransferMixin:
                 TransferState.ACCEPTED,
                 TransferState.OFFERED,
             ):
-                log.warning(
-                    "Incoming transfer incomplete after disconnect: %s (%d/%d bytes)",
+                log.info(
+                    "Incoming transfer paused after disconnect: %s (%d/%d bytes)",
                     transfer.filename,
                     transfer.offset,
                     transfer.size,
                 )
-                transfer.state = TransferState.FAILED
-                await self._emit_transfer_progress(transfer, force=True)
-                self._transfer_progress_emit.pop(transfer_id, None)
 
     async def _handle_file_complete(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)

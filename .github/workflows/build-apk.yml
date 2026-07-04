@@ -59,6 +59,7 @@ jobs:
           grep -E 'android\.archs = arm64-v8a' buildozer.spec
           grep -E 'p4a\.local_recipes = p4a-recipes' buildozer.spec
           test -f p4a-recipes/python3/__init__.py
+          test -f p4a-recipes/python3/patches/disable-grp.patch
           python - <<'PY'
           import pythonforandroid
           from os.path import dirname, join, isfile

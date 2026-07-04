@@ -12,7 +12,6 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import aiofiles
-import aiofiles.os
 
 from srltcp.utils.platform import data_dir
 
@@ -164,12 +163,18 @@ async def write_file_chunk(path: Path, offset: int, data: bytes, *, fsync: bool 
         await f.write(data)
         await f.flush()
         if fsync:
-            await aiofiles.os.fsync(f.fileno())
+            await asyncio.to_thread(os.fsync, f.fileno())
 
 
 async def fsync_file(path: Path) -> None:
-    async with aiofiles.open(path, "rb") as f:
-        await aiofiles.os.fsync(f.fileno())
+    def _sync() -> None:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    await asyncio.to_thread(_sync)
 
 
 def walk_directory(root: Path) -> list[dict[str, object]]:

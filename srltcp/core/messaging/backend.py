@@ -426,7 +426,8 @@ class MessagingBackend(
                             exc,
                         )
 
-                asyncio.create_task(_process_chunk())
+                task = asyncio.create_task(_process_chunk())
+                self._track_chunk_task(hash_id, task)
         elif msg_type == MessageType.FILE_COMPLETE:
             link = self.get_link_by_peer_id(peer.peer_id)
             if link and flags & Flags.ENCRYPTED:

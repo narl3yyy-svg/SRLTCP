@@ -227,8 +227,25 @@
     el.style.borderColor = `${hashColor(hashId || name)}44`;
   }
 
+  function normalizeHash(hashId) {
+    return (hashId || "").toLowerCase();
+  }
+
   function isOutgoing(senderHash) {
-    return Object.values(state.myHashes).includes(senderHash);
+    const sender = normalizeHash(senderHash);
+    return Object.values(state.myHashes).some((h) => normalizeHash(h) === sender);
+  }
+
+  /** True when message belongs to the currently open peer conversation. */
+  function messageForSelectedPeer(m) {
+    if (!state.selectedPeer || !m) return false;
+    const peer = normalizeHash(state.selectedPeer);
+    const sender = normalizeHash(m.sender_hash);
+    const recipient = normalizeHash(m.recipient_hash);
+    const mine = Object.values(state.myHashes).map(normalizeHash);
+    const peerInvolved = sender === peer || recipient === peer;
+    const meInvolved = mine.some((h) => h === sender || h === recipient);
+    return peerInvolved && meInvolved;
   }
 
   function peerByHash(hashId) {
@@ -650,9 +667,7 @@
     if (!state.selectedPeer) return;
     const res = await fetch("/api/messages?limit=500");
     const msgs = await res.json();
-    const filtered = msgs.filter(
-      (m) => m.sender_hash === state.selectedPeer || m.recipient_hash === state.selectedPeer
-    );
+    const filtered = msgs.filter((m) => messageForSelectedPeer(m));
     filtered.forEach((m) => syncTransferStateFromMessage(m));
     renderMessages(filtered);
   }
@@ -813,6 +828,21 @@
     input.value = "";
     autoResize(input);
 
+    const pendingId = `pending-${Date.now()}`;
+    const myHash = state.myHashes.tcp || Object.values(state.myHashes)[0] || "";
+    const optimistic = {
+      id: pendingId,
+      sender_hash: myHash,
+      recipient_hash: state.selectedPeer,
+      text,
+      timestamp: Date.now() / 1000,
+      msg_type: "text",
+      status: "pending",
+      transport: peerTransport(state.selectedPeer),
+    };
+    state.messageCache.push(optimistic);
+    renderMessages(state.messageCache, { scrollToBottom: true });
+
     const res = await fetch("/api/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -823,10 +853,20 @@
       }),
     });
     if (!res.ok) {
+      state.messageCache = state.messageCache.filter((m) => m.id !== pendingId);
+      renderMessages(state.messageCache);
       toast("Message failed — reconnecting…");
       await connectPeer(state.selectedPeer, true);
     } else {
-      loadMessages();
+      const sent = await res.json().catch(() => null);
+      if (sent?.id) {
+        const idx = state.messageCache.findIndex((m) => m.id === pendingId);
+        if (idx >= 0) state.messageCache[idx] = sent;
+        else state.messageCache.push(sent);
+        renderMessages(state.messageCache, { scrollToBottom: true });
+      } else {
+        loadMessages();
+      }
     }
   }
 
@@ -2137,7 +2177,9 @@
     state.transfers[data.id] = { ...state.transfers[data.id], ...data };
     const peer = state.selectedPeer;
     if (!peer) return;
-    const relevant = data.sender_hash === peer || data.recipient_hash === peer;
+    const peerNorm = normalizeHash(peer);
+    const relevant = normalizeHash(data.sender_hash) === peerNorm
+      || normalizeHash(data.recipient_hash) === peerNorm;
     if (!relevant) return;
     const idx = state.messageCache.findIndex((m) => m.metadata?.transfer_id === data.id);
     if (idx >= 0) {
@@ -2170,11 +2212,19 @@
     }
   }
 
-  function onNewMessage(m) {
-    const forPeer = state.selectedPeer
-      && (m.sender_hash === state.selectedPeer || m.recipient_hash === state.selectedPeer);
+  function upsertChatMessage(m) {
+    const idx = state.messageCache.findIndex((x) => x.id === m.id);
+    if (idx >= 0) {
+      state.messageCache[idx] = m;
+    } else {
+      state.messageCache.push(m);
+      state.messageCache.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    }
+    syncTransferStateFromMessage(m);
+  }
 
-    if (!forPeer) {
+  function onNewMessage(m) {
+    if (!messageForSelectedPeer(m)) {
       if (!isOutgoing(m.sender_hash)) {
         bumpUnread(m.sender_hash);
         const sender = peerByHash(m.sender_hash);
@@ -2188,41 +2238,35 @@
     }
 
     const msgMedia = mediaMsgType(m);
+    const tid = m.metadata?.transfer_id;
+    const prev = state.messageCache.find((x) => x.id === m.id);
+    upsertChatMessage(m);
+
     if (msgMedia === "file" || msgMedia === "image" || msgMedia === "video") {
-      const tid = m.metadata?.transfer_id;
-      const idx = state.messageCache.findIndex((x) => x.id === m.id);
-      if (idx >= 0) {
-        const prev = state.messageCache[idx];
-        state.messageCache[idx] = m;
-        syncTransferStateFromMessage(m);
-        if (tid) {
-          const done = TERMINAL_TRANSFER_STATES.has(m.metadata?.state);
-          if (done && (msgMedia === "image" || msgMedia === "video")) {
-            refreshTransferBubble(tid, state.transfers[tid], { scroll: m.metadata?.state === "complete" });
-            return;
-          }
-          if (patchTransferBubble(tid, state.transfers[tid])) return;
-          if (["transferring", "accepted", "offered"].includes(m.metadata?.state)) {
-            scheduleTransferPatch(tid, state.transfers[tid]);
-            return;
-          }
-        }
-        if (prev.metadata?.state === m.metadata?.state
-            && prev.metadata?.offset === m.metadata?.offset) return;
-        renderMessages(state.messageCache, { preserveScroll: true });
-      } else {
-        loadMessages();
+      const merged = tid ? mergeTransferMeta(tid, m.metadata || {}) : m.metadata || {};
+      const live = tid ? state.transfers[tid] : null;
+      const transferData = live || merged;
+      if (tid && TERMINAL_TRANSFER_STATES.has(merged.state)
+          && (msgMedia === "image" || msgMedia === "video")) {
+        refreshTransferBubble(tid, transferData, { scroll: merged.state === "complete" });
+        return;
       }
-      return;
+      if (tid && patchTransferBubble(tid, transferData)) {
+        if (ACTIVE_TRANSFER_STATES.has(merged.state)) scheduleTransferPatch(tid, transferData);
+        return;
+      }
+      if (prev
+          && prev.metadata?.state === m.metadata?.state
+          && prev.metadata?.offset === m.metadata?.offset
+          && prev.text === m.text) {
+        return;
+      }
     }
 
-    const idx = state.messageCache.findIndex((x) => x.id === m.id);
-    if (idx >= 0) {
-      state.messageCache[idx] = m;
-      renderMessages(state.messageCache, { scrollToBottom: true });
-    } else {
-      loadMessages();
-    }
+    renderMessages(state.messageCache, {
+      preserveScroll: isOutgoing(m.sender_hash),
+      scrollToBottom: !isOutgoing(m.sender_hash),
+    });
   }
 
   async function renderTransfers() {
@@ -2592,6 +2636,11 @@
     } catch (_) { /* ignore */ }
   }, 1000);
   setInterval(loadPeers, 5000);
+  setInterval(() => {
+    if (state.selectedPeer && $("#chat-active") && !$("#chat-active").classList.contains("hidden")) {
+      loadMessages();
+    }
+  }, 4000);
 
 
   fetch("/api/settings")

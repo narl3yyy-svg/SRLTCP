@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -94,6 +95,54 @@ def test_transfer_cooldown(backend: MessagingBackend) -> None:
     assert backend.in_transfer_cooldown(hash_id) is False
     backend._mark_transfer_cooldown(hash_id)
     assert backend.in_transfer_cooldown(hash_id) is True
+
+
+@pytest.mark.asyncio
+async def test_recover_incoming_waits_for_pending_chunk_tasks(
+    backend: MessagingBackend, tmp_path: Path
+) -> None:
+    sender = "f" * 32
+    recipient = "0" * 32
+    payload = b"chunk-payload"
+    dest = tmp_path / "file.bin"
+    import hashlib
+
+    digest = hashlib.sha256(payload).hexdigest()
+    transfer = FileTransfer(
+        id="tid-chunk",
+        sender_hash=sender,
+        recipient_hash=recipient,
+        filename="file.bin",
+        path=dest,
+        size=len(payload),
+        sha256=digest,
+        transport="tcp",
+        state=TransferState.TRANSFERRING,
+        offset=0,
+    )
+    backend._transfers["tid-chunk"] = transfer
+    backend._incoming_paths["tid-chunk"] = dest
+
+    async def slow_chunk() -> None:
+        await asyncio.sleep(0.05)
+        dest.write_bytes(payload)
+        transfer.offset = len(payload)
+
+    task = asyncio.create_task(slow_chunk())
+    backend._track_chunk_task(sender, task)
+    backend._on_transfer_complete = AsyncMock()
+
+    with (
+        patch("srltcp.core.messaging.transfer.fsync_file", AsyncMock()),
+        patch(
+            "srltcp.core.messaging.transfer.sha256_file",
+            AsyncMock(return_value=digest),
+        ),
+    ):
+        await backend._recover_incoming_transfers_for_peer(sender)
+
+    assert transfer.state == TransferState.COMPLETE
+    backend._on_transfer_complete.assert_awaited_once()
 
 
 @pytest.mark.asyncio

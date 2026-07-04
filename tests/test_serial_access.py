@@ -28,7 +28,7 @@ def test_serial_group_status_shape() -> None:
 
 
 def test_serial_access_without_grp_module(monkeypatch) -> None:
-    monkeypatch.setattr(serial_access, "grp", None)
+    monkeypatch.setattr(serial_access, "_grp", None)
     assert serial_access.serial_access_group() is None
     assert serial_access.serial_group_status() == {
         "group": None,
