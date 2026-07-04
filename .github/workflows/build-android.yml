@@ -18,6 +18,16 @@ jobs:
       with:
         python-version: '3.11'
     
+    - name: Cache Buildozer
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.buildozer
+          ~/.gradle/caches
+        key: ${{ runner.os }}-buildozer-${{ hashFiles('android/buildozer.spec') }}
+        restore-keys: |
+          ${{ runner.os }}-buildozer-
+    
     - name: Install system dependencies
       run: |
         sudo apt-get update
@@ -41,25 +51,10 @@ jobs:
         accept-android-sdk-licenses: true
         packages: 'platforms;android-33 build-tools;33.0.2'
     
-    - name: Setup NDK 25c
-      run: |
-        mkdir -p /home/runner/.buildozer/android/platform/
-        cd /home/runner/.buildozer/android/platform/
-        wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
-        unzip -q android-ndk-r25c-linux.zip
-        rm android-ndk-r25c-linux.zip
-        echo "NDK installed at /home/runner/.buildozer/android/platform/android-ndk-r25c"
-    
     - name: Install Buildozer
       run: |
         pip install --upgrade pip
         pip install buildozer cython setuptools
-    
-    - name: Set environment variables
-      run: |
-        echo "ANDROIDAPI=33" >> $GITHUB_ENV
-        echo "ANDROIDMINAPI=21" >> $GITHUB_ENV
-        echo "ANDROIDNDK=/home/runner/.buildozer/android/platform/android-ndk-r25c" >> $GITHUB_ENV
     
     - name: Build APK
       run: |

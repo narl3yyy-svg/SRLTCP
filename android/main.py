@@ -19,8 +19,14 @@ from kivy.uix.textinput import TextInput
 
 kivy.require('2.2.0')
 
-# Add the parent directory to path to import srltcp
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Allow running directly from android/ folder during development.
+# On Android the package is installed properly via requirements.source.srltcp
+if 'srltcp' not in sys.modules:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# You can now import from srltcp normally:
+# from srltcp.transports.tcp import TCPTransport
+# import srltcp
 
 
 class SRLTCPApp(App):
@@ -76,14 +82,14 @@ class SRLTCPApp(App):
         self.log_text.text += "Connecting...\n"
         self.status_label.text = 'Connecting...'
         self.status_label.color = (1, 1, 0, 1)
-        # Add your connection logic here
+        # TODO: Add real connection logic using srltcp here
         Clock.schedule_once(lambda dt: self.update_status('Connected'), 1)
     
     def send_message(self, instance):
         msg = self.msg_input.text
         if msg:
             self.log_text.text += f"Sending: {msg}\n"
-            # Add your send logic here
+            # TODO: Add real send logic using srltcp here
             self.msg_input.text = ''
     
     def update_status(self, status):
