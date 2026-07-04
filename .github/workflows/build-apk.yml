@@ -16,6 +16,7 @@ jobs:
       - name: Build APK with Buildozer (Docker)
         run: |
           docker run --rm \
+            -e BUILDOZER_ALLOW_ROOT=1 \
             -v "$PWD":/app \
             -w /app/android \
             ghcr.io/kivy/buildozer \
