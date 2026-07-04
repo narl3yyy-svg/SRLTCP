@@ -5,7 +5,9 @@ description = "SRLTCP client"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = []
-dev-dependencies = [
+
+[project.optional-dependencies]
+dev = [
     "pytest>=7.0.0",
     "ruff>=0.1.0",
 ]
