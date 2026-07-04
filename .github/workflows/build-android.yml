@@ -22,33 +22,22 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          git \
-          zip \
-          unzip \
+          git zip unzip \
           openjdk-17-jdk \
-          autoconf \
-          libtool \
-          pkg-config \
-          zlib1g-dev \
-          libncurses5-dev \
-          libncursesw5-dev \
+          autoconf libtool pkg-config \
+          zlib1g-dev libncurses5-dev \
           cmake \
-          libffi-dev \
-          libssl-dev \
-          libxml2-dev \
-          libxslt1-dev \
+          libffi-dev libssl-dev \
+          libxml2-dev libxslt1-dev \
           libjpeg-dev \
-          libgl1-mesa-dev \
-          libgles2-mesa-dev \
-          llvm \
-          liblzma-dev
+          libgl1-mesa-dev libgles2-mesa-dev \
+          wget
     
     - name: Set up Android SDK
       uses: android-actions/setup-android@v3
       with:
         cmdline-tools-version: 'latest'
         accept-android-sdk-licenses: true
-        log-accepted-android-sdk-licenses: true
         packages: 'platforms;android-34 build-tools;34.0.0'
     
     - name: Set up Java
@@ -57,12 +46,12 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
     
-    - name: Install Python dependencies
+    - name: Install Buildozer
       run: |
         pip install --upgrade pip
-        pip install buildozer cython
+        pip install buildozer cython setuptools
     
-    - name: Build with Buildozer
+    - name: Build APK
       run: |
         cd android
         buildozer android debug
