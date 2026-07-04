@@ -33,7 +33,9 @@ def test_zip_path_to_temp_directory(tmp_path: Path) -> None:
         zip_path.unlink(missing_ok=True)
 
 
-def test_zip_path_to_temp_rejects_huge_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_zip_path_to_temp_rejects_huge_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     folder = tmp_path / "big"
     folder.mkdir()
     (folder / "a.txt").write_text("x")

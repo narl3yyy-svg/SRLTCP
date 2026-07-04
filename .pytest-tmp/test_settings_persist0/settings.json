@@ -1,0 +1,21 @@
+{
+  "setup_complete": false,
+  "display_name": "bob",
+  "web_port": 9876,
+  "message_retention_hours": 24,
+  "message_retention_preset": "1d",
+  "incoming_files_dir": "",
+  "shared_folder": "",
+  "auto_announce": true,
+  "enable_serial": false,
+  "serial_port": "",
+  "serial_baud": 57600,
+  "lan_ip": "",
+  "bind_interface": "",
+  "timezone": "",
+  "show_clock": true,
+  "clock_source": "system",
+  "ntp_server": "pool.ntp.org",
+  "wan_expose_port": false,
+  "version": "0.1.24"
+}

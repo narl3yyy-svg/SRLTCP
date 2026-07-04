@@ -1,0 +1,18 @@
+{
+  "peers": [
+    {
+      "hash_id": "dddddddddddddddddddddddddddddddd",
+      "name": "dave",
+      "transport": "tcp",
+      "public_key": "",
+      "tcp_host": "",
+      "tcp_port": 7825,
+      "wan_host": "8.8.8.8",
+      "wan_port": 9000,
+      "wan_enabled": true,
+      "connection_mode": "wan",
+      "blocked": false,
+      "added_at": 1783125209.6447434
+    }
+  ]
+}

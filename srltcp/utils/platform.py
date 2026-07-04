@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import platform
-import sys
 from pathlib import Path
 
 _android_data_dir: str | None = None

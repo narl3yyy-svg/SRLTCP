@@ -1,5 +1,11 @@
 # SRLTCP Release Notes
 
+## v0.1.24 (2026-07-04)
+
+### CI
+- **Checks** — fix ruff lint (unused import, line length)
+- **Android APK** — bootstrap SDK and accept licenses via `sdkmanager` before Buildozer build
+
 ## v0.1.23 (2026-07-03)
 
 ### Android CI
