@@ -664,13 +664,26 @@
     loadPeers();
   }
 
+  function messagesEqual(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i].id !== b[i].id) return false;
+      if (a[i].status !== b[i].status) return false;
+      if (a[i].metadata?.state !== b[i].metadata?.state) return false;
+      if (a[i].metadata?.offset !== b[i].metadata?.offset) return false;
+    }
+    return true;
+  }
+
   async function loadMessages() {
     if (!state.selectedPeer) return;
     const res = await fetch("/api/messages?limit=500");
     const msgs = await res.json();
     const filtered = msgs.filter((m) => messageForSelectedPeer(m));
     filtered.forEach((m) => syncTransferStateFromMessage(m));
-    renderMessages(filtered);
+    if (!messagesEqual(filtered, state.messageCache)) {
+      renderMessages(filtered);
+    }
   }
 
   async function announceTransport(transport) {
@@ -853,17 +866,15 @@
         transport: peerTransport(state.selectedPeer),
       }),
     });
+    state.messageCache = state.messageCache.filter((m) => m.id !== pendingId);
     if (!res.ok) {
-      state.messageCache = state.messageCache.filter((m) => m.id !== pendingId);
       renderMessages(state.messageCache);
       toast("Message failed — reconnecting…");
       await connectPeer(state.selectedPeer, true);
     } else {
       const sent = await res.json().catch(() => null);
       if (sent?.id) {
-        const idx = state.messageCache.findIndex((m) => m.id === pendingId);
-        if (idx >= 0) state.messageCache[idx] = sent;
-        else state.messageCache.push(sent);
+        upsertChatMessage(sent);
         renderMessages(state.messageCache, { scrollToBottom: true });
       } else {
         loadMessages();

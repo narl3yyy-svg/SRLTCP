@@ -375,87 +375,95 @@ class MessagingBackend(
             log.debug("Invalid packet from %s", peer.peer_id[:8])
             return
 
-        if msg_type == MessageType.ANNOUNCE:
-            if peer.transport == "serial":
-                log.info("Serial ANNOUNCE received on %s", peer.address)
-            await self._handle_discovered(peer.address, peer.transport, body)
-        elif msg_type == MessageType.HANDSHAKE:
-            await self._handle_handshake(peer.peer_id, body, initiator=False)
-        elif msg_type == MessageType.HANDSHAKE_ACK:
-            await self._handle_handshake_ack(peer.peer_id, body)
-        elif msg_type == MessageType.PING:
-            await self._reply_pong_with_rtt(peer, body)
-        elif msg_type == MessageType.PONG:
-            await self._handle_pong(peer.peer_id, body)
-        elif msg_type == MessageType.TEXT:
-            await self._handle_text(peer.peer_id, body, flags)
-        elif msg_type == MessageType.FILE_OFFER:
-            link = self.get_link_by_peer_id(peer.peer_id)
-            if link and flags & Flags.ENCRYPTED:
-                body = link.crypto.decrypt(body)
-            await self._handle_file_offer(
-                link.hash_id if link else peer.peer_id, body
+        try:
+            if msg_type == MessageType.ANNOUNCE:
+                if peer.transport == "serial":
+                    log.info("Serial ANNOUNCE received on %s", peer.address)
+                await self._handle_discovered(peer.address, peer.transport, body)
+            elif msg_type == MessageType.HANDSHAKE:
+                await self._handle_handshake(peer.peer_id, body, initiator=False)
+            elif msg_type == MessageType.HANDSHAKE_ACK:
+                await self._handle_handshake_ack(peer.peer_id, body)
+            elif msg_type == MessageType.PING:
+                await self._reply_pong_with_rtt(peer, body)
+            elif msg_type == MessageType.PONG:
+                await self._handle_pong(peer.peer_id, body)
+            elif msg_type == MessageType.TEXT:
+                await self._handle_text(peer.peer_id, body, flags)
+            elif msg_type == MessageType.FILE_OFFER:
+                link = self.get_link_by_peer_id(peer.peer_id)
+                if link and flags & Flags.ENCRYPTED:
+                    body = link.crypto.decrypt(body)
+                await self._handle_file_offer(
+                    link.hash_id if link else peer.peer_id, body
+                )
+            elif msg_type == MessageType.FILE_ACCEPT:
+                link = self.get_link_by_peer_id(peer.peer_id)
+                if link and flags & Flags.ENCRYPTED:
+                    body = link.crypto.decrypt(body)
+                if link:
+                    await self._handle_file_accept(link.hash_id, body)
+            elif msg_type == MessageType.FILE_REJECT:
+                link = self.get_link_by_peer_id(peer.peer_id)
+                if link and flags & Flags.ENCRYPTED:
+                    body = link.crypto.decrypt(body)
+                if link:
+                    await self._handle_file_reject(link.hash_id, body)
+            elif msg_type == MessageType.FILE_CHUNK:
+                link = self.get_link_by_peer_id(peer.peer_id)
+                if link:
+                    hash_id = link.hash_id
+                    compressed = bool(flags & Flags.COMPRESSED)
+
+                    async def _process_chunk() -> None:
+                        try:
+                            await self._handle_file_chunk(
+                                hash_id, body, compressed=compressed
+                            )
+                        except Exception as exc:
+                            log.warning(
+                                "File chunk handler failed from %s: %s",
+                                hash_id[:8],
+                                exc,
+                            )
+
+                    task = asyncio.create_task(_process_chunk())
+                    self._track_chunk_task(hash_id, task)
+            elif msg_type == MessageType.FILE_COMPLETE:
+                link = self.get_link_by_peer_id(peer.peer_id)
+                if link and flags & Flags.ENCRYPTED:
+                    body = link.crypto.decrypt(body)
+                if link:
+                    await self._handle_file_complete(link.hash_id, body)
+            elif msg_type == MessageType.FILE_RESUME:
+                link = self.get_link_by_peer_id(peer.peer_id)
+                if link and flags & Flags.ENCRYPTED:
+                    body = link.crypto.decrypt(body)
+                if link:
+                    await self._handle_file_resume(link.hash_id, body)
+            elif msg_type == MessageType.SHARE_LIST:
+                link = self.get_link_by_peer_id(peer.peer_id)
+                if link and flags & Flags.ENCRYPTED:
+                    body = link.crypto.decrypt(body)
+                if link:
+                    await self._handle_share_list(link.hash_id, body)
+            elif msg_type == MessageType.SHARE_REQUEST:
+                link = self.get_link_by_peer_id(peer.peer_id)
+                if link and flags & Flags.ENCRYPTED:
+                    body = link.crypto.decrypt(body)
+                if link:
+                    await self._handle_share_request(link.hash_id, body)
+            elif msg_type == MessageType.RELAY_ENVELOPE:
+                await self._handle_relay_envelope(peer.peer_id, body)
+            elif msg_type == MessageType.ROUTE_UPDATE:
+                await self._handle_route_update(peer.peer_id, body)
+        except Exception as exc:
+            log.warning(
+                "Handler failed for msg_type=%s from %s: %s",
+                msg_type.name if hasattr(msg_type, 'name') else msg_type,
+                peer.peer_id[:8],
+                exc,
             )
-        elif msg_type == MessageType.FILE_ACCEPT:
-            link = self.get_link_by_peer_id(peer.peer_id)
-            if link and flags & Flags.ENCRYPTED:
-                body = link.crypto.decrypt(body)
-            if link:
-                await self._handle_file_accept(link.hash_id, body)
-        elif msg_type == MessageType.FILE_REJECT:
-            link = self.get_link_by_peer_id(peer.peer_id)
-            if link and flags & Flags.ENCRYPTED:
-                body = link.crypto.decrypt(body)
-            if link:
-                await self._handle_file_reject(link.hash_id, body)
-        elif msg_type == MessageType.FILE_CHUNK:
-            link = self.get_link_by_peer_id(peer.peer_id)
-            if link:
-                hash_id = link.hash_id
-                compressed = bool(flags & Flags.COMPRESSED)
-
-                async def _process_chunk() -> None:
-                    try:
-                        await self._handle_file_chunk(
-                            hash_id, body, compressed=compressed
-                        )
-                    except Exception as exc:
-                        log.warning(
-                            "File chunk handler failed from %s: %s",
-                            hash_id[:8],
-                            exc,
-                        )
-
-                task = asyncio.create_task(_process_chunk())
-                self._track_chunk_task(hash_id, task)
-        elif msg_type == MessageType.FILE_COMPLETE:
-            link = self.get_link_by_peer_id(peer.peer_id)
-            if link and flags & Flags.ENCRYPTED:
-                body = link.crypto.decrypt(body)
-            if link:
-                await self._handle_file_complete(link.hash_id, body)
-        elif msg_type == MessageType.FILE_RESUME:
-            link = self.get_link_by_peer_id(peer.peer_id)
-            if link and flags & Flags.ENCRYPTED:
-                body = link.crypto.decrypt(body)
-            if link:
-                await self._handle_file_resume(link.hash_id, body)
-        elif msg_type == MessageType.SHARE_LIST:
-            link = self.get_link_by_peer_id(peer.peer_id)
-            if link and flags & Flags.ENCRYPTED:
-                body = link.crypto.decrypt(body)
-            if link:
-                await self._handle_share_list(link.hash_id, body)
-        elif msg_type == MessageType.SHARE_REQUEST:
-            link = self.get_link_by_peer_id(peer.peer_id)
-            if link and flags & Flags.ENCRYPTED:
-                body = link.crypto.decrypt(body)
-            if link:
-                await self._handle_share_request(link.hash_id, body)
-        elif msg_type == MessageType.RELAY_ENVELOPE:
-            await self._handle_relay_envelope(peer.peer_id, body)
-        elif msg_type == MessageType.ROUTE_UPDATE:
-            await self._handle_route_update(peer.peer_id, body)
 
     async def _dispatch_encrypted(self, peer_id: str, inner: bytes) -> None:
         try:

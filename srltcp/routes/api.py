@@ -370,14 +370,12 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         if not transfer:
             return web.json_response({"error": "transfer not found"}, status=404)
         incoming = node.backend._incoming_paths.get(transfer_id)
-        path = transfer.path
         if incoming and incoming.is_file():
             path = incoming
-        elif not path.is_file():
-            if path.exists() and path.stat().st_size > 0:
-                pass
-            else:
-                return web.json_response({"error": "file not ready"}, status=404)
+        elif transfer.path.is_file():
+            path = transfer.path
+        else:
+            return web.json_response({"error": "file not ready"}, status=404)
         from urllib.parse import quote
 
         fname = transfer.filename or path.name
