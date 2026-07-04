@@ -75,7 +75,8 @@ async def test_announce_serial_requires_transport() -> None:
     serial_identity.public_bytes.return_value = b"\x02" * 32
     backend.identities["serial"] = serial_identity
     backend.serial_transport = None
-    with pytest.raises(AnnounceError, match="Serial transport is not open"):
+    backend.config.enable_serial = False
+    with pytest.raises(AnnounceError, match="Serial is disabled"):
         await backend.announce("serial")
 
 

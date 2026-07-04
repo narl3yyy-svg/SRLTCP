@@ -83,4 +83,4 @@ class GracefulShutdown:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        log.info("SRLTCP stopped.")
+        log.info("SRLTCP stopped — all ports released.")

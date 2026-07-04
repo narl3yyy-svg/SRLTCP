@@ -46,7 +46,9 @@ async def start_tcp_server(
     for offset in range(attempts):
         try_port = port + offset
         try:
-            server = await asyncio.start_server(factory, host, try_port)
+            server = await asyncio.start_server(
+                factory, host, try_port, reuse_address=True
+            )
             if offset:
                 log.warning(
                     "TCP port %d in use — bound to %d instead "
@@ -85,6 +87,7 @@ async def bind_udp_port(
             transport, _ = await loop.create_datagram_endpoint(
                 protocol_factory,
                 local_addr=(host, try_port),
+                reuse_address=True,
             )
             if offset:
                 log.warning("UDP discovery port %d in use — using %d", port, try_port)
@@ -118,7 +121,13 @@ async def start_web_site(
     for offset in range(attempts):
         try_port = port + offset
         try:
-            site = web.TCPSite(runner, host, try_port, ssl_context=ssl_context)
+            site = web.TCPSite(
+                runner,
+                host,
+                try_port,
+                ssl_context=ssl_context,
+                reuse_address=True,
+            )
             await site.start()
             if offset:
                 log.warning("Web UI port %d in use — serving on %d", port, try_port)

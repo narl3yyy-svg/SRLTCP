@@ -79,10 +79,19 @@ class AnnounceMixin:
                     "UDP discovery socket is not available — restart the node",
                 )
         elif transport_name == "serial":
+            if not self.serial_transport and self.config.enable_serial:
+                result = await self.ensure_serial_transport()
+                if result.get("serial") != "running":
+                    err = (
+                        result.get("error")
+                        or getattr(self, "_serial_error", None)
+                        or "Serial transport is not open — check port and permissions"
+                    )
+                    raise AnnounceError(transport_name, err)
             if not self.serial_transport:
                 raise AnnounceError(
                     transport_name,
-                    "Serial transport is not open — check port and permissions",
+                    "Serial is disabled — enable it in Settings → Serial",
                 )
             packet = build_header(MessageType.ANNOUNCE, body=payload)
             peers = self.serial_transport.peers()
@@ -150,5 +159,11 @@ class AnnounceMixin:
             if peer and peer.hash_id in own_hashes:
                 self.discovery.remove(peer.hash_id)
             return
+        if is_new and peer.transport == "serial":
+            log.info(
+                "Discovered serial peer %s (%s)",
+                peer.name,
+                peer.hash_id[:8],
+            )
         if self._on_peer_discovered:
             await self._on_peer_discovered(peer.to_dict())

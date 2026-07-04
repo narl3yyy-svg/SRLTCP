@@ -1541,11 +1541,14 @@
     if (serialBtn) {
       const serialActive = !!transportStatus.serial?.active;
       serialBtn.disabled = !serialActive;
+      const serialErr = transportStatus.serial?.error;
       serialBtn.title = serialActive
         ? "Announce on serial/RF"
-        : ids.serial
-          ? "Serial port not open — check port, baud, and dialout group"
-          : "Enable serial in settings first";
+        : serialErr
+          ? serialErr
+          : ids.serial
+            ? "Serial port not open — Arch uses group uucp (not dialout)"
+            : "Enable serial in settings first";
     }
 
     if (primary) {

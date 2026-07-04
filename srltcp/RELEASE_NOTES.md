@@ -1,5 +1,17 @@
 # SRLTCP Release Notes
 
+## v0.1.38 (2026-07-03)
+
+### Serial discovery
+- **Arch permissions** — error hints use `uucp` group (Arch) or `dialout` (Debian/Ubuntu)
+- **Announce retry** — manual serial announce re-opens the port if it failed at startup
+- **Receive logging** — logs when serial ANNOUNCE frames are received and peers discovered
+- **Both peers required** — serial discovery only works when both nodes have the port open
+
+### Shutdown
+- **Port release** — SO_REUSEADDR on TCP/UDP/web binds; shutdown logs each transport closing
+- **run.sh** — Ctrl+C waits for Python cleanup so ports are released before exit
+
 ## v0.1.37 (2026-07-03)
 
 ### Ports

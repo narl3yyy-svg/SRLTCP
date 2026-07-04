@@ -127,9 +127,11 @@ async def run_web(args: argparse.Namespace) -> None:
 
     shutdown = GracefulShutdown()
     web_holder: dict = {}
+    port_holder = {"web": requested_web_port, "bound": requested_web_port}
 
     async def cleanup() -> None:
         if web_holder:
+            log.info("Closing web UI on port %d", port_holder["bound"])
             await shutdown_web_server(
                 node, web_holder["runner"], web_holder["site"]
             )
@@ -146,6 +148,7 @@ async def run_web(args: argparse.Namespace) -> None:
     )
     web_holder["runner"] = runner
     web_holder["site"] = site
+    port_holder["bound"] = bound_port
     settings.web_port = requested_web_port
     store.save(settings)
     _android_web_port["port"] = bound_port

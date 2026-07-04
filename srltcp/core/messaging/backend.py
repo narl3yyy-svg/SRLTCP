@@ -81,6 +81,7 @@ class MessagingBackend(
         self.discovery = DiscoveryRegistry()
         self.tcp_transport: TCPTransport | None = None
         self.serial_transport: SerialTransport | None = None
+        self._serial_error: str | None = None
         self._running = False
         self._messages: list[ChatMessage] = []
 
@@ -160,8 +161,9 @@ class MessagingBackend(
         if self.serial_transport:
             try:
                 await self.serial_transport.start()
+                self._serial_error = None
             except Exception as exc:
-                log.warning("Serial transport unavailable: %s", exc)
+                self._record_serial_failure(self.serial_transport.port, exc)
                 self.serial_transport = None
 
         if self.config.announce:
@@ -190,9 +192,31 @@ class MessagingBackend(
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         if self.tcp_transport:
+            log.info(
+                "Closing TCP transport (port %d, discovery %d)",
+                self.tcp_transport.port,
+                self.tcp_transport.discovery_port,
+            )
             await self.tcp_transport.stop()
+            self.tcp_transport = None
         if self.serial_transport:
+            log.info("Closing serial transport (%s)", self.serial_transport.port)
             await self.serial_transport.stop()
+            self.serial_transport = None
+
+    def _record_serial_failure(self, port: str, exc: Exception) -> None:
+        from srltcp.utils.serial_access import format_serial_permission_help
+
+        self._serial_error = format_serial_permission_help(port, exc)
+        log.warning("%s", self._serial_error)
+
+    async def ensure_serial_transport(self) -> dict[str, str]:
+        """Open serial transport if enabled but not yet running."""
+        if self.serial_transport:
+            return {"serial": "running"}
+        if not self.config.enable_serial:
+            return {"serial": "disabled"}
+        return await self.apply_serial_transport()
 
     async def apply_serial_transport(self) -> dict[str, str]:
         """Start, stop, or restart serial transport when settings change."""
@@ -227,11 +251,15 @@ class MessagingBackend(
             self._wire_transport(self.serial_transport)
             try:
                 await self.serial_transport.start()
+                self._serial_error = None
             except Exception as exc:
-                log.warning("Serial transport unavailable: %s", exc)
+                port_name = port or self.serial_transport.port
+                self._record_serial_failure(port_name, exc)
                 self.serial_transport = None
-                self.identities.pop("serial", None)
-                return {"serial": "failed", "error": str(exc)}
+                return {
+                    "serial": "failed",
+                    "error": self._serial_error or str(exc),
+                }
 
         return {"serial": "running" if self.serial_transport else "failed"}
 
@@ -346,6 +374,8 @@ class MessagingBackend(
             return
 
         if msg_type == MessageType.ANNOUNCE:
+            if peer.transport == "serial":
+                log.info("Serial ANNOUNCE received on %s", peer.address)
             await self._handle_discovered(peer.address, peer.transport, body)
         elif msg_type == MessageType.HANDSHAKE:
             await self._handle_handshake(peer.peer_id, body, initiator=False)
@@ -565,6 +595,7 @@ class MessagingBackend(
                 "active": self.serial_transport is not None,
                 "port": serial_port,
                 "baud": self.config.serial_baud,
+                "error": self._serial_error,
             }
         return status
 
