@@ -234,7 +234,16 @@ class ConnectMixin:
                 log.warning("No host for peer %s", hash_id[:8])
                 return False
             target_host, target_port = endpoint
-            peer_id = await self.tcp_transport.connect(target_host, target_port)
+            try:
+                peer_id = await self.tcp_transport.connect(target_host, target_port)
+            except (OSError, TimeoutError, ConnectionError) as exc:
+                log.warning(
+                    "TCP connect to %s:%s failed: %s",
+                    target_host,
+                    target_port,
+                    exc,
+                )
+                return False
             link = PeerLink(
                 hash_id=hash_id,
                 transport_peer_id=peer_id,

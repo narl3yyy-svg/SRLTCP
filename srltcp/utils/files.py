@@ -36,17 +36,17 @@ def safe_filename(name: str) -> str:
 
 
 def unique_dest_path(directory: Path, filename: str) -> Path:
-    """Pick a destination path, adding (1), (2), … when the name already exists."""
+    """Pick a destination path, adding 1, 2, … before the extension when taken."""
     directory = ensure_dir(directory)
     safe = safe_filename(filename)
     dest = directory / safe
     if not dest.exists():
         return dest
-    stem = dest.stem
-    suffix = dest.suffix
+    stem = Path(safe).stem
+    suffix = Path(safe).suffix
     counter = 1
     while True:
-        candidate = directory / f"{stem} ({counter}){suffix}"
+        candidate = directory / f"{stem}{counter}{suffix}"
         if not candidate.exists():
             return candidate
         counter += 1

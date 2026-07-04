@@ -1,5 +1,19 @@
 # SRLTCP Release Notes
 
+## v0.1.31 (2026-07-03)
+
+### File transfer
+- **Receiver download link** — completed transfers show **Download file** / **Download folder ZIP** in chat
+- **Folder send naming** — zipped folders arrive as `temp.zip`; collisions become `temp1.zip`, `temp2.zip`, …
+- **Folder offer fix** — FILE_OFFER now uses the real folder name (not a temp zip path)
+
+### Stability
+- **Reconnect** — TCP timeouts during auto-reconnect no longer log unhandled task exceptions
+- **Connect API** — connection timeouts return 503 instead of 500
+
+### Android CI
+- **APK build** — symlink runner SDK into Buildozer path; pin `android.sdk_path` / `android.ndk_path`
+
 ## v0.1.30 (2026-07-03)
 
 ### UI

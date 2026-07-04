@@ -324,6 +324,7 @@
         case "transfer_complete":
           state.transfers[data.id] = data;
           updateTransferDock(data);
+          syncTransferMessage(data);
           if (state.selectedPeer) updateChatTransfer(data);
           if (type === "transfer_complete") {
             markTransferCooldown(data.sender_hash, data.recipient_hash);
@@ -333,9 +334,7 @@
               { tag: `transfer-${data.id}` }
             );
             hideTransferDockIfDone(data.id);
-            if (state.selectedPeer) {
-              refreshTransferBubble(data.id, data, { scroll: true });
-            }
+            refreshTransferBubble(data.id, data, { scroll: !!state.selectedPeer });
           }
           break;
         case "share_offer":
@@ -1660,8 +1659,9 @@
       ? `<div class="progress-track chat-progress"><div class="progress-fill" style="width:${pct}%"></div></div>`
       : "";
     const showDownload = stateLabel === "complete" && downloadUrl;
+    const downloadLabel = meta.is_folder_zip ? "Download folder ZIP" : "Download file";
     const downloadLink = showDownload
-      ? `<a class="file-download" href="${downloadUrl}" download="${escapeHtml(filename)}" target="_blank" rel="noopener">Save file</a>`
+      ? `<a class="file-download" href="${downloadUrl}" download="${escapeHtml(filename)}" target="_blank" rel="noopener">${downloadLabel}</a>`
       : "";
 
     if (canPreview && m.msg_type === "image") {
@@ -1716,7 +1716,8 @@
     link.setAttribute("download", filename || "file");
     link.target = "_blank";
     link.rel = "noopener";
-    link.textContent = "Save file";
+    const msg = messageForTransfer(transferId);
+    link.textContent = msg?.metadata?.is_folder_zip ? "Download folder ZIP" : "Download file";
     const info = bubble.querySelector(".file-info");
     const imageBubble = bubble.classList.contains("image-bubble") || bubble.classList.contains("video-bubble");
     if (info) {
@@ -1759,6 +1760,24 @@
 
   function messageForTransfer(transferId) {
     return state.messageCache.find((m) => m.metadata?.transfer_id === transferId);
+  }
+
+  function syncTransferMessage(data) {
+    if (!data?.id) return;
+    const idx = state.messageCache.findIndex((m) => m.metadata?.transfer_id === data.id);
+    if (idx < 0) return;
+    const meta = state.messageCache[idx].metadata || {};
+    state.messageCache[idx].metadata = {
+      ...meta,
+      transfer_id: data.id,
+      state: data.state ?? meta.state,
+      offset: data.offset ?? meta.offset,
+      size: data.size ?? meta.size,
+      speed_mbps: data.speed_mbps ?? meta.speed_mbps,
+      filename: data.filename ?? meta.filename,
+      is_folder_zip: data.metadata?.is_folder_zip ?? meta.is_folder_zip,
+      folder_name: data.metadata?.folder_name ?? meta.folder_name,
+    };
   }
 
   function bubbleNeedsMediaRender(msg, bubble, data) {

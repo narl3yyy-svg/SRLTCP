@@ -257,9 +257,19 @@ class MessagingBackend(
                         hash_id[:8],
                         attempt + 1,
                     )
-                    await self.connect_to_peer(hash_id, transport=transport, force=False)
-                    if await self.wait_for_handshake(hash_id, timeout=8.0):
-                        return
+                    try:
+                        await self.connect_to_peer(
+                            hash_id, transport=transport, force=False
+                        )
+                    except (OSError, TimeoutError, ConnectionError) as exc:
+                        log.debug(
+                            "Reconnect attempt failed for %s: %s",
+                            hash_id[:8],
+                            exc,
+                        )
+                    else:
+                        if await self.wait_for_handshake(hash_id, timeout=8.0):
+                            return
                     delay = min(delay * 1.5, 30.0)
             finally:
                 self._reconnect_tasks.pop(hash_id, None)
@@ -619,6 +629,8 @@ class MessagingBackend(
                 "offset": transfer.get("offset", 0),
                 "speed_mbps": transfer.get("speed_mbps", 0),
                 "direction": direction,
+                "is_folder_zip": transfer.get("metadata", {}).get("is_folder_zip"),
+                "folder_name": transfer.get("metadata", {}).get("folder_name"),
             },
         )
         self._messages.append(msg)
@@ -634,14 +646,24 @@ class MessagingBackend(
                         "state": transfer.get("state"),
                         "offset": transfer.get("offset", 0),
                         "speed_mbps": transfer.get("speed_mbps", 0),
+                        "filename": transfer.get("filename", msg.metadata.get("filename")),
                     }
                 )
+                meta = transfer.get("metadata") or {}
+                if meta.get("is_folder_zip"):
+                    msg.metadata["is_folder_zip"] = True
+                    msg.metadata["folder_name"] = meta.get("folder_name")
                 if self._on_message:
                     await self._on_message(msg.to_dict())
                 return
 
     async def send_file(
-        self, recipient_hash: str, path: Path, *, transport: str = "tcp"
+        self,
+        recipient_hash: str,
+        path: Path,
+        *,
+        transport: str = "tcp",
+        filename: str | None = None,
     ) -> dict[str, Any] | None:
         if not self.trusted.is_trusted(recipient_hash):
             log.warning("Recipient %s not trusted for file send", recipient_hash[:8])
@@ -658,7 +680,10 @@ class MessagingBackend(
             log.warning("No active link to %s for file send", recipient_hash[:8])
             return None
         transfer = await self.offer_file(
-            recipient_hash, path, transport=link.transport
+            recipient_hash,
+            path,
+            transport=link.transport,
+            filename=filename,
         )
         if not transfer:
             return None
@@ -684,11 +709,16 @@ class MessagingBackend(
         zip_path: Path | None = None
         try:
             zip_path = await zip_path_to_temp_async(root)
-            result = await self.send_file(recipient_hash, zip_path, transport=transport)
+            display_name = f"{root.name}.zip"
+            result = await self.send_file(
+                recipient_hash,
+                zip_path,
+                transport=transport,
+                filename=display_name,
+            )
             if result:
                 transfer = self._transfers.get(result.get("id", ""))
                 if transfer:
-                    transfer.filename = f"{root.name}.zip"
                     transfer.metadata["folder_name"] = root.name
                     transfer.metadata["is_folder_zip"] = True
                     transfer.metadata["temp_zip_path"] = str(zip_path)

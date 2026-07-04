@@ -106,6 +106,7 @@ class TransferMixin:
         path: Path,
         *,
         transport: str = "tcp",
+        filename: str | None = None,
     ) -> FileTransfer | None:
         link = self.get_link(recipient_hash)
         if not link or not link.handshake_complete:
@@ -120,6 +121,10 @@ class TransferMixin:
             link.transport,
             sha256=file_hash,
         )
+        if filename:
+            from srltcp.utils.files import safe_filename
+
+            transfer.filename = safe_filename(filename)
         self._transfers[transfer.id] = transfer
         chunk_size, _ = self._chunk_params(link.transport)
         body = encode_payload(

@@ -196,10 +196,10 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             )
             if ok:
                 await node.backend.wait_for_handshake(hash_id, timeout=15.0)
-        except (KeyError, RuntimeError, OSError) as exc:
+        except (KeyError, RuntimeError, OSError, TimeoutError, ConnectionError) as exc:
             return web.json_response(
                 {"connected": False, "error": str(exc), "handshake_complete": False},
-                status=500,
+                status=503,
             )
         link = node.backend.get_link(hash_id)
         return web.json_response(

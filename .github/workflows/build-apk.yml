@@ -101,6 +101,10 @@ jobs:
           echo "Found aidl at $AIDL"
           echo "ANDROIDSDK=$SDK" >> "$GITHUB_ENV"
           echo "ANDROIDNDK=$SDK/ndk/26.1.10909125" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/.buildozer/android/platform"
+          rm -rf "$HOME/.buildozer/android/platform/android-sdk"
+          ln -sfn "$SDK" "$HOME/.buildozer/android/platform/android-sdk"
+          ls -la "$HOME/.buildozer/android/platform/android-sdk/build-tools/"
 
       - name: Build debug APK with python-for-android
         working-directory: android
