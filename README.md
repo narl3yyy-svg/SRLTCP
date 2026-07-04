@@ -1,12 +1,13 @@
 # SRLTCP
 
 [![Checks](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/checks.yml/badge.svg)](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/checks.yml)
+[![Build Android APK](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/build-apk.yml/badge.svg)](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/build-apk.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.20
+**Current version:** 0.1.30
 
 ---
 
@@ -61,6 +62,10 @@ srltcp/
   web/                      # Local UI (aiohttp + WebSocket)
   routes/                   # REST + share + WS routes
   utils/                    # Logging, files, platform helpers
+android/                    # Buildozer + python-for-android (see android/README.md)
+tests/                      # pytest suite
+scripts/                    # Maintainer helpers (e.g. scripts/check.sh)
+.github/workflows/          # CI: checks.yml, build-apk.yml
 ```
 
 ### Data flow diagram
@@ -223,7 +228,7 @@ srltcp web
 
 ### Android (python-for-android)
 
-See [android/README.md](android/README.md). The APK is built with **Buildozer** + **python-for-android** (Chaquopy was removed in v0.1.20).
+See [android/README.md](android/README.md). The APK is built with **Buildozer** + **python-for-android** (Chaquopy was removed in v0.1.20). Targets **Android 15** (API 35), **arm64-v8a**.
 
 **Local build:**
 
@@ -233,7 +238,7 @@ buildozer android debug
 adb install -r bin/*debug*.apk
 ```
 
-**CI / releases:** Push tag `v0.1.20` (or run **Build Android APK** workflow) — APK is attached to [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases).
+**CI / releases:** Push to `main` or tag `v0.1.30` (or run **Build Android APK** workflow) — APK is attached to [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases) on tags.
 
 **Troubleshooting:**
 
@@ -461,6 +466,12 @@ pytest tests/ -v                # unit tests only
 ## Changelog
 
 See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
+
+### v0.1.30
+
+- Scrollable trusted-contact right-click menu on small screens
+- **Delete** key removes the selected trusted peer
+- Android 15 (API 35) APK; CI build fixed (arm64-v8a only)
 
 ### v0.1.17
 

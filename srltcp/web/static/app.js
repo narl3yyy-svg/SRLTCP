@@ -542,20 +542,37 @@
     state.contactMenuTarget = null;
   }
 
+  function positionContactMenu(menu, anchor) {
+    const margin = 8;
+    menu.classList.remove("hidden");
+    menu.setAttribute("aria-hidden", "false");
+    const rect = anchor.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const viewH = window.innerHeight;
+    const viewW = window.innerWidth;
+    let top = rect.bottom + 4;
+    let left = Math.max(margin, rect.right - menuRect.width);
+    if (left + menuRect.width > viewW - margin) {
+      left = Math.max(margin, viewW - menuRect.width - margin);
+    }
+    if (top + menuRect.height > viewH - margin) {
+      const above = rect.top - menuRect.height - 4;
+      top = above >= margin ? above : Math.max(margin, viewH - menuRect.height - margin);
+    }
+    menu.style.top = `${top}px`;
+    menu.style.left = `${left}px`;
+  }
+
   function openContactMenu(hashId, name, anchor) {
     const menu = $("#contact-menu");
     if (!menu) return;
     state.contactMenuTarget = { hashId, name };
-    const rect = anchor.getBoundingClientRect();
-    menu.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 180)}px`;
-    menu.style.left = `${Math.max(8, rect.left - 140)}px`;
-    menu.classList.remove("hidden");
-    menu.setAttribute("aria-hidden", "false");
     const peer = state.trusted.find((p) => p.hash_id === hashId);
     const blockBtn = menu.querySelector('[data-action="block"]');
     if (blockBtn) {
       blockBtn.textContent = peer?.blocked ? "Unblock contact" : "Block contact";
     }
+    positionContactMenu(menu, anchor);
   }
 
   async function pingPeer(hashId) {
@@ -2281,6 +2298,15 @@
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeSettings();
+    if (
+      e.key === "Delete" &&
+      state.peerTab === "trusted" &&
+      state.selectedPeer &&
+      !e.target.closest("input, textarea, select, [contenteditable='true']")
+    ) {
+      e.preventDefault();
+      deleteTrusted(state.selectedPeer, state.selectedName);
+    }
   });
 
   function settingsPayload(prefix) {
