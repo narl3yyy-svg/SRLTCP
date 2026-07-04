@@ -20,7 +20,7 @@ jobs:
             -w /app/android \
             ghcr.io/kivy/buildozer \
             script -qec "
-              export BUILDOZER_ALLOW_ROOT=1
+              export BUILDOZER_ALLOW_ROOT=0
               buildozer android debug
             " /dev/null
 
