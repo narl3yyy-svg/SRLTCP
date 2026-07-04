@@ -18,7 +18,7 @@ env:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 150   # increased a bit
 
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +32,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
-          cmdline-tools-version: 16.0   # More stable version
+          # Let it use the latest stable without forcing version
           packages: platform-tools,platforms;android-35,build-tools;35.0.0,ndk;26.1.10909125
 
       - name: Setup Python
@@ -66,7 +66,10 @@ jobs:
       - name: Build APK
         working-directory: android
         run: |
+          echo "=== Starting Buildozer ==="
           buildozer -v android debug 2>&1 | tee ../buildozer.log
+          echo "=== Build finished ==="
+          ls -la bin/ || echo "No APK generated"
 
       - name: Upload build log
         uses: actions/upload-artifact@v4
@@ -74,13 +77,14 @@ jobs:
           name: buildozer-log
           path: buildozer.log
 
-      - name: Rename & Upload APK
+      - name: Rename APK
         run: |
           pip install -e .
-          VERSION=$(python -c "import srltcp; print(srltcp.__version__)" || echo "0.1.30")
+          VERSION=$(python -c "import srltcp; print(getattr(srltcp, '__version__', '0.1.30'))" 2>/dev/null || echo "0.1.30")
           APK=$(find android/bin -name "*.apk" | head -1)
           if [ -n "$APK" ]; then
             cp "$APK" "android/bin/SRLTCP-${VERSION}.apk"
+            echo "APK created: SRLTCP-${VERSION}.apk"
           fi
 
       - name: Upload APK artifact
