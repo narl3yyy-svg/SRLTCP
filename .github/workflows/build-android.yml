@@ -25,13 +25,12 @@ jobs:
         cmdline-tools-version: 'latest'
         accept-android-sdk-licenses: true
         log-accepted-android-sdk-licenses: true
-        packages: 'platforms;android-34 build-tools;34.0.0'
-    
-    - name: Make gradlew executable
-      run: chmod +x gradlew
+        packages: 'platforms;android-34'
     
     - name: Build APK
-      run: ./gradlew assembleDebug
+      run: |
+        chmod +x gradlew
+        ./gradlew assembleDebug
     
     - name: Upload APK
       uses: actions/upload-artifact@v4
