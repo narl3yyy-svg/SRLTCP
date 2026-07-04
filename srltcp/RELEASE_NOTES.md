@@ -1,5 +1,10 @@
 # SRLTCP Release Notes
 
+## v0.1.23 (2026-07-03)
+
+### Android CI
+- **APK build** — pin P4A Android Python to **3.12.8** (avoids broken 3.14 default); pin `aiohttp==3.10.11`; clear stale P4A caches; upload build log on failure
+
 ## v0.1.22 (2026-07-03)
 
 ### Fixes

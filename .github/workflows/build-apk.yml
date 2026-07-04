@@ -11,6 +11,7 @@ permissions:
 
 env:
   PYTHONFORANDROID_PREREQUISITES_INSTALL_INTERACTIVE: "0"
+  P4A_RELEASE_TAG: master
 
 jobs:
   build-apk:
@@ -21,7 +22,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.12.8"
 
       - uses: actions/setup-java@v4
         with:
@@ -41,12 +42,37 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Install Buildozer
-        run: pip install buildozer "cython==0.29.34" setuptools
+      - name: Install Buildozer toolchain
+        run: |
+          python --version
+          pip install "buildozer>=1.5.0" "cython==0.29.34" setuptools
+          pip install "git+https://github.com/kivy/python-for-android@${P4A_RELEASE_TAG}"
+
+      - name: Verify Android Python pin
+        working-directory: android
+        run: |
+          grep -E 'python3==3\.12' buildozer.spec
+          python --version | grep '3.12'
+
+      - name: Clean stale P4A Python builds
+        run: |
+          rm -rf ~/.buildozer/android/platform/build-python3
+          rm -rf android/.buildozer/android/platform/build-python3
+          rm -rf android/.buildozer/android/platform/build-arm64-v8a/build/python-installs
+          rm -rf android/.buildozer/android/platform/build-x86_64/build/python-installs
 
       - name: Build debug APK with python-for-android
         working-directory: android
-        run: yes | buildozer -v android debug
+        run: |
+          set -o pipefail
+          buildozer -v android debug 2>&1 | tee ../buildozer.log
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildozer-log
+          path: buildozer.log
 
       - name: Rename APK
         run: |

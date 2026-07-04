@@ -12,29 +12,60 @@ The Android app is built with **[python-for-android](https://python-for-android.
 
 Serial/USB transport is disabled on Android. TCP and the full Web UI work over localhost.
 
+## Build requirements
+
+| Tool | Version |
+|------|---------|
+| Host Python | **3.12.x** (CI uses 3.12.8) |
+| Android Python (P4A) | **3.12.8** (pinned in `buildozer.spec`) |
+| Cython | 0.29.34 |
+| Java JDK | 17 |
+| NDK | 26b (via Buildozer) |
+| API | 34 (min 24) |
+
+**Important:** python-for-android `master` currently defaults to Python 3.14, which breaks Cython extensions such as `aiohttp._websocket`. This project pins `python3==3.12.8` and `hostpython3==3.12.8` in `buildozer.spec`. Do not remove those pins until aiohttp supports Python 3.14 on Android.
+
+Pinned app deps for Android: `aiohttp==3.10.11`, `cryptography`, `pyopenssl`, `zstandard`.
+
 ## CI builds
 
 Pushing to `main` or tagging `v*` triggers [.github/workflows/build-apk.yml](../.github/workflows/build-apk.yml). Release tags upload `SRLTCP-<version>.apk` to GitHub Releases.
 
+The workflow:
+- Uses Python 3.12.8 on the runner
+- Installs Buildozer + python-for-android from the `master` branch
+- Clears stale P4A Python 3.14 build caches before compiling
+- Uploads `buildozer.log` if the build fails
+
 ## Local build (Linux)
 
-### Prerequisites
+### Prerequisites (Ubuntu 24.04)
 
 ```bash
-sudo apt install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
-  zlib1g-dev libncurses-dev libncurses5-dev libncursesw5-dev libtinfo5 \
-  cmake libffi-dev libssl-dev
-pip install buildozer cython
+sudo apt install -y build-essential git zip unzip openjdk-17-jdk autoconf automake \
+  libtool pkg-config zlib1g-dev libncurses-dev libtinfo6 cmake libffi-dev libssl-dev \
+  libltdl-dev gettext autopoint
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+pip install "buildozer>=1.5.0" "cython==0.29.34" setuptools
+pip install "git+https://github.com/kivy/python-for-android@master"
+```
+
+Use **Python 3.12** for Buildozer (not 3.14):
+
+```bash
+python3.12 --version   # should be 3.12.x
 ```
 
 ### Build debug APK
 
 ```bash
 cd android
+# If you previously built with Python 3.14, clear the cache first:
+rm -rf ~/.buildozer/android/platform/build-python3 .buildozer/android/platform/build-python3
 buildozer android debug
 ```
 
-Output: `android/bin/srltcp-0.1.20-debug.apk` (name may vary by version).
+Output: `android/bin/srltcp-<version>-debug.apk`.
 
 ### Install on device
 
@@ -46,6 +77,7 @@ Open the app — it starts the Python service, then loads the Web UI in WebView.
 
 ## Troubleshooting
 
+- **aiohttp / `_websocket.c` compile errors** — you are building against Python 3.14. Confirm `buildozer.spec` still has `python3==3.12.8` and clear `~/.buildozer/android/platform/build-python3`.
 - **First build is slow** — Buildozer downloads the Android SDK/NDK and builds Python wheels.
 - **Web UI blank** — wait a few seconds; the service binds HTTPS on 9876 (or next free port).
 - **Logs** — `adb logcat -s SRLTCP python:D PythonService:D`
