@@ -1,5 +1,11 @@
 # SRLTCP Release Notes
 
+## v0.1.43 (2026-07-03)
+
+### Android CI
+- **buildozer.spec fix** — moved all `android.*` keys into `[app]` (buildozer ignores `[android]`; caused default dual-arch `arm64-v8a` + `armeabi-v7a`)
+- **Removed `buildozer android clean`** before first build — p4a is not cloned yet at clean time in CI
+
 ## v0.1.42 (2026-07-03)
 
 ### Media & transfers

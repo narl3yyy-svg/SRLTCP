@@ -38,6 +38,7 @@ The workflow:
 - Bootstraps API 35 / build-tools 35.0.0 via the runner `sdkmanager` (no `buildozer android update` pre-build)
 - Builds **arm64-v8a** only (avoids armeabi-v7a Python `grp` compile failures)
 - Clears stale P4A Python 3.14 / multi-arch build caches before compiling
+- **`android.archs` must be in `[app]`** — buildozer ignores a separate `[android]` section (defaults to dual-arch otherwise)
 - Uploads `buildozer.log` if the build fails
 
 ## Local build (Linux)

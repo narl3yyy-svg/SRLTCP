@@ -58,6 +58,13 @@ jobs:
           grep -E 'android\.api = 35' buildozer.spec
           grep -E 'android\.archs = arm64-v8a' buildozer.spec
           python --version | grep '3.12'
+          python - <<'PY'
+          from configparser import ConfigParser
+          cfg = ConfigParser()
+          cfg.read("buildozer.spec")
+          archs = cfg.get("app", "android.archs")
+          assert archs.strip() == "arm64-v8a", f"expected arm64-v8a in [app], got {archs!r}"
+          PY
 
       - name: Clean stale P4A builds
         run: |
@@ -119,10 +126,13 @@ jobs:
           set -o pipefail
           test -d "$ANDROIDNDK"
           test -x "$ANDROIDSDK/tools/bin/sdkmanager"
-          buildozer android clean
           buildozer -v android debug 2>&1 | tee ../buildozer.log
-          if grep -E 'Creating build for arch armeabi|build-armeabi' ../buildozer.log; then
-            echo "Unexpected armeabi-v7a build — check android.archs in buildozer.spec"
+          if grep -E 'build-arm64-v8a_armeabi|Creating build for arch armeabi' ../buildozer.log; then
+            echo "Unexpected armeabi-v7a build — android.archs must be under [app] in buildozer.spec"
+            exit 1
+          fi
+          if ! grep -q 'build-arm64-v8a' ../buildozer.log; then
+            echo "Expected arm64-v8a storage dir not found in build log"
             exit 1
           fi
 
