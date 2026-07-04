@@ -1,5 +1,15 @@
 # SRLTCP Release Notes
 
+## v0.1.30 (2026-07-03)
+
+### UI
+- **Trusted contact menu** — scrollable on small screens; menu repositions to stay in viewport
+- **Delete key** — select a trusted peer and press **Delete** to remove them
+
+### Android
+- **Target Android 15** — API 35, build-tools 35.0.0, arm64-v8a release APK
+- **CI APK build** — fixed `grpmodule` compile failure (dropped armeabi-v7a; use runner SDK instead of `buildozer android update` bootstrap)
+
 ## v0.1.24 (2026-07-04)
 
 ### CI
