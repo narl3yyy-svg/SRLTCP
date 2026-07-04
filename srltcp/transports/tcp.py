@@ -6,6 +6,7 @@ import asyncio
 import uuid
 from typing import Any
 
+from srltcp.core.messaging.constants import DISCOVERY_PORT
 from srltcp.transports.base import Connection, Transport, TransportEvent, TransportPeer
 from srltcp.utils.logging import get_logger
 from srltcp.utils.network import broadcast_targets
@@ -147,8 +148,10 @@ class TCPTransport(Transport):
         if sock:
             sock.setsockopt(sock_mod.SOL_SOCKET, sock_mod.SO_BROADCAST, 1)
             sock.setsockopt(sock_mod.SOL_SOCKET, sock_mod.SO_REUSEADDR, 1)
+        dest_ports = {DISCOVERY_PORT, self.discovery_port}
         for target in broadcast_targets():
-            self._discovery_transport.sendto(payload, (target, self.discovery_port))
+            for port in sorted(dest_ports):
+                self._discovery_transport.sendto(payload, (target, port))
         return True
 
 

@@ -164,4 +164,5 @@ class SRLTCPNode:
             "web_port": self.settings.web_port,
             "version": __version__,
             "auto_announce": self.config.announce,
+            "transports": self.backend.get_transport_status(),
         }

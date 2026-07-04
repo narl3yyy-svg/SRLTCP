@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from srltcp.core.messaging.constants import DISCOVERY_PORT
 from srltcp.core.protocol.messages import MessageType, build_header, encode_payload
 from srltcp.utils.logging import get_logger
+from srltcp.utils.network import primary_ipv4
 
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
@@ -15,6 +17,8 @@ log = get_logger(__name__)
 
 ANNOUNCE_BURSTS = 3
 ANNOUNCE_BURST_DELAY = 0.12
+SERIAL_ANNOUNCE_BURSTS = 5
+SERIAL_ANNOUNCE_BURST_DELAY = 0.25
 
 
 class AnnounceError(Exception):
@@ -41,6 +45,11 @@ class AnnounceMixin:
                 transport,
                 f"No {transport} identity — enable {transport} transport first",
             )
+        discovery_port = (
+            self.tcp_transport.discovery_port
+            if self.tcp_transport
+            else DISCOVERY_PORT
+        )
         return encode_payload(
             {
                 "type": "announce",
@@ -50,22 +59,14 @@ class AnnounceMixin:
                 "transport": transport,
                 "tcp_host": self._lan_ip(),
                 "tcp_port": self.config.tcp_port,
+                "discovery_port": discovery_port,
             }
         )
 
     def _lan_ip(self: MessagingBackend) -> str:
         if self.config.lan_ip:
             return self.config.lan_ip
-        import socket
-
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return str(ip)
-        except Exception:
-            return "127.0.0.1"
+        return primary_ipv4()
 
     async def _send_announce(self: MessagingBackend, transport_name: str) -> None:
         transport_name = transport_name.lower()
@@ -109,9 +110,19 @@ class AnnounceMixin:
 
         announced: list[str] = []
         for t in transports:
-            for _ in range(ANNOUNCE_BURSTS):
+            bursts = (
+                SERIAL_ANNOUNCE_BURSTS
+                if t == "serial"
+                else ANNOUNCE_BURSTS
+            )
+            delay = (
+                SERIAL_ANNOUNCE_BURST_DELAY
+                if t == "serial"
+                else ANNOUNCE_BURST_DELAY
+            )
+            for _ in range(bursts):
                 await self._send_announce(t)
-                await asyncio.sleep(ANNOUNCE_BURST_DELAY)
+                await asyncio.sleep(delay)
             announced.append(t)
         return announced
 

@@ -600,8 +600,12 @@
 
   async function announceTransport(transport) {
     const btn = transport === "tcp" ? $("#btn-announce-tcp") : $("#btn-announce-serial");
-    if (btn?.disabled) {
-      toast(`Enable ${transport.toUpperCase()} in settings first`);
+    const status = state.transportStatus?.[transport];
+    if (btn?.disabled || status && !status.active) {
+      const hint = transport === "serial"
+        ? "Serial port not open — enable serial in settings and check /dev permissions"
+        : "TCP transport unavailable — restart the node";
+      toast(hint);
       return;
     }
     const res = await fetch(`/api/announce?transport=${transport}`, { method: "POST" });
@@ -610,11 +614,12 @@
       toast(data.error || `Announce ${transport.toUpperCase()} failed`);
       return;
     }
-    const bursts = data.bursts || 3;
+    const bursts = data.bursts || (transport === "serial" ? 5 : 3);
     toast(`Announced on ${transport.toUpperCase()} (${bursts}× burst)`);
     logActivity(`Announced on ${transport}`);
     setTimeout(loadPeers, 800);
     setTimeout(loadPeers, 2000);
+    if (transport === "serial") setTimeout(loadPeers, 4000);
   }
 
   function formatLatency(hashId) {
@@ -1505,16 +1510,27 @@
 
     $("#identities").innerHTML = idHtml || '<div class="empty-hint">No identities</div>';
 
+    const transportStatus = data.transports || {};
+    state.transportStatus = transportStatus;
+
     const tcpBtn = $("#btn-announce-tcp");
     if (tcpBtn) {
-      tcpBtn.disabled = !ids.tcp;
-      tcpBtn.title = ids.tcp ? "Announce on TCP/LAN" : "TCP transport unavailable";
+      const tcpActive = !!transportStatus.tcp?.active;
+      tcpBtn.disabled = !tcpActive;
+      tcpBtn.title = tcpActive
+        ? "Announce on TCP/LAN"
+        : "TCP transport unavailable — restart the node";
     }
 
     const serialBtn = $("#btn-announce-serial");
     if (serialBtn) {
-      serialBtn.disabled = !ids.serial;
-      serialBtn.title = ids.serial ? "Announce on serial/RF" : "Enable serial in settings first";
+      const serialActive = !!transportStatus.serial?.active;
+      serialBtn.disabled = !serialActive;
+      serialBtn.title = serialActive
+        ? "Announce on serial/RF"
+        : ids.serial
+          ? "Serial port not open — check port, baud, and dialout group"
+          : "Enable serial in settings first";
     }
 
     if (primary) {

@@ -13,6 +13,7 @@ class _AnnounceBackend(AnnounceMixin):
     def __init__(self) -> None:
         self._init_announce()
         self.tcp_transport = MagicMock()
+        self.tcp_transport.discovery_port = 7826
         self.tcp_transport.set_announce_payload = MagicMock()
         self.tcp_transport.broadcast_discovery = AsyncMock(return_value=True)
         self.serial_transport = MagicMock()
@@ -35,6 +36,20 @@ async def test_announce_tcp_broadcasts() -> None:
     announced = await backend.announce("tcp")
     assert announced == ["tcp"]
     assert backend.tcp_transport.broadcast_discovery.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_announce_serial_extra_bursts() -> None:
+    backend = _AnnounceBackend()
+    serial_identity = MagicMock()
+    serial_identity.hash_id = "b" * 32
+    serial_identity.name = "node-b"
+    serial_identity.transport = "serial"
+    serial_identity.public_bytes.return_value = b"\x02" * 32
+    backend.identities["serial"] = serial_identity
+    announced = await backend.announce("serial")
+    assert announced == ["serial"]
+    assert backend.serial_transport.broadcast.await_count == 5
 
 
 @pytest.mark.asyncio

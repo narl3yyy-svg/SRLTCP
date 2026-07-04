@@ -245,8 +245,17 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                 {"error": exc.reason, "transport": exc.transport},
                 status=503,
             )
+        from srltcp.core.messaging.announce import SERIAL_ANNOUNCE_BURSTS
+
+        burst_count = (
+            SERIAL_ANNOUNCE_BURSTS if raw == "serial" else ANNOUNCE_BURSTS
+        )
         return web.json_response(
-            {"announced": True, "transports": announced, "bursts": ANNOUNCE_BURSTS}
+            {
+                "announced": True,
+                "transports": announced,
+                "bursts": burst_count,
+            }
         )
 
     async def upload_file(request: web.Request) -> web.Response:

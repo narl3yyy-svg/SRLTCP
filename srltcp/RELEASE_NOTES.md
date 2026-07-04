@@ -1,5 +1,12 @@
 # SRLTCP Release Notes
 
+## v0.1.36 (2026-07-03)
+
+### Discovery
+- **Arch LAN fix** — interface list uses Linux ioctl with real netmasks (not /24 guess); primary LAN IP for announces
+- **UDP discovery port** — broadcasts always target port 7826 plus the local bound port; announce payload includes `discovery_port`
+- **Serial announce** — 5× burst with longer delay for RF links; announce buttons reflect whether transport is actually open
+
 ## v0.1.35 (2026-07-03)
 
 ### Discovery

@@ -536,6 +536,33 @@ class MessagingBackend(
             for t, i in self.identities.items()
         }
 
+    def get_transport_status(self) -> dict[str, dict[str, Any]]:
+        from srltcp.core.messaging.constants import DISCOVERY_PORT
+
+        status: dict[str, dict[str, Any]] = {}
+        if self.identities.get("tcp") or self.tcp_transport:
+            status["tcp"] = {
+                "active": self.tcp_transport is not None,
+                "tcp_port": self.tcp_transport.port if self.tcp_transport else self.config.tcp_port,
+                "discovery_port": (
+                    self.tcp_transport.discovery_port
+                    if self.tcp_transport
+                    else DISCOVERY_PORT
+                ),
+            }
+        if self.identities.get("serial") or self.config.enable_serial:
+            serial_port = (
+                self.serial_transport.port
+                if self.serial_transport
+                else self.config.serial_port
+            )
+            status["serial"] = {
+                "active": self.serial_transport is not None,
+                "port": serial_port,
+                "baud": self.config.serial_baud,
+            }
+        return status
+
     def _prune_messages(self) -> None:
         self._messages = prune_messages_by_retention(
             self._messages, self.config.message_retention_hours
