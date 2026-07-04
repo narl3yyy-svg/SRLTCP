@@ -1,4 +1,4 @@
-name: Build Android APK with Buildozer
+name: Build Android APK
 
 on:
   push:
@@ -56,20 +56,6 @@ jobs:
       with:
         distribution: 'temurin'
         java-version: '17'
-    
-    - name: Debug - List directory contents
-      run: |
-        echo "Root directory:"
-        ls -la
-        echo ""
-        echo "Checking for android directory:"
-        if [ -d "android" ]; then
-          echo "✅ android/ directory exists"
-          ls -la android/
-        else
-          echo "❌ android/ directory NOT found!"
-          exit 1
-        fi
     
     - name: Install Python dependencies
       run: |
