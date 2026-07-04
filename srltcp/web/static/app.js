@@ -35,6 +35,7 @@
     pendingTransferPatches: new Map(),
     dropTargetHash: null,
     folderSendTarget: null,
+    wsConnected: false,
 
     wanModalTarget: null,
     shareMode: "browse",
@@ -312,11 +313,13 @@
     state.ws = new WebSocket(`wss://${host}/ws`);
 
     state.ws.onopen = () => {
+      state.wsConnected = true;
       $("#connection-status").textContent = "Connected";
       $("#connection-status").classList.add("online");
     };
 
     state.ws.onclose = () => {
+      state.wsConnected = false;
       $("#connection-status").textContent = "Reconnecting…";
       $("#connection-status").classList.remove("online");
       setTimeout(connectWs, 3000);
@@ -399,10 +402,6 @@
               { tag: `transfer-${data.id}` }
             );
             refreshTransferBubble(data.id, data, { scroll: !!state.selectedPeer });
-            const msg = messageForTransfer(data.id);
-            if (msg && (mediaMsgType(msg) === "image" || mediaMsgType(msg) === "video")) {
-              renderMessages(state.messageCache, { scrollToBottom: !!state.selectedPeer });
-            }
           }
           break;
         case "share_offer":
@@ -842,21 +841,6 @@
     input.value = "";
     autoResize(input);
 
-    const pendingId = `pending-${Date.now()}`;
-    const myHash = state.myHashes.tcp || Object.values(state.myHashes)[0] || "";
-    const optimistic = {
-      id: pendingId,
-      sender_hash: myHash,
-      recipient_hash: state.selectedPeer,
-      text,
-      timestamp: Date.now() / 1000,
-      msg_type: "text",
-      status: "pending",
-      transport: peerTransport(state.selectedPeer),
-    };
-    state.messageCache.push(optimistic);
-    renderMessages(state.messageCache, { scrollToBottom: true });
-
     const res = await fetch("/api/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -866,19 +850,9 @@
         transport: peerTransport(state.selectedPeer),
       }),
     });
-    state.messageCache = state.messageCache.filter((m) => m.id !== pendingId);
     if (!res.ok) {
-      renderMessages(state.messageCache);
       toast("Message failed — reconnecting…");
       await connectPeer(state.selectedPeer, true);
-    } else {
-      const sent = await res.json().catch(() => null);
-      if (sent?.id) {
-        upsertChatMessage(sent);
-        renderMessages(state.messageCache, { scrollToBottom: true });
-      } else {
-        loadMessages();
-      }
     }
   }
 
@@ -2210,12 +2184,6 @@
         refreshTransferBubble(data.id, mergeTransferMeta(data.id, state.messageCache[idx].metadata), {
           scroll: merged.state === "complete",
         });
-        if (merged.state === "complete") {
-          const msg = messageForTransfer(data.id);
-          if (msg && (mediaMsgType(msg) === "image" || mediaMsgType(msg) === "video")) {
-            renderMessages(state.messageCache, { scrollToBottom: true });
-          }
-        }
         return;
       }
       scheduleTransferPatch(data.id, data);
@@ -2649,7 +2617,7 @@
   }, 1000);
   setInterval(loadPeers, 5000);
   setInterval(() => {
-    if (state.selectedPeer && $("#chat-active") && !$("#chat-active").classList.contains("hidden")) {
+    if (!state.wsConnected && state.selectedPeer && $("#chat-active") && !$("#chat-active").classList.contains("hidden")) {
       loadMessages();
     }
   }, 4000);
