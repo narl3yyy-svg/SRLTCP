@@ -18,7 +18,7 @@ jobs:
       with:
         python-version: '3.11'
     
-    - name: Install dependencies
+    - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -57,6 +57,20 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
     
+    - name: Debug - List directory contents
+      run: |
+        echo "Root directory:"
+        ls -la
+        echo ""
+        echo "Checking for android directory:"
+        if [ -d "android" ]; then
+          echo "✅ android/ directory exists"
+          ls -la android/
+        else
+          echo "❌ android/ directory NOT found!"
+          exit 1
+        fi
+    
     - name: Install Python dependencies
       run: |
         pip install --upgrade pip
@@ -64,10 +78,11 @@ jobs:
     
     - name: Build with Buildozer
       run: |
+        cd android
         buildozer android debug
     
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: SRLTCP-app
-        path: bin/*.apk
+        path: android/bin/*.apk
