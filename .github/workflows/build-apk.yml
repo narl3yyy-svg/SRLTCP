@@ -29,7 +29,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK (includes sdkmanager)
+      - name: Setup Android SDK (This fixes sdkmanager)
         uses: android-actions/setup-android@v4
         with:
           packages: |
@@ -60,21 +60,55 @@ jobs:
           pip install "buildozer>=1.5.0" "cython==0.29.34" setuptools
           pip install "git+https://github.com/kivy/python-for-android@${P4A_RELEASE_TAG}"
 
-      - name: Verify config
+      - name: Verify buildozer.spec
         working-directory: android
         run: |
-          grep -E 'python3==3\.12' buildozer.spec
-          grep -E 'android\.api = 35' buildozer.spec
-          grep -E 'android\.archs = arm64-v8a' buildozer.spec
+          echo "=== buildozer.spec content ==="
+          cat buildozer.spec
+          grep -E 'python3==3\.12|android\.api = 35|android\.archs = arm64-v8a' buildozer.spec || echo "Some required settings missing!"
 
-      - name: Clean stale builds
+      - name: Clean previous builds
         run: |
           rm -rf ~/.buildozer/android/platform/build-*
-          rm -rf android/.buildozer/android/platform/build-*
+          rm -rf android/.buildozer
 
       - name: Build APK with Buildozer
         working-directory: android
         run: |
+          echo "=== Starting Build ==="
           buildozer -v android debug 2>&1 | tee ../buildozer.log
+          echo "=== Build finished ==="
+          ls -la bin/ || echo "WARNING: No APK folder found!"
 
-      - name: Upload build log on failure
+      - name: Upload build log (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildozer-log
+          path: buildozer.log
+
+      - name: Rename APK
+        run: |
+          pip install -e .
+          VERSION=$(python -c "import srltcp; print(srltcp.__version__)" || echo "0.1.30")
+          APK=$(find android/bin -name "*.apk" | head -1)
+          if [ -n "$APK" ]; then
+            cp "$APK" "android/bin/SRLTCP-${VERSION}.apk"
+            echo "APK ready: SRLTCP-${VERSION}.apk"
+          else
+            echo "No APK found!"
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: srltcp-apk
+          path: android/bin/SRLTCP-*.apk
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/bin/SRLTCP-*.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
