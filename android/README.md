@@ -21,7 +21,8 @@ Serial/USB transport is disabled on Android. TCP and the full Web UI work over l
 | Cython | 0.29.34 |
 | Java JDK | 17 |
 | NDK | 26b (via Buildozer) |
-| API | 34 (min 24) |
+| API | 35 / Android 15 (min 24) |
+| Arch | arm64-v8a |
 
 **Important:** python-for-android `master` currently defaults to Python 3.14, which breaks Cython extensions such as `aiohttp._websocket`. This project pins `python3==3.12.8` and `hostpython3==3.12.8` in `buildozer.spec`. Do not remove those pins until aiohttp supports Python 3.14 on Android.
 
@@ -34,7 +35,9 @@ Pushing to `main` or tagging `v*` triggers [.github/workflows/build-apk.yml](../
 The workflow:
 - Uses Python 3.12.8 on the runner
 - Installs Buildozer + python-for-android from the `master` branch
-- Clears stale P4A Python 3.14 build caches before compiling
+- Bootstraps API 35 / build-tools 35.0.0 via the runner `sdkmanager` (no `buildozer android update` pre-build)
+- Builds **arm64-v8a** only (avoids armeabi-v7a Python `grp` compile failures)
+- Clears stale P4A Python 3.14 / multi-arch build caches before compiling
 - Uploads `buildozer.log` if the build fails
 
 ## Local build (Linux)

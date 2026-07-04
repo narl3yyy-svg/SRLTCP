@@ -39,10 +39,12 @@ transfers/
 *.log
 
 # Android
+android/.buildozer/
 android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
+buildozer.log
 *.apk
 *.aab
 
