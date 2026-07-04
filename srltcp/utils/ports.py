@@ -61,11 +61,17 @@ async def start_tcp_server(
             if exc.errno != errno.EADDRINUSE:
                 raise
             last_err = exc
+    hint = (
+        " Run ./run.sh stop or: pkill -f 'python -m srltcp'"
+        if strict
+        else ""
+    )
     raise OSError(
         errno.EADDRINUSE,
         f"Could not bind TCP port {port}"
         + ("" if strict else f"–{port + attempts - 1}")
-        + ". Another SRLTCP instance may be running.",
+        + ". Another SRLTCP instance may be running."
+        + hint,
     ) from last_err
 
 
@@ -84,11 +90,17 @@ async def bind_udp_port(
     for offset in range(attempts):
         try_port = port + offset
         try:
-            transport, _ = await loop.create_datagram_endpoint(
-                protocol_factory,
-                local_addr=(host, try_port),
-                reuse_address=True,
-            )
+            try:
+                transport, _ = await loop.create_datagram_endpoint(
+                    protocol_factory,
+                    local_addr=(host, try_port),
+                    reuse_address=True,
+                )
+            except TypeError:
+                transport, _ = await loop.create_datagram_endpoint(
+                    protocol_factory,
+                    local_addr=(host, try_port),
+                )
             if offset:
                 log.warning("UDP discovery port %d in use — using %d", port, try_port)
             return transport, try_port
@@ -136,9 +148,15 @@ async def start_web_site(
             if exc.errno != errno.EADDRINUSE:
                 raise
             last_err = exc
+    hint = (
+        " Run ./run.sh stop or: pkill -f 'python -m srltcp'"
+        if strict
+        else ""
+    )
     raise OSError(
         errno.EADDRINUSE,
         f"Could not bind web port {port}"
         + ("" if strict else f"–{port + attempts - 1}")
-        + ". Stop the other process using this port or disable strict ports.",
+        + ". Stop the other process using this port or disable strict ports."
+        + hint,
     ) from last_err

@@ -1,5 +1,12 @@
 # SRLTCP Release Notes
 
+## v0.1.39 (2026-07-03)
+
+### Launcher
+- **`./run.sh stop`** — kills stale SRLTCP and frees ports 7825/7826/9876
+- **`./run.sh web`** — auto-stops any previous instance before starting
+- **Python 3.14** — UDP bind fallback when `reuse_address` is unsupported
+
 ## v0.1.38 (2026-07-03)
 
 ### Serial discovery
