@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import TYPE_CHECKING
 
@@ -294,6 +295,7 @@ class ConnectMixin:
             task.cancel()
 
     async def disconnect_peer(self: MessagingBackend, hash_id: str) -> bool:
+        self._cancel_reconnect(hash_id)
         if not self.get_link(hash_id):
             return False
         await self._teardown_link(hash_id)
@@ -334,6 +336,7 @@ class ConnectMixin:
         self._cancel_reconnect(remote_hash)
         if not self.has_active_transfer_for(remote_hash):
             await self.ping_peer(remote_hash)
+        await self._resume_paused_transfers_for_peer(remote_hash)
         if self._on_link_up:
             await self._on_link_up(remote_hash, remote_name)
         if self._on_peer_metrics:

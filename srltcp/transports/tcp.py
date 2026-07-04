@@ -85,6 +85,7 @@ class TCPTransport(Transport):
         for conn in list(self._connections.values()):
             await conn.close()
         self._connections.clear()
+        self._peer_by_writer_id.clear()
         if self._discovery_transport:
             self._discovery_transport.close()
             self._discovery_transport = None

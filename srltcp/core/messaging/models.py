@@ -97,8 +97,10 @@ class FileTransfer:
         sha256: str = "",
         compressed: bool = False,
     ) -> FileTransfer:
+        from srltcp.core.protocol.messages import normalize_transfer_id
+
         return cls(
-            id=uuid.uuid4().hex[:16],
+            id=normalize_transfer_id(uuid.uuid4().hex),
             sender_hash=sender_hash,
             recipient_hash=recipient_hash,
             filename=path.name,

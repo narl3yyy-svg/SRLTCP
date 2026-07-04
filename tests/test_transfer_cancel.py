@@ -19,8 +19,9 @@ def backend() -> MessagingBackend:
 
 @pytest.mark.asyncio
 async def test_cancel_complete_transfer_rejected(backend: MessagingBackend) -> None:
-    backend._transfers["done"] = FileTransfer(
-        id="done",
+    done_id = "aabbccddeeff0044"
+    backend._transfers[done_id] = FileTransfer(
+        id=done_id,
         sender_hash="a" * 32,
         recipient_hash="b" * 32,
         filename="photo.png",
@@ -30,13 +31,14 @@ async def test_cancel_complete_transfer_rejected(backend: MessagingBackend) -> N
         transport="tcp",
         state=TransferState.COMPLETE,
     )
-    assert await backend.cancel_transfer("done") is False
+    assert await backend.cancel_transfer(done_id) is False
 
 
 @pytest.mark.asyncio
 async def test_cancel_active_transfer_allowed(backend: MessagingBackend) -> None:
-    backend._transfers["active"] = FileTransfer(
-        id="active",
+    active_id = "aabbccddeeff0033"
+    backend._transfers[active_id] = FileTransfer(
+        id=active_id,
         sender_hash="a" * 32,
         recipient_hash="b" * 32,
         filename="doc.txt",
@@ -46,5 +48,5 @@ async def test_cancel_active_transfer_allowed(backend: MessagingBackend) -> None
         transport="tcp",
         state=TransferState.TRANSFERRING,
     )
-    assert await backend.cancel_transfer("active") is True
-    assert backend._transfers["active"].state == TransferState.CANCELLED
+    assert await backend.cancel_transfer(active_id) is True
+    assert backend._transfers[active_id].state == TransferState.CANCELLED

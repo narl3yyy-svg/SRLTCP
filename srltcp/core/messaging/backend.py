@@ -191,6 +191,14 @@ class MessagingBackend(
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        self._transfer_tasks.clear()
+        for peer_hash in list(self._pending_chunk_tasks.keys()):
+            await self._drain_pending_chunk_tasks(peer_hash, timeout=2.0)
+        self._pending_chunk_tasks.clear()
+        self._transfer_started.clear()
+        self._transfer_cooldown_until.clear()
+        self._transfer_progress_emit.clear()
+        self._pending_handshakes.clear()
         if self.tcp_transport:
             log.info(
                 "Closing TCP transport (port %d, discovery %d)",
@@ -264,11 +272,14 @@ class MessagingBackend(
         return {"serial": "running" if self.serial_transport else "failed"}
 
     def _schedule_reconnect(self, hash_id: str) -> None:
-        if hash_id in self._reconnect_tasks or not self._running:
+        if not self._running:
             return
         if not self.trusted.is_trusted(hash_id):
             return
         if self.has_active_transfer_for(hash_id):
+            return
+        existing = self._reconnect_tasks.get(hash_id)
+        if existing and not existing.done():
             return
 
         async def _reconnect() -> None:
@@ -280,6 +291,8 @@ class MessagingBackend(
                         return
                     link = self.get_link(hash_id)
                     if link and link.handshake_complete:
+                        return
+                    if self.in_transfer_cooldown(hash_id):
                         return
                     if self.has_active_transfer_for(hash_id):
                         return

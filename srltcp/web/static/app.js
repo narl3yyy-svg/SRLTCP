@@ -36,6 +36,11 @@
     dropTargetHash: null,
     folderSendTarget: null,
     wsConnected: false,
+    wsReconnectTimer: null,
+    timers: [],
+    pageUnloading: false,
+    loadingPeers: false,
+    loadingTransfers: false,
 
     wanModalTarget: null,
     shareMode: "browse",
@@ -53,8 +58,9 @@
 
   const ICON_COPY = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
   const ICON_TRASH = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>`;
-  const ACTIVE_TRANSFER_STATES = new Set(["transferring", "accepted", "offered"]);
-  const TERMINAL_TRANSFER_STATES = new Set(["complete", "failed", "cancelled"]);
+  const ACTIVE_TRANSFER_STATES = new Set(["transferring", "accepted", "offered", "paused"]);
+  const TERMINAL_TRANSFER_STATES = new Set(["complete", "failed", "cancelled", "rejected"]);
+  const DOCK_TERMINAL_STATES = TERMINAL_TRANSFER_STATES;
 
   function mediaMsgType(msg) {
     const t = msg?.msg_type;
@@ -70,14 +76,14 @@
     const live = tid ? state.transfers[tid] : null;
     const metaState = meta.state;
     const liveState = live?.state;
-    let state = liveState || metaState || "transferring";
-    if (TERMINAL_TRANSFER_STATES.has(metaState)) state = metaState;
-    else if (TERMINAL_TRANSFER_STATES.has(liveState)) state = liveState;
+    let mergedState = liveState || metaState || "transferring";
+    if (TERMINAL_TRANSFER_STATES.has(metaState)) mergedState = metaState;
+    else if (TERMINAL_TRANSFER_STATES.has(liveState)) mergedState = liveState;
     return {
       ...meta,
       ...(live || {}),
       transfer_id: tid || meta.transfer_id,
-      state,
+      state: mergedState,
       offset: live?.offset ?? meta.offset ?? 0,
       size: live?.size ?? meta.size ?? 0,
       speed_mbps: live?.speed_mbps ?? meta.speed_mbps,
@@ -125,6 +131,89 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function debounce(fn, ms = 250) {
+    let timer = null;
+    return (...args) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => fn(...args), ms);
+    };
+  }
+
+  const JSON_HEADERS = { "Content-Type": "application/json" };
+
+  async function safeFetch(url, options = {}, { silent = false, fallback = null } = {}) {
+    try {
+      const res = await fetch(url, options);
+      let data = fallback;
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        data = await res.json().catch(() => fallback);
+      } else if (res.ok) {
+        data = await res.text().catch(() => fallback);
+      }
+      return { ok: res.ok, status: res.status, data, response: res };
+    } catch (err) {
+      if (!silent) {
+        console.warn("safeFetch failed:", url, err);
+      }
+      return { ok: false, status: 0, data: fallback, error: err };
+    }
+  }
+
+  async function apiGet(url, { silent = true, fallback = null } = {}) {
+    return safeFetch(url, {}, { silent, fallback });
+  }
+
+  async function apiPost(url, body, { silent = false, fallback = {} } = {}) {
+    return safeFetch(
+      url,
+      { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(body) },
+      { silent, fallback }
+    );
+  }
+
+  async function apiPatch(url, body, { silent = false, fallback = {} } = {}) {
+    return safeFetch(
+      url,
+      { method: "PATCH", headers: JSON_HEADERS, body: JSON.stringify(body) },
+      { silent, fallback }
+    );
+  }
+
+  async function apiDelete(url, { silent = false, fallback = {} } = {}) {
+    return safeFetch(url, { method: "DELETE" }, { silent, fallback });
+  }
+
+  async function fetchStatus() {
+    const { ok, data } = await apiGet("/api/status", { fallback: {} });
+    if (ok && data) renderStatus(data);
+    return data;
+  }
+
+  function setInputValue(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.value = value ?? "";
+  }
+
+  function setCheckbox(id, checked) {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!checked;
+  }
+
+  function setSelectValue(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.value = value ?? "";
+  }
+
+  function statusDotEl() {
+    return document.querySelector("#chat-peer-status .status-dot");
+  }
+
+  function setStatusDot(className) {
+    const dot = statusDotEl();
+    if (dot) dot.className = className;
   }
 
   function formatTime(ts) {
@@ -175,7 +264,17 @@
     renderContacts();
   }
 
+  function pruneTransferCooldowns() {
+    const now = Date.now();
+    Object.keys(state.transferCooldownUntil).forEach((id) => {
+      if (state.transferCooldownUntil[id] <= now) {
+        delete state.transferCooldownUntil[id];
+      }
+    });
+  }
+
   function inTransferCooldown(hashId) {
+    pruneTransferCooldowns();
     const until = state.transferCooldownUntil[hashId];
     return until && Date.now() < until;
   }
@@ -188,10 +287,13 @@
   }
 
   function toast(msg, type = "info") {
+    const container = $("#toasts");
+    if (!container) return;
     const el = document.createElement("div");
     el.className = `toast toast-${type}`;
     el.textContent = msg;
-    $("#toasts").appendChild(el);
+    el.setAttribute("role", type === "error" ? "alert" : "status");
+    container.appendChild(el);
     setTimeout(() => el.remove(), type === "error" ? 5200 : 3600);
   }
 
@@ -215,6 +317,7 @@
 
   function logActivity(msg) {
     const log = $("#activity-log");
+    if (!log) return;
     const entry = document.createElement("div");
     entry.className = "entry";
     entry.textContent = `${new Date().toLocaleTimeString()} ${msg}`;
@@ -223,10 +326,12 @@
   }
 
   function setAvatar(el, name, hashId) {
+    if (!el) return;
     el.textContent = initials(name);
-    el.style.background = `${hashColor(hashId || name)}22`;
-    el.style.color = hashColor(hashId || name);
-    el.style.borderColor = `${hashColor(hashId || name)}44`;
+    const color = hashColor(hashId || name);
+    el.style.background = `${color}22`;
+    el.style.color = color;
+    el.style.borderColor = `${color}44`;
   }
 
   function normalizeHash(hashId) {
@@ -308,25 +413,57 @@
   }
 
   /* ── WebSocket ── */
+  function scheduleWsReconnect() {
+    if (state.pageUnloading || state.wsReconnectTimer) return;
+    state.wsReconnectTimer = setTimeout(() => {
+      state.wsReconnectTimer = null;
+      if (!state.pageUnloading) connectWs();
+    }, 3000);
+  }
+
+  function setConnectionStatus(text, online = false) {
+    const el = $("#connection-status");
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle("online", online);
+  }
+
   function connectWs() {
     const host = location.host || "127.0.0.1:9876";
+    if (state.ws) {
+      state.ws.onclose = null;
+      state.ws.onerror = null;
+      try { state.ws.close(); } catch (_) { /* ignore */ }
+    }
     state.ws = new WebSocket(`wss://${host}/ws`);
 
     state.ws.onopen = () => {
       state.wsConnected = true;
-      $("#connection-status").textContent = "Connected";
-      $("#connection-status").classList.add("online");
+      if (state.wsReconnectTimer) {
+        clearTimeout(state.wsReconnectTimer);
+        state.wsReconnectTimer = null;
+      }
+      setConnectionStatus("Connected", true);
+    };
+
+    state.ws.onerror = () => {
+      state.wsConnected = false;
     };
 
     state.ws.onclose = () => {
       state.wsConnected = false;
-      $("#connection-status").textContent = "Reconnecting…";
-      $("#connection-status").classList.remove("online");
-      setTimeout(connectWs, 3000);
+      setConnectionStatus("Reconnecting…", false);
+      scheduleWsReconnect();
     };
 
     state.ws.onmessage = (ev) => {
-      const { type, data } = JSON.parse(ev.data);
+      let payload;
+      try {
+        payload = JSON.parse(ev.data);
+      } catch (_) {
+        return;
+      }
+      const { type, data } = payload;
       switch (type) {
         case "status":
           renderStatus(data);
@@ -357,8 +494,10 @@
           loadPeers();
           if (state.selectedPeer === data.hash_id) {
             refreshPeerStatus(data.hash_id);
-            $("#msg-input").disabled = false;
-            $("#send-btn").disabled = false;
+            const msgInput = $("#msg-input");
+            const sendBtn = $("#send-btn");
+            if (msgInput) msgInput.disabled = false;
+            if (sendBtn) sendBtn.disabled = false;
           }
           toast(`Connected to ${data.name || data.hash_id?.slice(0, 8)}`);
           logActivity(`Link up: ${data.name || data.hash_id?.slice(0, 8)}`);
@@ -394,6 +533,7 @@
           state.transfers[data.id] = data;
           syncTransferMessage(data);
           if (state.selectedPeer) updateChatTransfer(data);
+          renderTransferDock();
           if (type === "transfer_complete") {
             markTransferCooldown(data.sender_hash, data.recipient_hash);
             notifyUser(
@@ -403,12 +543,20 @@
             );
             refreshTransferBubble(data.id, data, { scroll: !!state.selectedPeer });
           }
+          if (DOCK_TERMINAL_STATES.has(data.state)) {
+            setTimeout(() => {
+              pruneTerminalTransfers();
+              renderTransferDock();
+            }, 600);
+          }
           break;
         case "share_offer":
-          loadShareGrants().then(() => {
-            if (state.selectedPeer === data.hash_id) renderShareGrants();
-            toast(`Shared folder offered: ${data.label || "folder"}`);
-          });
+          loadShareGrants()
+            .then(() => {
+              if (state.selectedPeer === data.hash_id) renderShareGrants();
+              toast(`Shared folder offered: ${data.label || "folder"}`);
+            })
+            .catch(() => toast("Failed to refresh share grants", "error"));
           break;
         case "share_listing":
           if (data.grant_id) {
@@ -421,10 +569,12 @@
           }
           break;
         case "share_revoked":
-          loadShareGrants().then(() => {
-            renderShareGrants();
-            toast("Shared folder access revoked");
-          });
+          loadShareGrants()
+            .then(() => {
+              renderShareGrants();
+              toast("Shared folder access revoked");
+            })
+            .catch(() => toast("Failed to refresh share grants", "error"));
           break;
         case "transport_event":
           logActivity(`Transport: ${data.kind}${data.hash_id ? ` (${data.hash_id.slice(0, 8)})` : ""}`);
@@ -432,7 +582,7 @@
             if (inTransferCooldown(data.hash_id)) {
               if (state.selectedPeer === data.hash_id) {
                 updatePeerStatus("Encrypted · Online");
-                $(".status-dot").className = "status-dot online";
+                setStatusDot("status-dot online");
               }
               break;
             }
@@ -448,40 +598,62 @@
 
   /* ── API ── */
   async function loadPeers() {
-    const [pRes, tRes] = await Promise.all([
-      fetch("/api/peers"),
-      fetch("/api/trusted"),
-    ]);
-    state.peers = await pRes.json();
-    state.trusted = await tRes.json();
-    renderContacts();
+    if (state.loadingPeers) return;
+    state.loadingPeers = true;
+    try {
+      const [pRes, tRes] = await Promise.all([
+        safeFetch("/api/peers", {}, { silent: true, fallback: [] }),
+        safeFetch("/api/trusted", {}, { silent: true, fallback: [] }),
+      ]);
+      if (pRes.ok) state.peers = pRes.data || [];
+      if (tRes.ok) state.trusted = tRes.data || [];
+      renderContacts();
+    } finally {
+      state.loadingPeers = false;
+    }
   }
 
   async function trustPeer(hashId) {
     const discovered = state.peers.find((p) => p.hash_id === hashId);
-    await fetch("/api/trusted", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        hash_id: hashId,
-        transport: discovered?.transport || "tcp",
-        tcp_host: discovered?.tcp_host || "",
-        tcp_port: discovered?.tcp_port || 7825,
-        public_key: discovered?.public_key || "",
-      }),
+    const { ok, data } = await apiPost("/api/trusted", {
+      hash_id: hashId,
+      transport: discovered?.transport || "tcp",
+      tcp_host: discovered?.tcp_host || "",
+      tcp_port: discovered?.tcp_port || 7825,
+      public_key: discovered?.public_key || "",
     });
+    if (!ok) {
+      toast(data?.error || "Failed to trust peer", "error");
+      return;
+    }
     toast("Peer trusted");
     state.peers = state.peers.filter((p) => p.hash_id !== hashId);
     loadPeers();
   }
 
+  function resetAddContactForm() {
+    setInputValue("add-contact-hash", "");
+    setInputValue("add-contact-name", "");
+    setSelectValue("add-contact-transport", "tcp");
+    setInputValue("add-contact-host", "");
+    setInputValue("add-contact-port", "7825");
+    setInputValue("add-contact-wan-host", "");
+    setInputValue("add-contact-wan-port", "7825");
+    setCheckbox("add-contact-wan-enabled", false);
+    setSelectValue("add-contact-wan-mode", "auto");
+  }
+
   function openAddContactModal() {
+    resetAddContactForm();
     $("#add-contact-modal")?.classList.add("open");
+    $("#add-contact-modal")?.setAttribute("aria-hidden", "false");
     $("#add-contact-hash")?.focus();
   }
 
   function closeAddContactModal() {
     $("#add-contact-modal")?.classList.remove("open");
+    $("#add-contact-modal")?.setAttribute("aria-hidden", "true");
+    resetAddContactForm();
   }
 
   async function saveManualContact() {
@@ -498,10 +670,14 @@
       toast("Hash ID must be exactly 32 hex characters");
       return;
     }
-    const res = await fetch("/api/trusted", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const saveBtn = $("#add-contact-save");
+    const saveBtnLabel = saveBtn?.textContent || "Add & trust";
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Adding…";
+    }
+    try {
+      const { ok, data } = await apiPost("/api/trusted", {
         hash_id: hashId,
         name,
         transport,
@@ -511,21 +687,25 @@
         wan_port: wanPort,
         wan_enabled: wanEnabled,
         connection_mode: connectionMode,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      toast(data.error || "Failed to add contact");
-      return;
+      });
+      if (!ok) {
+        toast(data?.error || "Failed to add contact", "error");
+        return;
+      }
+      closeAddContactModal();
+      state.peerTab = "trusted";
+      document.querySelectorAll(".peer-tab").forEach((t) => {
+        t.classList.toggle("active", t.dataset.tab === "trusted");
+      });
+      toast(`Added ${name}`);
+      await loadPeers();
+      selectPeer(hashId, name);
+    } finally {
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = saveBtnLabel;
+      }
     }
-    closeAddContactModal();
-    state.peerTab = "trusted";
-    document.querySelectorAll(".peer-tab").forEach((t) => {
-      t.classList.toggle("active", t.dataset.tab === "trusted");
-    });
-    toast(`Added ${name}`);
-    await loadPeers();
-    selectPeer(hashId, name);
   }
 
   async function deleteTrusted(hashId, name) {
@@ -536,13 +716,13 @@
     delete state.linkMetrics[hashId];
     if (state.selectedPeer === hashId) {
       state.selectedPeer = null;
-      $("#chat-active").classList.add("hidden");
-      $("#chat-empty").classList.remove("hidden");
+      $("#chat-active")?.classList.add("hidden");
+      $("#chat-empty")?.classList.remove("hidden");
     }
     renderContacts();
-    const res = await fetch(`/api/trusted/${encodeURIComponent(hashId)}`, { method: "DELETE" });
-    if (!res.ok) {
-      toast("Failed to remove contact");
+    const { ok } = await apiDelete(`/api/trusted/${encodeURIComponent(hashId)}`);
+    if (!ok) {
+      toast("Failed to remove contact", "error");
       loadPeers();
       return;
     }
@@ -552,15 +732,15 @@
 
   async function clearChatHistory(hashId) {
     closeContactMenu();
-    const res = await fetch(`/api/trusted/${encodeURIComponent(hashId)}/clear-chat`, {
-      method: "POST",
-    });
-    if (!res.ok) {
-      toast("Failed to clear chat");
+    const { ok, data } = await apiPost(
+      `/api/trusted/${encodeURIComponent(hashId)}/clear-chat`,
+      {}
+    );
+    if (!ok) {
+      toast("Failed to clear chat", "error");
       return;
     }
-    const data = await res.json();
-    toast(`Cleared ${data.cleared || 0} message(s)`);
+    toast(`Cleared ${data?.cleared || 0} message(s)`);
     if (state.selectedPeer === hashId) loadMessages();
   }
 
@@ -568,13 +748,11 @@
     closeContactMenu();
     const name = prompt("Rename contact:", currentName);
     if (!name || name.trim() === currentName) return;
-    const res = await fetch(`/api/trusted/${encodeURIComponent(hashId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim() }),
+    const { ok } = await apiPatch(`/api/trusted/${encodeURIComponent(hashId)}`, {
+      name: name.trim(),
     });
-    if (!res.ok) {
-      toast("Rename failed");
+    if (!ok) {
+      toast("Rename failed", "error");
       return;
     }
     toast("Contact renamed");
@@ -588,13 +766,11 @@
   async function blockContact(hashId, name) {
     closeContactMenu();
     if (!confirm(`Block ${name}? They cannot message you until unblocked.`)) return;
-    const res = await fetch(`/api/trusted/${encodeURIComponent(hashId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ blocked: true }),
+    const { ok } = await apiPatch(`/api/trusted/${encodeURIComponent(hashId)}`, {
+      blocked: true,
     });
-    if (!res.ok) {
-      toast("Block failed");
+    if (!ok) {
+      toast("Block failed", "error");
       return;
     }
     delete state.links[hashId];
@@ -650,15 +826,14 @@
   }
 
   async function pingPeer(hashId) {
-    const res = await fetch("/api/ping", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hash_id: hashId }),
-    });
-    const data = await res.json();
+    const { ok, data } = await apiPost("/api/ping", { hash_id: hashId });
+    if (!ok) {
+      toast("Ping failed", "error");
+      return;
+    }
     const parts = [];
-    if (data.rtt_ms != null) parts.push(`${Math.round(data.rtt_ms)} ms`);
-    if (data.link_quality_pct != null) parts.push(`${data.link_quality_pct}% link`);
+    if (data?.rtt_ms != null) parts.push(`${Math.round(data.rtt_ms)} ms`);
+    if (data?.link_quality_pct != null) parts.push(`${data.link_quality_pct}% link`);
     toast(parts.length ? `Ping: ${parts.join(" · ")}` : "Ping sent");
     loadPeers();
   }
@@ -676,8 +851,9 @@
 
   async function loadMessages() {
     if (!state.selectedPeer) return;
-    const res = await fetch("/api/messages?limit=500");
-    const msgs = await res.json();
+    const { ok, data } = await apiGet("/api/messages?limit=500", { fallback: [] });
+    if (!ok) return;
+    const msgs = data || [];
     const filtered = msgs.filter((m) => messageForSelectedPeer(m));
     filtered.forEach((m) => syncTransferStateFromMessage(m));
     if (!messagesEqual(filtered, state.messageCache)) {
@@ -695,10 +871,13 @@
       toast(hint);
       return;
     }
-    const res = await fetch(`/api/announce?transport=${transport}`, { method: "POST" });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      toast(data.error || `Announce ${transport.toUpperCase()} failed`);
+    const { ok, data } = await safeFetch(
+      `/api/announce?transport=${encodeURIComponent(transport)}`,
+      { method: "POST" },
+      { fallback: {} }
+    );
+    if (!ok) {
+      toast(data?.error || `Announce ${transport.toUpperCase()} failed`, "error");
       return;
     }
     const bursts = data.bursts || 3;
@@ -738,27 +917,29 @@
     updateChatTransportBadge(hashId, linked);
     if ((linked || inTransferCooldown(hashId)) && latency) {
       updatePeerStatus(`Encrypted · Online · ${latency}`);
-      $(".status-dot").className = "status-dot online";
+      setStatusDot("status-dot online");
     } else if (linked || inTransferCooldown(hashId)) {
       updatePeerStatus("Encrypted · Online");
-      $(".status-dot").className = "status-dot online";
+      setStatusDot("status-dot online");
     } else {
       updatePeerStatus("Handshaking…");
-      $(".status-dot").className = "status-dot pending";
+      setStatusDot("status-dot pending");
     }
-    $("#msg-input").disabled = !hashId;
-    $("#send-btn").disabled = !hashId;
+    const msgInput = $("#msg-input");
+    const sendBtn = $("#send-btn");
+    if (msgInput) msgInput.disabled = !hashId;
+    if (sendBtn) sendBtn.disabled = !hashId;
   }
 
   async function waitForHandshake(hashId, maxMs = 12000) {
     const deadline = Date.now() + maxMs;
     while (Date.now() < deadline) {
       if (isPeerLinked(hashId)) return true;
-      try {
-        const st = await (await fetch("/api/status")).json();
-        syncLinksFromStatus(st.links || []);
+      const { ok, data } = await apiGet("/api/status", { fallback: {} });
+      if (ok) {
+        syncLinksFromStatus(data?.links || []);
         if (isPeerLinked(hashId)) return true;
-      } catch (_) { /* retry */ }
+      }
       await new Promise((r) => setTimeout(r, 400));
     }
     return isPeerLinked(hashId);
@@ -776,26 +957,30 @@
     const run = (async () => {
       if (state.selectedPeer === hashId) {
         updatePeerStatus("Handshaking…");
-        $(".status-dot").className = "status-dot pending";
+        setStatusDot("status-dot pending");
       }
       logActivity(`Connecting to ${hashId.slice(0, 12)}…`);
       const transport = peerTransport(hashId);
-      const res = await fetch("/api/connect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hash_id: hashId, transport, force }),
+      const { ok, data } = await apiPost("/api/connect", {
+        hash_id: hashId,
+        transport,
+        force,
       });
-      const data = await res.json().catch(() => ({}));
-      if (data.handshake_complete) {
+      if (!ok && state.selectedPeer === hashId) {
+        updatePeerStatus("Connection failed");
+        toast(data?.error || "Could not connect to peer", "error");
+        return data;
+      }
+      if (data?.handshake_complete) {
         state.links[hashId] = true;
         if (data.rtt_ms != null) {
           state.linkMetrics[hashId] = { rtt_ms: data.rtt_ms };
         }
         if (state.selectedPeer === hashId) refreshPeerStatus(hashId);
-      } else if (data.connected) {
+      } else if (data?.connected) {
         if (state.selectedPeer === hashId) {
           updatePeerStatus("Handshaking…");
-          $(".status-dot").className = "status-dot pending";
+          setStatusDot("status-dot pending");
         }
         const ready = await waitForHandshake(hashId);
         if (ready) {
@@ -821,11 +1006,7 @@
   }
 
   async function disconnectPeer(hashId) {
-    await fetch("/api/disconnect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hash_id: hashId }),
-    });
+    await apiPost("/api/disconnect", { hash_id: hashId }, { silent: true });
     delete state.links[hashId];
     delete state.linkMetrics[hashId];
     updatePeerStatus("Disconnected");
@@ -835,23 +1016,23 @@
 
   async function sendMessage() {
     const input = $("#msg-input");
+    if (!input) return;
     const text = input.value.trim();
     if (!text || !state.selectedPeer) return;
 
     input.value = "";
     autoResize(input);
 
-    const res = await fetch("/api/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        recipient_hash: state.selectedPeer,
-        text,
-        transport: peerTransport(state.selectedPeer),
-      }),
+    const sendBtn = $("#send-btn");
+    if (sendBtn) sendBtn.disabled = true;
+    const { ok } = await apiPost("/api/messages", {
+      recipient_hash: state.selectedPeer,
+      text,
+      transport: activeLinkTransport(state.selectedPeer),
     });
-    if (!res.ok) {
-      toast("Message failed — reconnecting…");
+    if (sendBtn) sendBtn.disabled = false;
+    if (!ok) {
+      toast("Message failed — reconnecting…", "error");
       await connectPeer(state.selectedPeer, true);
     }
   }
@@ -869,29 +1050,27 @@
     toast(`Uploading ${file.name}…`);
     const form = new FormData();
     form.append("file", file);
-    const up = await fetch("/api/upload", { method: "POST", body: form });
-    if (!up.ok) {
-      toast("Upload failed");
+    const { ok: upOk, data: uploaded } = await safeFetch(
+      "/api/upload",
+      { method: "POST", body: form },
+      { fallback: {} }
+    );
+    if (!upOk || !uploaded?.path) {
+      toast("Upload failed", "error");
       return false;
     }
-    const uploaded = await up.json();
-    const res = await fetch("/api/transfer", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        recipient_hash: hashId,
-        path: uploaded.path,
-        transport: activeLinkTransport(hashId),
-      }),
+    const { ok, data: sent } = await apiPost("/api/transfer", {
+      recipient_hash: hashId,
+      path: uploaded.path,
+      transport: activeLinkTransport(hashId),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      toast(err.error || "File send failed");
+    if (!ok) {
+      toast(sent?.error || "File send failed", "error");
       return false;
     }
-    const sent = await res.json();
     toast(`Sending ${file.name}…`);
     if (state.selectedPeer === hashId) loadMessages();
+    renderTransferDock();
     renderTransfers();
     return true;
   }
@@ -913,23 +1092,18 @@
     }
     const folderName = folderPath.split("/").filter(Boolean).pop() || "folder";
     toast(`Zipping and sending ${folderName}…`);
-    const res = await fetch("/api/transfer-folder", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        recipient_hash: hashId,
-        path: folderPath,
-        transport: peerTransport(hashId),
-      }),
+    const { ok, data: sent } = await apiPost("/api/transfer-folder", {
+      recipient_hash: hashId,
+      path: folderPath,
+      transport: activeLinkTransport(hashId),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      toast(err.error || "Folder send failed");
+    if (!ok) {
+      toast(sent?.error || "Folder send failed", "error");
       return false;
     }
-    const sent = await res.json();
     toast(`Sending folder ${folderName}.zip…`);
     if (state.selectedPeer === hashId) loadMessages();
+    renderTransferDock();
     renderTransfers();
     return true;
   }
@@ -989,17 +1163,43 @@
       const peerName = contact?.dataset.name;
       state.dropTargetHash = null;
       if (!hashId || !e.dataTransfer?.files?.length) return;
-      await sendDroppedFiles(e.dataTransfer.files, hashId, peerName);
+      try {
+        await sendDroppedFiles(e.dataTransfer.files, hashId, peerName);
+      } catch (err) {
+        console.warn("drop send failed:", err);
+        toast("File drop send failed", "error");
+      }
     });
+
+    const messages = $("#messages");
+    if (messages) {
+      messages.addEventListener("dragover", (e) => {
+        if (!e.dataTransfer?.types?.includes("Files") || !state.selectedPeer) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      });
+      messages.addEventListener("drop", async (e) => {
+        if (!state.selectedPeer || !e.dataTransfer?.files?.length) return;
+        e.preventDefault();
+        try {
+          await sendDroppedFiles(
+            e.dataTransfer.files,
+            state.selectedPeer,
+            state.selectedName
+          );
+        } catch (err) {
+          console.warn("message drop failed:", err);
+          toast("File drop send failed", "error");
+        }
+      });
+    }
   }
 
   async function loadShareGrants() {
-    try {
-      const res = await fetch("/api/share/grants");
-      state.shareGrants = await res.json();
-    } catch (_) {
-      state.shareGrants = { local: [], remote: [] };
-    }
+    const { ok, data } = await apiGet("/api/share/grants", {
+      fallback: { local: [], remote: [] },
+    });
+    state.shareGrants = ok ? (data || { local: [], remote: [] }) : { local: [], remote: [] };
   }
 
   function renderShareGrants() {
@@ -1118,19 +1318,14 @@
       await connectPeer(state.selectedPeer, false);
       if (!isPeerLinked(state.selectedPeer)) return;
     }
-    const res = await fetch("/api/share/peer/offer", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        recipient_hash: state.selectedPeer,
-        label: state.settings.shared_folder?.split("/").pop() || "shared",
-        ttl_preset: $("#share-ttl")?.value || "1h",
-        download_limit_preset: $("#share-download-limit")?.value || "unlimited",
-      }),
+    const { ok, data } = await apiPost("/api/share/peer/offer", {
+      recipient_hash: state.selectedPeer,
+      label: state.settings.shared_folder?.split("/").pop() || "shared",
+      ttl_preset: $("#share-ttl")?.value || "1h",
+      download_limit_preset: $("#share-download-limit")?.value || "unlimited",
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      toast(data.error || "Share offer failed");
+    if (!ok) {
+      toast(data?.error || "Share offer failed", "error");
       return;
     }
     toast("Shared folder offered (E2EE)");
@@ -1142,14 +1337,12 @@
     state.shareListing = { ownerHash, grantId, entries: [] };
     renderShareEntries();
     toast("Loading folder listing…");
-    const res = await fetch("/api/share/peer/list", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ owner_hash: ownerHash, grant_id: grantId }),
+    const { ok, data } = await apiPost("/api/share/peer/list", {
+      owner_hash: ownerHash,
+      grant_id: grantId,
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      toast(data.error || "Could not list folder");
+    if (!ok) {
+      toast(data?.error || "Could not list folder", "error");
       return;
     }
     if (Array.isArray(data.entries)) {
@@ -1172,19 +1365,14 @@
   async function fetchShareFile(relPath, asFolder = false) {
     const { ownerHash, grantId } = state.shareListing;
     if (!ownerHash || !grantId || relPath == null) return;
-    const res = await fetch("/api/share/peer/fetch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        owner_hash: ownerHash,
-        grant_id: grantId,
-        path: relPath,
-        as_folder: asFolder,
-      }),
+    const { ok, data } = await apiPost("/api/share/peer/fetch", {
+      owner_hash: ownerHash,
+      grant_id: grantId,
+      path: relPath,
+      as_folder: asFolder,
     });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      toast(data.error || "Download request failed");
+    if (!ok) {
+      toast(data?.error || "Download request failed", "error");
       return;
     }
     toast(asFolder ? "Folder ZIP transfer started — check chat" : "File transfer started — check chat");
@@ -1195,14 +1383,9 @@
 
   async function revokeShareGrant(grantId) {
     if (!grantId || !confirm("Remove this shared folder offer? The peer will lose access.")) return;
-    const res = await fetch("/api/share/peer/revoke", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ grant_id: grantId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      toast(data.error || "Could not revoke share");
+    const { ok, data } = await apiPost("/api/share/peer/revoke", { grant_id: grantId });
+    if (!ok) {
+      toast(data?.error || "Could not revoke share", "error");
       return;
     }
     toast("Share removed");
@@ -1214,10 +1397,10 @@
     const peer = state.trusted.find((p) => p.hash_id === hashId);
     if (!peer) return;
     state.wanModalTarget = hashId;
-    $("#wan-host").value = peer.wan_host || "";
-    $("#wan-port").value = peer.wan_port || 7825;
-    $("#wan-enabled").checked = !!peer.wan_enabled;
-    $("#wan-mode").value = peer.connection_mode || "auto";
+    setInputValue("wan-host", peer.wan_host || "");
+    setInputValue("wan-port", String(peer.wan_port || 7825));
+    setCheckbox("wan-enabled", !!peer.wan_enabled);
+    setSelectValue("wan-mode", peer.connection_mode || "auto");
     $("#wan-modal")?.classList.add("open");
     closeContactMenu();
   }
@@ -1231,19 +1414,14 @@
     const hashId = state.wanModalTarget;
     if (!hashId) return;
     const body = {
-      wan_host: $("#wan-host").value.trim(),
-      wan_port: parseInt($("#wan-port").value, 10) || 7825,
-      wan_enabled: $("#wan-enabled").checked,
-      connection_mode: $("#wan-mode").value,
+      wan_host: ($("#wan-host")?.value || "").trim(),
+      wan_port: parseInt($("#wan-port")?.value || "7825", 10) || 7825,
+      wan_enabled: !!$("#wan-enabled")?.checked,
+      connection_mode: $("#wan-mode")?.value || "auto",
     };
-    const res = await fetch(`/api/trusted/${encodeURIComponent(hashId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      toast(data.error || "Failed to save WAN settings");
+    const { ok, data } = await apiPatch(`/api/trusted/${encodeURIComponent(hashId)}`, body);
+    if (!ok) {
+      toast(data?.error || "Failed to save WAN settings", "error");
       return;
     }
     toast("WAN endpoint saved");
@@ -1258,11 +1436,11 @@
     if (!portEl || !baudEl) return;
     try {
       const [portsRes, baudRes] = await Promise.all([
-        fetch("/api/serial/ports"),
-        fetch("/api/serial/baud-rates"),
+        apiGet("/api/serial/ports", { fallback: { ports: [], group: {} } }),
+        apiGet("/api/serial/baud-rates", { fallback: { rates: [115200] } }),
       ]);
-      const portsData = await portsRes.json();
-      const baudData = await baudRes.json();
+      const portsData = portsRes.data || { ports: [], group: {} };
+      const baudData = baudRes.data || { rates: [115200] };
       const ports = portsData.ports || [];
       const group = portsData.group || {};
       portEl.innerHTML = ports.length
@@ -1296,9 +1474,9 @@
   }
 
   async function loadInterfaces(selectEl, selectedIp) {
-    const res = await fetch("/api/interfaces");
-    const data = await res.json();
-    state.interfaces = data.interfaces || [];
+    if (!selectEl) return;
+    const { ok, data } = await apiGet("/api/interfaces", { fallback: { interfaces: [] } });
+    state.interfaces = ok ? (data?.interfaces || []) : [];
     selectEl.innerHTML = state.interfaces
       .map((i) => `<option value="${escapeHtml(i.ip)}" ${i.ip === selectedIp ? "selected" : ""}>${escapeHtml(i.label)}</option>`)
       .join("");
@@ -1308,35 +1486,24 @@
   }
 
   function fillSettingsForm(settings) {
-    $("#set-name").value = settings.display_name || "";
-    $("#set-web-port").value = settings.web_port || 9876;
-    if ($("#set-tcp-port")) $("#set-tcp-port").value = settings.tcp_port || 7825;
-    if ($("#set-discovery-port")) {
-      $("#set-discovery-port").value = settings.discovery_port || 7826;
-    }
-    if ($("#set-strict-ports")) {
-      $("#set-strict-ports").checked = settings.strict_ports !== false;
-    }
-    const preset = settings.message_retention_preset || "1w";
-    if ($("#set-retention")) $("#set-retention").value = preset;
-    $("#set-incoming").value = settings.incoming_files_dir || "";
-    $("#set-shared").value = settings.shared_folder || "";
-    $("#set-auto-announce").checked = !!settings.auto_announce;
-    if ($("#set-wan-expose")) $("#set-wan-expose").checked = !!settings.wan_expose_port;
-    if ($("#set-enable-serial")) $("#set-enable-serial").checked = !!settings.enable_serial;
+    if (!settings) return;
+    setInputValue("set-name", settings.display_name || "");
+    setInputValue("set-web-port", String(settings.web_port || 9876));
+    setInputValue("set-tcp-port", String(settings.tcp_port || 7825));
+    setInputValue("set-discovery-port", String(settings.discovery_port || 7826));
+    setCheckbox("set-strict-ports", settings.strict_ports !== false);
+    setSelectValue("set-retention", settings.message_retention_preset || "1w");
+    setInputValue("set-incoming", settings.incoming_files_dir || "");
+    setInputValue("set-shared", settings.shared_folder || "");
+    setCheckbox("set-auto-announce", !!settings.auto_announce);
+    setCheckbox("set-wan-expose", !!settings.wan_expose_port);
+    setCheckbox("set-enable-serial", !!settings.enable_serial);
     loadSerialSettings(settings.serial_port || "", settings.serial_baud || 57600);
-    if ($("#set-timezone")) {
-      loadTimezones($("#set-timezone"), settings.timezone || "");
-    }
-    if ($("#set-show-clock")) {
-      $("#set-show-clock").checked = settings.show_clock !== false;
-    }
-    if ($("#set-clock-source")) {
-      $("#set-clock-source").value = settings.clock_source || "system";
-    }
-    if ($("#set-ntp-server")) {
-      $("#set-ntp-server").value = settings.ntp_server || "pool.ntp.org";
-    }
+    const tzEl = $("#set-timezone");
+    if (tzEl) loadTimezones(tzEl, settings.timezone || "");
+    setCheckbox("set-show-clock", settings.show_clock !== false);
+    setSelectValue("set-clock-source", settings.clock_source || "system");
+    setInputValue("set-ntp-server", settings.ntp_server || "pool.ntp.org");
     toggleNtpField();
     applyClockVisibility();
     if (!$("#settings-window")?.classList.contains("hidden") || !state.interfacesLoaded) {
@@ -1347,16 +1514,15 @@
 
   async function saveSettings(formData, complete) {
     const prev = { ...state.settings };
-    const res = await fetch("/api/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...formData, setup_complete: complete }),
+    const { ok, data } = await apiPost("/api/settings", {
+      ...formData,
+      setup_complete: complete,
     });
-    if (!res.ok) {
-      toast("Failed to save settings");
+    if (!ok) {
+      toast("Failed to save settings", "error");
       return false;
     }
-    state.settings = await res.json();
+    state.settings = data || state.settings;
     const serialStatus = state.settings.transports?.serial;
     if (serialStatus) {
       state.transportStatus = state.settings.transports;
@@ -1372,32 +1538,26 @@
     } else {
       toast(complete ? "Setup complete!" : "Settings saved");
     }
-    if (complete) $("#setup-overlay").classList.add("hidden");
-    renderStatus(await (await fetch("/api/status")).json());
+    if (complete) $("#setup-overlay")?.classList.add("hidden");
+    await fetchStatus();
     return true;
   }
 
   function showSetupIfNeeded(settings) {
-    if (!settings.setup_complete) {
-      $("#setup-overlay").classList.remove("hidden");
-      $("#setup-name").value = settings.display_name || "";
-      $("#setup-web-port").value = settings.web_port || 9876;
-      if ($("#setup-retention")) $("#setup-retention").value = settings.message_retention_preset || "1w";
-      $("#setup-auto-announce").checked = !!settings.auto_announce;
-      loadInterfaces($("#setup-lan-ip"), settings.lan_ip || "");
-    }
+    if (!settings || settings.setup_complete) return;
+    $("#setup-overlay")?.classList.remove("hidden");
+    setInputValue("setup-name", settings.display_name || "");
+    setInputValue("setup-web-port", String(settings.web_port || 9876));
+    setSelectValue("setup-retention", settings.message_retention_preset || "1w");
+    setCheckbox("setup-auto-announce", !!settings.auto_announce);
+    loadInterfaces($("#setup-lan-ip"), settings.lan_ip || "");
   }
 
   async function loadTimezones(selectEl, selectedTz) {
     if (!selectEl) return;
     if (!state.timezones.length) {
-      try {
-        const res = await fetch("/api/timezones");
-        const data = await res.json();
-        state.timezones = data.timezones || [];
-      } catch (_) {
-        state.timezones = ["UTC"];
-      }
+      const { ok, data } = await apiGet("/api/timezones", { fallback: { timezones: ["UTC"] } });
+      state.timezones = ok ? (data?.timezones || ["UTC"]) : ["UTC"];
     }
     const current = selectedTz || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     const options = state.timezones.includes(current)
@@ -1410,24 +1570,22 @@
   }
 
   async function pollSystemStats() {
-    try {
-      const res = await fetch("/api/system");
-      const data = await res.json();
-      const cpuEl = $("#stat-cpu .stat-value");
-      const tempEl = $("#stat-temp .stat-value");
-      const headerClock = $("#header-clock");
-      if (data.cpu_percent != null) {
-        cpuEl.textContent = `${data.cpu_percent}%`;
-        cpuEl.className = "stat-value" + (data.cpu_percent > 80 ? " hot" : data.cpu_percent > 50 ? " warn" : "");
-      }
-      if (data.cpu_temp_c != null) {
-        tempEl.textContent = `${data.cpu_temp_c}°C`;
-        tempEl.className = "stat-value" + (data.cpu_temp_c > 85 ? " hot" : data.cpu_temp_c > 70 ? " warn" : "");
-      }
-      if (state.settings.show_clock !== false && data.local_time) {
-        if (headerClock) headerClock.textContent = data.local_time;
-      }
-    } catch (_) { /* ignore */ }
+    const { ok, data } = await apiGet("/api/system", { fallback: {} });
+    if (!ok || !data) return;
+    const cpuEl = $("#stat-cpu .stat-value");
+    const tempEl = $("#stat-temp .stat-value");
+    const headerClock = $("#header-clock");
+    if (data.cpu_percent != null && cpuEl) {
+      cpuEl.textContent = `${data.cpu_percent}%`;
+      cpuEl.className = "stat-value" + (data.cpu_percent > 80 ? " hot" : data.cpu_percent > 50 ? " warn" : "");
+    }
+    if (data.cpu_temp_c != null && tempEl) {
+      tempEl.textContent = `${data.cpu_temp_c}°C`;
+      tempEl.className = "stat-value" + (data.cpu_temp_c > 85 ? " hot" : data.cpu_temp_c > 70 ? " warn" : "");
+    }
+    if (state.settings.show_clock !== false && data.local_time && headerClock) {
+      headerClock.textContent = data.local_time;
+    }
   }
 
   function peerEndpoint(peer) {
@@ -1574,8 +1732,12 @@
     const canvas = $("#network-canvas");
     if (!canvas) return;
     stopNetworkAnimation();
-    const res = await fetch("/api/network");
-    networkGraphData = await res.json();
+    const { ok, data } = await apiGet("/api/network", { fallback: { nodes: [], edges: [] } });
+    if (!ok) {
+      toast("Could not load network map", "error");
+      return;
+    }
+    networkGraphData = data;
     let tick = 0;
     const loop = () => {
       if (!$("#network-modal")?.classList.contains("open")) {
@@ -1595,7 +1757,8 @@
     state.settings = data.settings || state.settings;
     let primary = null;
 
-    if (data.version) $("#stat-version").textContent = `v${data.version}`;
+    const verEl = $("#stat-version");
+    if (data.version && verEl) verEl.textContent = `v${data.version}`;
 
     if (state.settings && Object.keys(state.settings).length) {
       if (!$("#settings-window")?.classList.contains("hidden") || state.settingsFormDirty) {
@@ -1621,7 +1784,10 @@
       })
       .join("");
 
-    $("#identities").innerHTML = idHtml || '<div class="empty-hint">No identities</div>';
+    const identitiesEl = $("#identities");
+    if (identitiesEl) {
+      identitiesEl.innerHTML = idHtml || '<div class="empty-hint">No identities</div>';
+    }
 
     const transportStatus = data.transports || {};
     state.transportStatus = transportStatus;
@@ -1651,7 +1817,8 @@
 
     if (primary) {
       state.myName = primary.name;
-      $("#me-name").textContent = primary.name;
+      const meName = $("#me-name");
+      if (meName) meName.textContent = primary.name;
       const meHash = $("#me-hash");
       if (meHash) {
         meHash.textContent = primary.hash_id;
@@ -1694,6 +1861,7 @@
 
     const el = $("#contacts");
     const label = $("#contacts-label");
+    if (!el) return;
     if (label) label.textContent = state.peerTab === "trusted" ? "Trusted Peers" : "Discovered Peers";
 
     if (!filtered.length) {
@@ -1755,21 +1923,25 @@
   }
 
   function selectPeer(hashId, name) {
+    if (!hashId) return;
     state.selectedPeer = hashId;
     state.selectedName = name;
     clearUnread(hashId);
 
-    $("#chat-empty").classList.add("hidden");
-    $("#chat-active").classList.remove("hidden");
+    $("#chat-empty")?.classList.add("hidden");
+    $("#chat-active")?.classList.remove("hidden");
 
-    $("#chat-peer-name").textContent = name;
+    const peerNameEl = $("#chat-peer-name");
+    if (peerNameEl) peerNameEl.textContent = name;
     setAvatar($("#peer-avatar"), name, hashId);
 
     refreshPeerStatus(hashId);
 
-    $("#msg-input").disabled = false;
-    $("#send-btn").disabled = false;
-    $("#msg-input").focus();
+    const msgInput = $("#msg-input");
+    const sendBtn = $("#send-btn");
+    if (msgInput) msgInput.disabled = false;
+    if (sendBtn) sendBtn.disabled = false;
+    msgInput?.focus();
 
     renderContacts();
     loadMessages();
@@ -1777,7 +1949,8 @@
   }
 
   function updatePeerStatus(text) {
-    $("#chat-peer-meta").textContent = text;
+    const meta = $("#chat-peer-meta");
+    if (meta) meta.textContent = text;
   }
 
   function renderFileBubble(m, out) {
@@ -1804,7 +1977,9 @@
       : fileUrl;
     const progressLine = stateLabel === "complete"
       ? `${formatBytes(size)} · complete`
-      : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr}`;
+      : stateLabel === "paused"
+        ? `${formatBytes(offset)} / ${formatBytes(size)} · paused`
+        : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr}`;
     const progressBar = stateLabel !== "complete" && !cancelled && !failed
       ? `<div class="progress-track chat-progress"><div class="progress-fill" style="width:${pct}%"></div></div>`
       : "";
@@ -1888,9 +2063,8 @@
 
   async function deleteMessage(messageId) {
     if (!messageId) return;
-    const res = await fetch(`/api/messages/${encodeURIComponent(messageId)}`, { method: "DELETE" });
-    const data = await res.json().catch(() => ({}));
-    if (data.deleted) {
+    const { ok, data } = await apiDelete(`/api/messages/${encodeURIComponent(messageId)}`);
+    if (ok && data?.deleted) {
       state.messageCache = state.messageCache.filter((m) => m.id !== messageId);
       renderMessages(state.messageCache);
       toast("Message deleted");
@@ -1977,13 +2151,18 @@
     const speed = data.speed_mbps ? ` · ${Number(data.speed_mbps).toFixed(2)} MB/s` : "";
     const cancelled = stateLabel === "cancelled";
     const failed = stateLabel === "failed";
+    const paused = stateLabel === "paused";
     const meta = bubble.querySelector(".file-progress-meta");
     if (meta) {
       meta.textContent = cancelled
         ? "Transfer cancelled"
-        : stateLabel === "complete"
-          ? `${formatBytes(size)} · complete`
-          : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speed}`;
+        : failed
+          ? "Transfer failed"
+          : stateLabel === "complete"
+            ? `${formatBytes(size)} · complete`
+            : paused
+              ? `${formatBytes(offset)} / ${formatBytes(size)} · paused`
+              : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speed}`;
     }
     if (stateLabel === "complete" || cancelled || failed) {
       bubble.querySelectorAll(".progress-track, .chat-progress").forEach((el) => el.remove());
@@ -2016,6 +2195,7 @@
 
   function renderMessages(msgs, { preserveScroll = false, scrollToBottom = false } = {}) {
     const el = $("#messages");
+    if (!el) return;
     const wasAtBottom = scrollToBottom || (preserveScroll ? isNearBottom(el) : true);
     state.messageCache = msgs;
     let lastDate = "";
@@ -2103,26 +2283,52 @@
   function setupMediaPan() {
     const body = $("#media-lightbox-body");
     if (!body) return;
-    body.addEventListener("mousedown", (e) => {
+    body.style.cursor = "grab";
+
+    const startDrag = (clientX, clientY) => {
       if (!$("#media-lightbox")?.classList.contains("open")) return;
-      if (e.button !== 0) return;
+      if (state.mediaZoom <= 1) return;
       state.mediaDragging = true;
-      state.mediaDragStart = { x: e.clientX - state.mediaPan.x, y: e.clientY - state.mediaPan.y };
+      state.mediaDragStart = {
+        x: clientX - state.mediaPan.x,
+        y: clientY - state.mediaPan.y,
+      };
       body.style.cursor = "grabbing";
-    });
-    window.addEventListener("mousemove", (e) => {
+    };
+
+    const moveDrag = (clientX, clientY) => {
       if (!state.mediaDragging || !state.mediaDragStart) return;
       state.mediaPan = {
-        x: e.clientX - state.mediaDragStart.x,
-        y: e.clientY - state.mediaDragStart.y,
+        x: clientX - state.mediaDragStart.x,
+        y: clientY - state.mediaDragStart.y,
       };
       applyMediaZoom();
-    });
-    window.addEventListener("mouseup", () => {
+    };
+
+    const endDrag = () => {
       state.mediaDragging = false;
       state.mediaDragStart = null;
-      if (body) body.style.cursor = "grab";
+      body.style.cursor = "grab";
+    };
+
+    body.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      startDrag(e.clientX, e.clientY);
     });
+    window.addEventListener("mousemove", (e) => moveDrag(e.clientX, e.clientY));
+    window.addEventListener("mouseup", endDrag);
+
+    body.addEventListener("touchstart", (e) => {
+      if (e.touches.length !== 1) return;
+      startDrag(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    body.addEventListener("touchmove", (e) => {
+      if (!state.mediaDragging || e.touches.length !== 1) return;
+      e.preventDefault();
+      moveDrag(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: false });
+    body.addEventListener("touchend", endDrag);
+    body.addEventListener("touchcancel", endDrag);
   }
 
   function openMediaLightbox(url, kind, filename) {
@@ -2154,10 +2360,18 @@
     const modal = $("#media-lightbox");
     const body = $("#media-lightbox-body");
     if (!modal) return;
+    const video = body?.querySelector("video");
+    if (video) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    }
     modal.classList.remove("open");
     modal.setAttribute("aria-hidden", "true");
     if (body) body.innerHTML = "";
     state.mediaZoom = 1;
+    state.mediaPan = { x: 0, y: 0 };
+    state.mediaDragging = false;
   }
 
   function updateChatTransfer(data) {
@@ -2251,27 +2465,114 @@
     });
   }
 
-  async function renderTransfers() {
-    const res = await fetch("/api/transfers");
-    const transfers = await res.json();
-    const el = $("#transfers");
+  function activeTransfersFromState(extra = []) {
+    const seen = new Set();
+    const items = [];
+    const add = (t) => {
+      if (!t?.id || seen.has(t.id)) return;
+      const st = t.state || "";
+      if (DOCK_TERMINAL_STATES.has(st)) return;
+      if (!ACTIVE_TRANSFER_STATES.has(st)) return;
+      seen.add(t.id);
+      items.push(t);
+    };
+    Object.values(state.transfers).forEach(add);
+    extra.forEach(add);
+    return items;
+  }
 
-    if (!transfers.length) {
-      el.innerHTML = '<div class="empty-hint">No active transfers</div>';
+  function transferDockHtml(t) {
+    const pct = t.size ? Math.min(100, Math.round((t.offset / t.size) * 100)) : 0;
+    const speed = t.speed_mbps ? ` · ${Number(t.speed_mbps).toFixed(2)} MB/s` : "";
+    const terminal = DOCK_TERMINAL_STATES.has(t.state);
+    const canCancel = ACTIVE_TRANSFER_STATES.has(t.state);
+    return `<div class="transfer-dock-item" data-transfer-id="${escapeHtml(t.id)}">
+      <div class="transfer-dock-info">
+        <div class="transfer-dock-name">${escapeHtml(t.filename || "file")}</div>
+        <div class="transfer-dock-meta">${escapeHtml(t.state || "transferring")} · ${pct}%${speed}</div>
+        ${terminal ? "" : `<div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>`}
+      </div>
+      <button type="button" class="transfer-dock-cancel" data-cancel-transfer="${escapeHtml(t.id)}"
+        title="Cancel transfer" aria-label="Cancel transfer" ${canCancel ? "" : "disabled"}>✕</button>
+    </div>`;
+  }
+
+  async function cancelTransfer(transferId) {
+    if (!transferId) return;
+    const { ok, data } = await safeFetch(
+      `/api/transfers/${encodeURIComponent(transferId)}/cancel`,
+      { method: "POST" },
+      { fallback: {} }
+    );
+    if (!ok) {
+      toast(data?.error || "Could not cancel transfer", "error");
       return;
     }
+    if (state.transfers[transferId]) {
+      state.transfers[transferId] = { ...state.transfers[transferId], state: "cancelled" };
+    }
+    pruneTerminalTransfers();
+    renderTransferDock();
+    renderTransfers();
+    if (state.selectedPeer) loadMessages();
+  }
 
-    el.innerHTML = transfers
-      .map((t) => {
-        const pct = t.size ? Math.round((t.offset / t.size) * 100) : 0;
-        const speed = t.speed_mbps ? ` · ${t.speed_mbps.toFixed(2)} MB/s` : "";
-        return `<div class="transfer-card">
-          <div class="transfer-name">${escapeHtml(t.filename)}</div>
-          <div class="transfer-state">${t.state} · ${pct}%${speed}</div>
-          <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
-        </div>`;
-      })
-      .join("");
+  function pruneTerminalTransfers() {
+    Object.keys(state.transfers).forEach((id) => {
+      const st = state.transfers[id]?.state;
+      if (st && DOCK_TERMINAL_STATES.has(st)) {
+        delete state.transfers[id];
+      }
+    });
+  }
+
+  function renderTransferDock(apiTransfers = null) {
+    const dock = $("#transfer-dock");
+    const list = $("#transfer-dock-list");
+    if (!dock || !list) return;
+    pruneTerminalTransfers();
+    const active = activeTransfersFromState(apiTransfers || []);
+    if (!active.length) {
+      dock.classList.add("hidden");
+      list.innerHTML = "";
+      return;
+    }
+    dock.classList.remove("hidden");
+    list.innerHTML = active.map(transferDockHtml).join("");
+  }
+
+  async function renderTransfers() {
+    const el = $("#transfers");
+    if (!el) return;
+    if (state.loadingTransfers) return;
+    state.loadingTransfers = true;
+    try {
+      const { ok, data } = await safeFetch(
+        "/api/transfers",
+        {},
+        { silent: true, fallback: [] }
+      );
+      const all = ok ? (data || []) : activeTransfersFromState();
+      const transfers = all.filter((t) => ACTIVE_TRANSFER_STATES.has(t.state));
+      renderTransferDock(all);
+      if (!transfers.length) {
+        el.innerHTML = '<div class="empty-hint">No active transfers</div>';
+        return;
+      }
+      el.innerHTML = transfers
+        .map((t) => {
+          const pct = t.size ? Math.round((t.offset / t.size) * 100) : 0;
+          const speed = t.speed_mbps ? ` · ${t.speed_mbps.toFixed(2)} MB/s` : "";
+          return `<div class="transfer-card">
+            <div class="transfer-name">${escapeHtml(t.filename)}</div>
+            <div class="transfer-state">${escapeHtml(t.state)} · ${pct}%${speed}</div>
+            <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+          </div>`;
+        })
+        .join("");
+    } finally {
+      state.loadingTransfers = false;
+    }
   }
 
   /* ── UI helpers ── */
@@ -2295,8 +2596,10 @@
   }
 
   function openSettings() {
-    $("#settings-window").classList.remove("hidden");
-    $("#settings-window").setAttribute("aria-hidden", "false");
+    const panel = $("#settings-window");
+    if (!panel) return;
+    panel.classList.remove("hidden");
+    panel.setAttribute("aria-hidden", "false");
     state.settingsFormDirty = true;
     const s = state.settings || {};
     fillSettingsForm(s);
@@ -2304,13 +2607,15 @@
   }
 
   function closeSettings() {
-    $("#settings-window").classList.add("hidden");
-    $("#settings-window").setAttribute("aria-hidden", "true");
+    const panel = $("#settings-window");
+    if (!panel) return;
+    panel.classList.add("hidden");
+    panel.setAttribute("aria-hidden", "true");
     state.settingsFormDirty = false;
   }
 
   function closeSidebarMobile() {
-    $("#sidebar").classList.remove("open");
+    $("#sidebar")?.classList.remove("open");
   }
 
   /* ── Events ── */
@@ -2323,36 +2628,36 @@
   $("#btn-announce-tcp")?.addEventListener("click", () => announceTransport("tcp"));
   $("#btn-announce-serial")?.addEventListener("click", () => announceTransport("serial"));
 
-  $("#btn-settings").addEventListener("click", openSettings);
-  $("#btn-close-settings").addEventListener("click", closeSettings);
-  $("#settings-window-overlay").addEventListener("click", closeSettings);
+  $("#btn-settings")?.addEventListener("click", openSettings);
+  $("#btn-close-settings")?.addEventListener("click", closeSettings);
+  $("#settings-window-overlay")?.addEventListener("click", closeSettings);
   document.querySelectorAll(".settings-tab").forEach((tab) => {
     tab.addEventListener("click", () => switchSettingsTab(tab.dataset.tab));
   });
   $("#set-clock-source")?.addEventListener("change", toggleNtpField);
-  $("#btn-back").addEventListener("click", () => {
-    $("#chat-active").classList.add("hidden");
-    $("#chat-empty").classList.remove("hidden");
-    $("#sidebar").classList.add("open");
+  $("#btn-back")?.addEventListener("click", () => {
+    $("#chat-active")?.classList.add("hidden");
+    $("#chat-empty")?.classList.remove("hidden");
+    $("#sidebar")?.classList.add("open");
     state.selectedPeer = null;
     renderContacts();
   });
 
-  $("#peer-search").addEventListener("input", (e) => {
+  $("#peer-search")?.addEventListener("input", debounce((e) => {
     state.search = e.target.value;
     renderContacts();
-  });
+  }, 200));
 
-  $("#send-btn").addEventListener("click", sendMessage);
+  $("#send-btn")?.addEventListener("click", sendMessage);
 
-  $("#msg-input").addEventListener("keydown", (e) => {
+  $("#msg-input")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
   });
 
-  $("#msg-input").addEventListener("input", (e) => autoResize(e.target));
+  $("#msg-input")?.addEventListener("input", (e) => autoResize(e.target));
 
   $("#btn-send-folder-peer")?.addEventListener("click", () => {
     if (!state.selectedPeer) {
@@ -2362,16 +2667,22 @@
     openFolderSendPicker(state.selectedPeer, state.selectedName);
   });
 
-  $("#btn-file").addEventListener("click", () => $("#file-input").click());
+  $("#btn-file")?.addEventListener("click", () => $("#file-input")?.click());
 
-  $("#file-input").addEventListener("change", (e) => {
+  $("#file-input")?.addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (file) sendFile(file);
     e.target.value = "";
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeSettings();
+    if (e.key === "Escape") {
+      if ($("#media-lightbox")?.classList.contains("open")) {
+        closeMediaLightbox();
+        return;
+      }
+      closeSettings();
+    }
     if (
       e.key === "Delete" &&
       state.peerTab === "trusted" &&
@@ -2385,8 +2696,8 @@
 
   function settingsPayload(prefix) {
     return {
-      display_name: $(`#${prefix}-name`).value.trim(),
-      web_port: parseInt($(`#${prefix}-web-port`).value, 10),
+      display_name: ($(`#${prefix}-name`)?.value || "").trim(),
+      web_port: parseInt($(`#${prefix}-web-port`)?.value || "9876", 10),
       tcp_port: parseInt($("#set-tcp-port")?.value || "7825", 10),
       discovery_port: parseInt($("#set-discovery-port")?.value || "7826", 10),
       strict_ports: $("#set-strict-ports")?.checked !== false,
@@ -2412,9 +2723,15 @@
     if (state.folderTarget === "folder-send") params.set("dirs_only", "1");
     const qs = params.toString();
     const url = qs ? `/api/browse?${qs}` : "/api/browse";
-    const res = await fetch(url);
-    const data = await res.json();
-    $("#folder-crumb").textContent = data.path;
+    const { ok, data } = await apiGet(url, { fallback: {} });
+    if (!ok || !data?.path) {
+      toast("Could not browse folder", "error");
+      return;
+    }
+    const crumb = $("#folder-crumb");
+    const list = $("#folder-list");
+    if (!crumb || !list) return;
+    crumb.textContent = data.path;
     let html = "";
     if (data.parent && data.parent !== data.path) {
       html += `<button type="button" class="folder-entry" data-path="${escapeHtml(data.parent)}">..</button>`;
@@ -2422,20 +2739,27 @@
     html += (data.entries || []).filter((e) => e.type === "dir").map((e) =>
       `<button type="button" class="folder-entry" data-path="${escapeHtml(e.path)}">${escapeHtml(e.name)}</button>`
     ).join("");
-    $("#folder-list").innerHTML = html || '<div class="empty-hint">No folders</div>';
-    $("#folder-list").querySelectorAll(".folder-entry").forEach((btn) => {
+    list.innerHTML = html || '<div class="empty-hint">No folders</div>';
+    list.querySelectorAll(".folder-entry").forEach((btn) => {
       btn.addEventListener("click", () => browseFolder(btn.dataset.path));
     });
   }
 
-  $("#settings-form").addEventListener("submit", async (e) => {
+  $("#transfer-dock")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-cancel-transfer]");
+    if (!btn || btn.disabled) return;
+    e.stopPropagation();
+    cancelTransfer(btn.dataset.cancelTransfer);
+  });
+
+  $("#settings-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     await saveSettings(settingsPayload("set"), false);
   });
 
-  $("#setup-form").addEventListener("submit", async (e) => {
+  $("#setup-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const port = parseInt($("#setup-web-port").value, 10);
+    const port = parseInt($("#setup-web-port")?.value || "9876", 10);
     await saveSettings(settingsPayload("setup"), true);
     if (port !== location.port) {
       toast(`Restart with --port ${port} to apply new HTTPS port`);
@@ -2451,15 +2775,18 @@
   });
 
   $("#stat-version")?.addEventListener("click", async () => {
-    const res = await fetch("/api/release-notes");
-    const data = await res.json();
-    $("#release-notes-body").textContent = data.notes;
+    const { ok, data } = await apiGet("/api/release-notes", { fallback: { notes: "" } });
+    if (!ok) {
+      toast("Could not load release notes", "error");
+      return;
+    }
+    $("#release-notes-body").textContent = data?.notes || "";
     $("#release-modal").classList.add("open");
   });
 
   $("#btn-restart")?.addEventListener("click", async () => {
     if (!confirm("Restart SRLTCP?")) return;
-    await fetch("/api/restart", { method: "POST" });
+    await apiPost("/api/restart", {}, { silent: true });
     toast("Restarting…");
     setTimeout(() => location.reload(), 3000);
   });
@@ -2499,11 +2826,13 @@
       case "block":
         if (peer?.blocked) {
           closeContactMenu();
-          await fetch(`/api/trusted/${encodeURIComponent(hashId)}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ blocked: false }),
+          const { ok } = await apiPatch(`/api/trusted/${encodeURIComponent(hashId)}`, {
+            blocked: false,
           });
+          if (!ok) {
+            toast("Unblock failed", "error");
+            return;
+          }
           toast(`${name} unblocked`);
           loadPeers();
         } else {
@@ -2567,6 +2896,34 @@
 
   loadUnreadState();
 
+  function startInterval(fn, ms) {
+    const id = setInterval(fn, ms);
+    state.timers.push(id);
+    return id;
+  }
+
+  window.addEventListener("beforeunload", () => {
+    state.pageUnloading = true;
+    state.timers.forEach(clearInterval);
+    state.timers.length = 0;
+    if (state.wsReconnectTimer) clearTimeout(state.wsReconnectTimer);
+    if (state.transferPatchTimer) clearTimeout(state.transferPatchTimer);
+    if (state.ws) {
+      state.ws.onclose = null;
+      state.ws.onerror = null;
+      try { state.ws.close(); } catch (_) { /* ignore */ }
+      state.ws = null;
+    }
+  });
+
+  window.addEventListener("unhandledrejection", (ev) => {
+    console.warn("Unhandled promise rejection:", ev.reason);
+    if (!state.pageUnloading) {
+      toast("Something went wrong — check the console", "error");
+    }
+    ev.preventDefault();
+  });
+
   $("#btn-network-viz")?.addEventListener("click", async () => {
     $("#network-modal").classList.add("open");
     await renderNetworkGraph();
@@ -2581,12 +2938,18 @@
     const regen = e.target.closest("[data-regen]");
     const del = e.target.closest("[data-del-id]");
     if (regen && confirm(`Regenerate ${regen.dataset.regen} identity?`)) {
-      await fetch(`/api/identities/${regen.dataset.regen}/regenerate`, { method: "POST" });
-      renderStatus(await (await fetch("/api/status")).json());
+      const { ok } = await safeFetch(
+        `/api/identities/${regen.dataset.regen}/regenerate`,
+        { method: "POST" },
+        { fallback: {} }
+      );
+      if (!ok) toast("Identity regenerate failed", "error");
+      else await fetchStatus();
     }
     if (del && confirm(`Delete ${del.dataset.delId} identity?`)) {
-      await fetch(`/api/identities/${del.dataset.delId}`, { method: "DELETE" });
-      renderStatus(await (await fetch("/api/status")).json());
+      const { ok } = await apiDelete(`/api/identities/${del.dataset.delId}`);
+      if (!ok) toast("Identity delete failed", "error");
+      else await fetchStatus();
     }
   });
 
@@ -2606,44 +2969,46 @@
   setupMediaPan();
   connectWs();
   pollSystemStats();
-  setInterval(pollSystemStats, 10000);
-  setInterval(async () => {
+  startInterval(pollSystemStats, 10000);
+  startInterval(async () => {
     if (state.settings.show_clock === false) return;
-    try {
-      const res = await fetch("/api/system");
-      const data = await res.json();
-      if (data.local_time && $("#header-clock")) {
-        $("#header-clock").textContent = data.local_time;
-      }
-    } catch (_) { /* ignore */ }
+    const { ok, data } = await safeFetch("/api/system", {}, { silent: true, fallback: {} });
+    if (ok && data.local_time && $("#header-clock")) {
+      $("#header-clock").textContent = data.local_time;
+    }
   }, 1000);
-  setInterval(loadPeers, 5000);
-  setInterval(() => {
+  startInterval(() => { loadPeers().catch(() => {}); }, 5000);
+  startInterval(renderTransferDock, 3000);
+  startInterval(() => {
     if (!state.wsConnected && state.selectedPeer && $("#chat-active") && !$("#chat-active").classList.contains("hidden")) {
-      loadMessages();
+      loadMessages().catch(() => {});
     }
   }, 4000);
 
 
-  fetch("/api/settings")
-    .then((r) => r.json())
-    .then((s) => {
-      state.settings = s;
-      showSetupIfNeeded(s);
-      fillSettingsForm(s);
+  async function initApp() {
+    const [settingsRes, versionRes] = await Promise.all([
+      apiGet("/api/settings", { fallback: {} }),
+      apiGet("/api/version", { fallback: {} }),
+    ]);
+    if (settingsRes.ok && settingsRes.data) {
+      state.settings = settingsRes.data;
+      showSetupIfNeeded(settingsRes.data);
+      fillSettingsForm(settingsRes.data);
       applyClockVisibility();
-    })
-    .catch(() => {});
+    }
+    if (versionRes.ok && versionRes.data?.version) {
+      const ver = $("#stat-version");
+      if (ver) ver.textContent = `v${versionRes.data.version}`;
+    }
+    const status = await fetchStatus();
+    if (!status || !Object.keys(status).length) {
+      toast("Failed to load status", "error");
+    }
+  }
 
-  fetch("/api/version")
-    .then((r) => r.json())
-    .then((data) => {
-      if (data.version) $("#stat-version").textContent = `v${data.version}`;
-    })
-    .catch(() => {});
-
-  fetch("/api/status")
-    .then((r) => r.json())
-    .then(renderStatus)
-    .catch(() => toast("Failed to load status"));
+  initApp().catch((err) => {
+    console.warn("init failed:", err);
+    toast("Failed to initialize app", "error");
+  });
 })();

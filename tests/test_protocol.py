@@ -48,13 +48,21 @@ def test_message_header() -> None:
 
 
 def test_file_chunk_pack_unpack() -> None:
-    tid = "abcd1234efgh5678"
+    tid = "abcd1234ef567890"
     data = b"chunk data here"
     packed = pack_file_chunk(tid, 4096, data)
     out_tid, offset, out_data = unpack_file_chunk(packed)
     assert out_tid == tid
     assert offset == 4096
     assert out_data == data
+
+
+def test_transfer_id_normalization() -> None:
+    from srltcp.core.protocol.messages import normalize_transfer_id
+
+    full = "a" * 32
+    assert normalize_transfer_id(full) == "a" * 16
+    assert normalize_transfer_id(f"  {full.upper()}  ") == "a" * 16
 
 
 def test_identity_hash_deterministic() -> None:

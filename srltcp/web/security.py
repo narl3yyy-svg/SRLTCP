@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from aiohttp import web
 
 ALLOWED_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]"})
+ALLOWED_ORIGIN_HOSTS = ALLOWED_HOSTS
 
 SECURITY_HEADERS = {
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
@@ -17,8 +20,10 @@ SECURITY_HEADERS = {
         "script-src 'self'; "
         "style-src 'self' https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com; "
-        "connect-src 'self' https://127.0.0.1:* wss://127.0.0.1:*; "
-        "img-src 'self' data:; "
+        "connect-src 'self' https://127.0.0.1:* wss://127.0.0.1:* "
+        "https://localhost:* wss://localhost:*; "
+        "img-src 'self' data: blob:; "
+        "media-src 'self' blob:; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self'"
@@ -26,9 +31,28 @@ SECURITY_HEADERS = {
 }
 
 
+def _origin_host(value: str) -> str | None:
+    if not value:
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme not in ("https", "http"):
+        return None
+    host = (parsed.hostname or "").lower()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    return host or None
+
+
+def _is_allowed_origin(value: str) -> bool:
+    host = _origin_host(value)
+    return bool(host and host in ALLOWED_ORIGIN_HOSTS)
+
+
 @web.middleware
 async def security_middleware(request: web.Request, handler):  # type: ignore[no-untyped-def]
     host = request.host.split(":")[0].lower()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
     if host not in ALLOWED_HOSTS:
         raise web.HTTPForbidden(text="SRLTCP web UI is localhost-only")
 
@@ -37,13 +61,13 @@ async def security_middleware(request: web.Request, handler):  # type: ignore[no
             request.method, ["GET", "HEAD", "OPTIONS", "POST", "DELETE", "PATCH"]
         )
 
-    # Origin check for state-changing requests
     if request.method in ("POST", "DELETE", "PATCH"):
         origin = request.headers.get("Origin", "")
-        if origin:
-            origin_host = origin.split("//")[-1].split(":")[0].lower()
-            if origin_host not in ALLOWED_HOSTS:
-                raise web.HTTPForbidden(text="Invalid origin")
+        referer = request.headers.get("Referer", "")
+        if origin and not _is_allowed_origin(origin):
+            raise web.HTTPForbidden(text="Invalid origin")
+        if referer and not _is_allowed_origin(referer):
+            raise web.HTTPForbidden(text="Invalid referer")
 
     response = await handler(request)
     for key, value in SECURITY_HEADERS.items():

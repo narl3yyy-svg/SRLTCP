@@ -14,6 +14,7 @@ from aiohttp import web
 from srltcp import __version__
 from srltcp.core.messaging.share_peer import SHARE_DOWNLOAD_LIMITS, SHARE_TTL_SECONDS
 from srltcp.core.settings import AppSettings, SettingsStore
+from srltcp.core.protocol.messages import is_valid_transfer_id
 from srltcp.core.trusted import TrustedPeer, is_valid_hash_id
 from srltcp.utils.folders import list_directory
 from srltcp.utils.logging import get_logger
@@ -366,6 +367,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         from srltcp.core.messaging.models import TransferState
 
         transfer_id = request.match_info.get("transfer_id", "")
+        if not is_valid_transfer_id(transfer_id):
+            return web.json_response({"error": "invalid transfer_id"}, status=400)
         transfer = node.backend._transfers.get(transfer_id)
         if not transfer:
             return web.json_response({"error": "transfer not found"}, status=404)
@@ -608,6 +611,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
 
     async def cancel_transfer(request: web.Request) -> web.Response:
         transfer_id = request.match_info.get("transfer_id", "")
+        if not is_valid_transfer_id(transfer_id):
+            return web.json_response({"error": "invalid transfer_id"}, status=400)
         transfer = node.backend._transfers.get(transfer_id)
         if not transfer:
             return web.json_response({"error": "transfer not found"}, status=404)

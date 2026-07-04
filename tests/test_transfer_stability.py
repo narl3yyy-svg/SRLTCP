@@ -109,7 +109,7 @@ async def test_recover_incoming_waits_for_pending_chunk_tasks(
 
     digest = hashlib.sha256(payload).hexdigest()
     transfer = FileTransfer(
-        id="tid-chunk",
+        id="aabbccddeeff0101",
         sender_hash=sender,
         recipient_hash=recipient,
         filename="file.bin",
@@ -120,8 +120,8 @@ async def test_recover_incoming_waits_for_pending_chunk_tasks(
         state=TransferState.TRANSFERRING,
         offset=0,
     )
-    backend._transfers["tid-chunk"] = transfer
-    backend._incoming_paths["tid-chunk"] = dest
+    backend._transfers[transfer.id] = transfer
+    backend._incoming_paths[transfer.id] = dest
 
     async def slow_chunk() -> None:
         await asyncio.sleep(0.05)
@@ -158,7 +158,7 @@ async def test_incoming_transfer_auto_finalizes_when_all_bytes_received(
 
     digest = hashlib.sha256(payload).hexdigest()
     transfer = FileTransfer(
-        id="tid-auto",
+        id="aabbccddeeff0102",
         sender_hash=sender,
         recipient_hash=recipient,
         filename="shot.png",
@@ -169,13 +169,13 @@ async def test_incoming_transfer_auto_finalizes_when_all_bytes_received(
         state=TransferState.TRANSFERRING,
         offset=len(payload),
     )
-    backend._transfers["tid-auto"] = transfer
-    backend._incoming_paths["tid-auto"] = dest
+    backend._transfers[transfer.id] = transfer
+    backend._incoming_paths[transfer.id] = dest
     backend._on_transfer_complete = AsyncMock()
 
     with patch("srltcp.core.messaging.transfer.fsync_file", AsyncMock()):
         ok = await backend._maybe_finalize_incoming_transfer(
-            "tid-auto", peer_hash=sender
+            transfer.id, peer_hash=sender
         )
     assert ok is True
     assert transfer.state == TransferState.COMPLETE

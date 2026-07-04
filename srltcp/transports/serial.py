@@ -73,11 +73,15 @@ class SerialTransport(Transport):
             self._reader_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._reader_task
+            self._reader_task = None
         if self._serial and self._serial.is_open:
-            self._serial.close()
+            with contextlib.suppress(Exception):
+                self._serial.close()
+            self._serial = None
         if self._peer:
             await self._emit_event(TransportEvent(kind="disconnected", peer=self._peer))
         self._peer = None
+        self._frame_reader = FrameReader()
 
     async def _read_loop(self) -> None:
         loop = asyncio.get_running_loop()
@@ -94,10 +98,15 @@ class SerialTransport(Transport):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if not self._running:
+                    break
                 self._frame_errors += 1
+                log.warning("Serial read error on %s: %s", self.port, exc)
                 await self._emit_event(
                     TransportEvent(kind="error", error=str(exc), peer=self._peer)
                 )
+                if not self._serial or not self._serial.is_open:
+                    break
                 await asyncio.sleep(0.5)
 
     async def send(self, peer_id: str, payload: bytes) -> None:

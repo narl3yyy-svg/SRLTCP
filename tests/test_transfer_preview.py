@@ -15,8 +15,9 @@ from srltcp.routes.api import register_api_routes
 @pytest.mark.asyncio
 async def test_transfer_file_blocks_inline_until_complete(tmp_path: Path) -> None:
     node = MagicMock()
+    tid = "aabbccddeeff0011"
     transfer = FileTransfer(
-        id="tid123",
+        id=tid,
         sender_hash="a" * 32,
         recipient_hash="b" * 32,
         filename="clip.mp4",
@@ -27,12 +28,12 @@ async def test_transfer_file_blocks_inline_until_complete(tmp_path: Path) -> Non
         state=TransferState.TRANSFERRING,
     )
     transfer.path.write_bytes(b"\x00" * 512)
-    node.backend._transfers = {"tid123": transfer}
+    node.backend._transfers = {tid: transfer}
     app = web.Application()
     register_api_routes(app, node)
 
     request = MagicMock()
-    request.match_info = {"transfer_id": "tid123"}
+    request.match_info = {"transfer_id": tid}
     request.rel_url.query = {}
 
     handler = None
@@ -55,8 +56,9 @@ async def test_transfer_file_prefers_incoming_path(tmp_path: Path) -> None:
     node = MagicMock()
     incoming = tmp_path / "received.png"
     incoming.write_bytes(b"\x89PNG\r\n\x1a\n")
+    tid = "aabbccddeeff0022"
     transfer = FileTransfer(
-        id="tid-in",
+        id=tid,
         sender_hash="a" * 32,
         recipient_hash="b" * 32,
         filename="shot.png",
@@ -66,13 +68,13 @@ async def test_transfer_file_prefers_incoming_path(tmp_path: Path) -> None:
         transport="serial",
         state=TransferState.COMPLETE,
     )
-    node.backend._transfers = {"tid-in": transfer}
-    node.backend._incoming_paths = {"tid-in": incoming}
+    node.backend._transfers = {tid: transfer}
+    node.backend._incoming_paths = {tid: incoming}
     app = web.Application()
     register_api_routes(app, node)
 
     request = MagicMock()
-    request.match_info = {"transfer_id": "tid-in"}
+    request.match_info = {"transfer_id": tid}
     request.rel_url.query = {}
 
     handler = None
