@@ -119,7 +119,12 @@ jobs:
           set -o pipefail
           test -d "$ANDROIDNDK"
           test -x "$ANDROIDSDK/tools/bin/sdkmanager"
-          buildozer -v android debug -- --arch arm64-v8a 2>&1 | tee ../buildozer.log
+          buildozer android clean
+          buildozer -v android debug 2>&1 | tee ../buildozer.log
+          if grep -E 'Creating build for arch armeabi|build-armeabi' ../buildozer.log; then
+            echo "Unexpected armeabi-v7a build — check android.archs in buildozer.spec"
+            exit 1
+          fi
 
       - name: Upload build log on failure
         if: failure()

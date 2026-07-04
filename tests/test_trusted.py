@@ -115,8 +115,10 @@ def test_trusted_load_strips_fixture_peers(tmp_path: Path) -> None:
     path = tmp_path / "trusted.json"
     path.write_text(
         '{"peers": ['
-        '{"hash_id": "deadbeefdeadbeefdeadbeefdeadbeef", "name": "peer", "transport": "tcp", "tcp_host": "127.0.0.1"},'
-        '{"hash_id": "f582abe442e8e2a7c67039ec0e329d6d", "name": "339sdf", "transport": "tcp", "tcp_host": "10.0.30.101"}'
+        '{"hash_id": "deadbeefdeadbeefdeadbeefdeadbeef", "name": "peer", '
+        '"transport": "tcp", "tcp_host": "127.0.0.1"},'
+        '{"hash_id": "f582abe442e8e2a7c67039ec0e329d6d", "name": "339sdf", '
+        '"transport": "tcp", "tcp_host": "10.0.30.101"}'
         "]}",
         encoding="utf-8",
     )

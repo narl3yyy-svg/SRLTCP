@@ -7,7 +7,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
 
-**Current version:** 0.1.41
+**Current version:** 0.1.42
 
 ---
 
@@ -141,9 +141,23 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 ### End-to-end encryption
 
 1. **Handshake** — Ephemeral X25519 keys, signed by Ed25519 identity keys
-2. **Session keys** — HKDF-derived AES-256 keys (separate send/recv)
-3. **Payloads** — AES-GCM with 12-byte nonces; all messages and file metadata encrypted
-4. **File chunks** — Encrypted per-chunk; optional zstd compression (flag bit)
+2. **Session keys** — HKDF-derived AES-256 keys (separate send/recv) via HKDF-SHA256 with labels `srltcp-v2-send` / `srltcp-v2-recv`
+3. **Payloads** — AES-256-GCM with 12-byte nonces; all chat text, file offers, and metadata are encrypted (`Flags.ENCRYPTED | Flags.E2EE`)
+4. **File chunks** — Each chunk is encrypted before it leaves your node; TCP may apply zstd compression **before** encryption (flag bit). Larger 1 MiB TCP chunks improve throughput only — they do **not** weaken encryption.
+
+### How data is transferred
+
+| Path | What travels on the wire | Encrypted? |
+|------|--------------------------|------------|
+| **TCP / WAN (port 7825)** | Framed binary protocol after handshake | Yes — payloads are opaque AES-GCM blobs |
+| **USB Serial** | Same framed protocol over serial | Yes — identical E2EE session |
+| **UDP discovery (7826)** | Peer announces (hash, name, endpoints) | No — discovery metadata is plaintext on LAN |
+| **Web UI (9876)** | Browser ↔ local node over HTTPS | Localhost TLS only; chat/file APIs proxy local data |
+| **Relay (optional 7827)** | `RELAY_ENVELOPE` route token + opaque blob | Relay sees routing metadata only, not content |
+
+**File transfer flow:** upload to local staging → `FILE_OFFER` (encrypted JSON) → `FILE_ACCEPT` → encrypted `FILE_CHUNK` stream → `FILE_COMPLETE` with SHA-256 verify. The receiver writes to your configured incoming folder; the Web UI serves completed files from disk for preview/download.
+
+**WAN use:** Forward **TCP 7825** to your node. Traffic after handshake is E2EE. An observer on the internet can still see connection timing, packet sizes, and your public IP — verify peer hash IDs out-of-band before trusting. Set WAN host/port per contact (Add contact or contact menu → WAN).
 
 ### Relay privacy
 
@@ -153,6 +167,15 @@ In relay mode, the server forwards `RELAY_ENVELOPE` packets containing only:
 - An opaque encrypted blob
 
 The relay **never receives session keys** and cannot decrypt message or file content.
+
+### What is not encrypted
+
+- LAN/UDP discovery announces (names, IPs, ports)
+- Connection metadata (who talks to whom, when, approximate sizes)
+- Local settings, trusted-peer list, and chat history on disk
+- Self-signed localhost HTTPS certificate (browser trust is manual)
+
+See [SECURITY.md](SECURITY.md) for vulnerability reporting and operator hardening.
 
 ### Web UI hardening (v0.1.1+)
 
@@ -469,6 +492,16 @@ pytest tests/ -v                # unit tests only
 ## Changelog
 
 See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
+
+### v0.1.42
+
+- **Image preview** — screenshots/images show in chat only after transfer completes (sender and receiver); fixes broken serial/TCP previews
+- **Serial link %** — smoothed RTT + EMA display (reduces 62↔82% flicker; still RTT-based, not RF RSSI)
+- **Transfer UI** — removed bottom transfer dock; in-message progress bar retained
+- **Add contact** — WAN host, port, enable, and connection mode fields
+- **Settings UI** — compact folder browser; readable Restart button
+- **Android CI** — `buildozer android clean` + spec-only `arm64-v8a` (no dual-arch `--arch` flag)
+- **Docs** — expanded README security and data-transfer tables
 
 ### v0.1.41
 

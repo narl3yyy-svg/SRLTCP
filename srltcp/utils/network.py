@@ -28,7 +28,7 @@ def broadcast_targets(prefix_len: int | None = None) -> list[str]:
 def primary_ipv4() -> str:
     """Best-effort primary LAN IPv4 for announce payloads."""
     for iface in list_interfaces():
-        ip = iface.get("ip", "")
+        ip = str(iface.get("ip", "") or "")
         if ip and not ip.startswith("127."):
             return ip
     try:

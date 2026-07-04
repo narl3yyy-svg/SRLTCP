@@ -26,15 +26,10 @@ _FIXTURE_HASHES = frozenset(
 
 def is_fixture_peer(peer: TrustedPeer) -> bool:
     """Detect pytest/dev fixture peers that leaked into the live data dir."""
-    if peer.hash_id in _FIXTURE_HASHES:
-        return True
-    if peer.name.strip().lower() in _GENERIC_NAMES and peer.tcp_host in {
-        "",
-        "127.0.0.1",
-        "10.0.0.5",
-    }:
-        return True
-    return False
+    return peer.hash_id in _FIXTURE_HASHES or (
+        peer.name.strip().lower() in _GENERIC_NAMES
+        and peer.tcp_host in {"", "127.0.0.1", "10.0.0.5"}
+    )
 
 
 def is_valid_hash_id(hash_id: str) -> bool:

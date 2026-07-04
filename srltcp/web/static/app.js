@@ -35,7 +35,7 @@
     pendingTransferPatches: new Map(),
     dropTargetHash: null,
     folderSendTarget: null,
-    finishedTransferIds: new Set(),
+
     wanModalTarget: null,
     shareMode: "browse",
     shareGrants: { local: [], remote: [] },
@@ -323,7 +323,6 @@
         case "transfer_progress":
         case "transfer_complete":
           state.transfers[data.id] = data;
-          updateTransferDock(data);
           syncTransferMessage(data);
           if (state.selectedPeer) updateChatTransfer(data);
           if (type === "transfer_complete") {
@@ -333,8 +332,11 @@
               data.filename || "File received",
               { tag: `transfer-${data.id}` }
             );
-            hideTransferDockIfDone(data.id);
             refreshTransferBubble(data.id, data, { scroll: !!state.selectedPeer });
+            const msg = messageForTransfer(data.id);
+            if (msg && (msg.msg_type === "image" || msg.msg_type === "video")) {
+              renderMessages(state.messageCache, { scrollToBottom: !!state.selectedPeer });
+            }
           }
           break;
         case "share_offer":
@@ -423,6 +425,10 @@
     const transport = $("#add-contact-transport")?.value || "tcp";
     const tcpHost = ($("#add-contact-host")?.value || "").trim();
     const tcpPort = parseInt($("#add-contact-port")?.value || "7825", 10);
+    const wanHost = ($("#add-contact-wan-host")?.value || "").trim();
+    const wanPort = parseInt($("#add-contact-wan-port")?.value || "7825", 10);
+    const wanEnabled = !!$("#add-contact-wan-enabled")?.checked;
+    const connectionMode = $("#add-contact-wan-mode")?.value || "auto";
     if (!/^[0-9a-f]{32}$/.test(hashId)) {
       toast("Hash ID must be exactly 32 hex characters");
       return;
@@ -436,6 +442,10 @@
         transport,
         tcp_host: tcpHost,
         tcp_port: tcpPort,
+        wan_host: wanHost,
+        wan_port: wanPort,
+        wan_enabled: wanEnabled,
+        connection_mode: connectionMode,
       }),
     });
     const data = await res.json();
@@ -805,10 +815,6 @@
       return false;
     }
     const sent = await res.json();
-    if (sent.id) {
-      state.finishedTransferIds.delete(sent.id);
-      updateTransferDock(sent);
-    }
     toast(`Sending ${file.name}…`);
     if (state.selectedPeer === hashId) loadMessages();
     renderTransfers();
@@ -847,10 +853,6 @@
       return false;
     }
     const sent = await res.json();
-    if (sent.id) {
-      state.finishedTransferIds.delete(sent.id);
-      updateTransferDock(sent);
-    }
     toast(`Sending folder ${folderName}.zip…`);
     if (state.selectedPeer === hashId) loadMessages();
     renderTransfers();
@@ -1719,11 +1721,11 @@
     const cancelled = stateLabel === "cancelled";
     const failed = stateLabel === "failed";
     const stateClass = cancelled ? " cancelled" : failed ? " failed" : "";
-    const canPreviewImage = m.msg_type === "image" && fileUrl
-      && (out || offset > 0 || ["complete", "transferring", "accepted"].includes(stateLabel));
-    const canPreviewVideo = m.msg_type === "video" && fileUrl
-      && (out ? offset > 0 || ["complete", "transferring", "accepted"].includes(stateLabel)
-        : stateLabel === "complete");
+    const canPreviewImage = m.msg_type === "image" && fileUrl && stateLabel === "complete";
+    const canPreviewVideo = m.msg_type === "video" && fileUrl && stateLabel === "complete";
+    const previewUrl = canPreviewImage || canPreviewVideo
+      ? `${fileUrl}?v=${encodeURIComponent(stateLabel)}`
+      : fileUrl;
     const progressLine = stateLabel === "complete"
       ? `${formatBytes(size)} · complete`
       : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr}`;
@@ -1738,8 +1740,8 @@
 
     if (canPreviewImage) {
       return `<div class="file-bubble image-bubble${stateClass}" data-transfer="${escapeHtml(tid)}">
-        <button type="button" class="media-preview-btn" data-media-open="${escapeHtml(fileUrl)}" data-media-kind="image" data-media-name="${escapeHtml(filename)}">
-          <img src="${fileUrl}" alt="${escapeHtml(filename)}" class="chat-image" loading="lazy" />
+        <button type="button" class="media-preview-btn" data-media-open="${escapeHtml(previewUrl)}" data-media-kind="image" data-media-name="${escapeHtml(filename)}">
+          <img src="${previewUrl}" alt="${escapeHtml(filename)}" class="chat-image" loading="lazy" />
         </button>
         <div class="file-name">${escapeHtml(filename)}</div>
         <div class="file-progress-meta">${cancelled ? "Transfer cancelled" : progressLine}</div>
@@ -1750,8 +1752,8 @@
 
     if (canPreviewVideo) {
       return `<div class="file-bubble video-bubble${stateClass}" data-transfer="${escapeHtml(tid)}">
-        <button type="button" class="media-preview-btn" data-media-open="${escapeHtml(fileUrl)}" data-media-kind="video" data-media-name="${escapeHtml(filename)}">
-          <video src="${fileUrl}" class="chat-video" controls preload="metadata" playsinline></video>
+        <button type="button" class="media-preview-btn" data-media-open="${escapeHtml(previewUrl)}" data-media-kind="video" data-media-name="${escapeHtml(filename)}">
+          <video src="${previewUrl}" class="chat-video" controls preload="metadata" playsinline></video>
         </button>
         <div class="file-name">${escapeHtml(filename)}</div>
         <div class="file-progress-meta">${cancelled ? "Transfer cancelled" : progressLine}</div>
@@ -1853,15 +1855,10 @@
   }
 
   function bubbleNeedsMediaRender(msg, bubble, data) {
-    if (!msg || !bubble) return false;
+    if (!msg) return false;
     if (msg.msg_type !== "image" && msg.msg_type !== "video") return false;
-    const stateLabel = data.state || "";
-    const hasMediaShell = bubble.classList.contains("image-bubble")
-      || bubble.classList.contains("video-bubble");
-    if (stateLabel === "complete" && !hasMediaShell) return true;
-    if (msg.msg_type === "image" && stateLabel === "transferring"
-        && (data.offset || 0) > 0 && !hasMediaShell) return true;
-    return false;
+    const stateLabel = data.state || msg.metadata?.state || "";
+    return stateLabel === "complete";
   }
 
   function refreshTransferBubble(transferId, data, { scroll = false } = {}) {
@@ -2093,7 +2090,12 @@
       };
       if (["complete", "failed", "cancelled"].includes(data.state)) {
         refreshTransferBubble(data.id, data, { scroll: data.state === "complete" });
-        if (data.state === "complete") hideTransferDockIfDone(data.id);
+        if (data.state === "complete") {
+          const msg = messageForTransfer(data.id);
+          if (msg && (msg.msg_type === "image" || msg.msg_type === "video")) {
+            renderMessages(state.messageCache, { scrollToBottom: true });
+          }
+        }
         return;
       }
       scheduleTransferPatch(data.id, data);
@@ -2127,6 +2129,11 @@
         state.messageCache[idx] = m;
         if (tid) {
           state.transfers[tid] = { ...state.transfers[tid], ...m.metadata, id: tid };
+          const done = ["complete", "failed", "cancelled"].includes(m.metadata?.state);
+          if (done && (m.msg_type === "image" || m.msg_type === "video")) {
+            refreshTransferBubble(tid, state.transfers[tid], { scroll: m.metadata?.state === "complete" });
+            return;
+          }
           if (patchTransferBubble(tid, state.transfers[tid])) return;
           if (["transferring", "accepted", "offered"].includes(m.metadata?.state)) {
             scheduleTransferPatch(tid, state.transfers[tid]);
@@ -2209,126 +2216,6 @@
     state.settingsFormDirty = false;
   }
 
-  function hasActiveTransfers() {
-    return Object.values(state.transfers).some((t) => ACTIVE_TRANSFER_STATES.has(t.state));
-  }
-
-  function closeTransferDock() {
-    const dock = $("#transfer-dock");
-    if (!dock) return;
-    dock.classList.add("hidden");
-    delete dock.dataset.transferId;
-  }
-
-  function updateTransferDock(data) {
-    const dock = $("#transfer-dock");
-    if (!dock || !data) return;
-    if (data.id && state.finishedTransferIds.has(data.id)) {
-      if (dock.dataset.transferId === data.id) closeTransferDock();
-      return;
-    }
-    if (data.id) state.transfers[data.id] = { ...state.transfers[data.id], ...data };
-    const active = ACTIVE_TRANSFER_STATES.has(data.state);
-    const done = ["complete", "failed", "cancelled", "rejected"].includes(data.state);
-    if (done) {
-      if (data.id) state.finishedTransferIds.add(data.id);
-      if (data.state === "cancelled") {
-        toast(`Transfer cancelled: ${data.filename || "file"}`, "warning");
-      } else if (data.state === "complete") {
-        markTransferCooldown(data.sender_hash, data.recipient_hash);
-      }
-      hideTransferDockIfDone(data.id);
-      return;
-    }
-    if (!active) return;
-    dock.classList.remove("hidden");
-    const pct = data.size ? Math.min(100, Math.round((data.offset / data.size) * 100)) : 0;
-    const speedEl = $("#transfer-dock-speed");
-    const speed = data.speed_mbps ? Number(data.speed_mbps).toFixed(2) : "0.00";
-    if (speedEl) speedEl.textContent = `${speed} MB/s`;
-    const fill = $("#transfer-dock-fill");
-    if (fill) fill.style.width = `${pct}%`;
-    dock.dataset.transferId = data.id;
-  }
-
-  function syncTransferDockVisibility() {
-    const dock = $("#transfer-dock");
-    if (!dock || dock.classList.contains("hidden")) return;
-    const currentId = dock.dataset.transferId;
-    if (!currentId) {
-      closeTransferDock();
-      return;
-    }
-    const current = state.transfers[currentId];
-    if (!current || !ACTIVE_TRANSFER_STATES.has(current.state) || state.finishedTransferIds.has(currentId)) {
-      closeTransferDock();
-    }
-  }
-
-  function pruneCompletedTransfers() {
-    Object.keys(state.transfers).forEach((id) => {
-      const t = state.transfers[id];
-      if (!t || !ACTIVE_TRANSFER_STATES.has(t.state)) {
-        delete state.transfers[id];
-      }
-    });
-  }
-
-  function hideTransferDockIfDone(transferId) {
-    if (transferId) {
-      delete state.transfers[transferId];
-      state.finishedTransferIds.add(transferId);
-    }
-    pruneCompletedTransfers();
-    const dock = $("#transfer-dock");
-    if (!transferId || dock?.dataset.transferId === transferId) {
-      closeTransferDock();
-    }
-  }
-
-  async function pollTransfers() {
-    try {
-      const res = await fetch("/api/transfers");
-      const transfers = await res.json();
-      const dock = $("#transfer-dock");
-      const dockId = dock?.dataset.transferId;
-      transfers.forEach((t) => {
-        if (t.id === dockId && ACTIVE_TRANSFER_STATES.has(t.state)) {
-          state.transfers[t.id] = t;
-          updateTransferDock(t);
-        } else if (t.id && state.finishedTransferIds.has(t.id)) {
-          delete state.transfers[t.id];
-        }
-      });
-      if (dockId && !transfers.some((t) => t.id === dockId && ACTIVE_TRANSFER_STATES.has(t.state))) {
-        hideTransferDockIfDone(dockId);
-      }
-    } catch (_) { /* ignore */ }
-  }
-
-  async function cancelActiveTransfer() {
-    const dock = $("#transfer-dock");
-    const id = dock?.dataset.transferId;
-    if (!id) return;
-    const t = state.transfers[id];
-    if (!t || !ACTIVE_TRANSFER_STATES.has(t.state)) {
-      hideTransferDockIfDone(id);
-      syncTransferDockVisibility();
-      return;
-    }
-    const res = await fetch(`/api/transfers/${encodeURIComponent(id)}/cancel`, { method: "POST" });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      toast(data.error || "Transfer already finished", "warning");
-      hideTransferDockIfDone(id);
-      return;
-    }
-    toast("Transfer cancelled");
-    hideTransferDockIfDone(id);
-    renderTransfers();
-    loadMessages();
-  }
-
   function closeSidebarMobile() {
     $("#sidebar").classList.remove("open");
   }
@@ -2350,8 +2237,6 @@
     tab.addEventListener("click", () => switchSettingsTab(tab.dataset.tab));
   });
   $("#set-clock-source")?.addEventListener("change", toggleNtpField);
-  $("#transfer-dock-cancel")?.addEventListener("click", cancelActiveTransfer);
-
   $("#btn-back").addEventListener("click", () => {
     $("#chat-active").classList.add("hidden");
     $("#chat-empty").classList.remove("hidden");
@@ -2640,8 +2525,7 @@
     } catch (_) { /* ignore */ }
   }, 1000);
   setInterval(loadPeers, 5000);
-  setInterval(pollTransfers, 2500);
-  pollTransfers();
+
 
   fetch("/api/settings")
     .then((r) => r.json())

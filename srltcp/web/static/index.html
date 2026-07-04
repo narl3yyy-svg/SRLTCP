@@ -108,14 +108,6 @@
 
         <div class="messages" id="messages" role="log" aria-live="polite"></div>
 
-        <div class="transfer-dock hidden" id="transfer-dock" aria-live="polite">
-          <div class="transfer-dock-inner">
-            <div class="progress-track transfer-dock-progress"><div class="progress-fill" id="transfer-dock-fill"></div></div>
-            <span class="transfer-dock-speed" id="transfer-dock-speed">0.00 MB/s</span>
-          </div>
-          <button type="button" class="transfer-dock-cancel" id="transfer-dock-cancel" title="Cancel transfer" aria-label="Cancel transfer">✕</button>
-        </div>
-
         <footer class="composer">
           <div class="composer-inner">
             <textarea id="msg-input" rows="1" placeholder="Message…" disabled></textarea>
@@ -450,7 +442,7 @@
     <div class="modal-overlay" id="add-contact-modal">
       <div class="modal-card">
         <h3>Add contact manually</h3>
-        <p class="hint">Enter a peer's 32-character hash ID (from their SRLTCP profile). Optionally set LAN host/port to connect without discovery.</p>
+        <p class="hint">Enter a peer's 32-character hash ID (from their SRLTCP profile). Set LAN and/or WAN host/port for manual connections when discovery is unavailable.</p>
         <label class="field"><span>Hash ID</span>
           <input type="text" id="add-contact-hash" placeholder="32 hex characters" autocomplete="off" spellcheck="false" />
         </label>
@@ -466,8 +458,26 @@
         <label class="field"><span>LAN host (optional)</span>
           <input type="text" id="add-contact-host" placeholder="e.g. 10.0.0.5" />
         </label>
-        <label class="field"><span>TCP port</span>
+        <label class="field"><span>LAN TCP port</span>
           <input type="number" id="add-contact-port" value="7825" min="1" max="65535" />
+        </label>
+        <h4 class="drawer-subhead">WAN (optional)</h4>
+        <label class="field"><span>WAN host or domain</span>
+          <input type="text" id="add-contact-wan-host" placeholder="203.0.113.10 or peer.example.com" />
+        </label>
+        <label class="field"><span>WAN TCP port</span>
+          <input type="number" id="add-contact-wan-port" value="7825" min="1" max="65535" />
+        </label>
+        <label class="field checkbox-field">
+          <input type="checkbox" id="add-contact-wan-enabled" />
+          <span>Enable WAN endpoint for this contact</span>
+        </label>
+        <label class="field"><span>Connection mode</span>
+          <select id="add-contact-wan-mode">
+            <option value="auto">Auto (LAN first, then WAN)</option>
+            <option value="lan">LAN only</option>
+            <option value="wan">WAN only</option>
+          </select>
         </label>
         <div class="modal-actions">
           <button type="button" class="action-btn secondary" id="add-contact-cancel">Cancel</button>

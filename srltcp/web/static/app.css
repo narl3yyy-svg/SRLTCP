@@ -769,47 +769,6 @@ body {
   background: rgba(0,0,0,0.12);
 }
 
-.transfer-dock {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.85rem;
-  background: rgba(18, 22, 32, 0.92);
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.transfer-dock-inner {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  min-width: 0;
-}
-.transfer-dock-progress {
-  flex: 1;
-  margin: 0;
-  height: 5px;
-}
-.transfer-dock-speed {
-  font-family: var(--mono);
-  font-size: 0.68rem;
-  color: var(--text-muted);
-  white-space: nowrap;
-  min-width: 4.5rem;
-  text-align: right;
-}
-.transfer-dock-cancel {
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  cursor: pointer;
-  padding: 0.2rem 0.35rem;
-  border-radius: 4px;
-  line-height: 1;
-}
-.transfer-dock-cancel:hover { color: var(--danger); background: rgba(240, 113, 120, 0.1); }
-
 .bubble { position: relative; }
 .bubble-actions {
   display: none;
@@ -1305,7 +1264,14 @@ body {
 }
 .identity-actions { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
 .action-btn.small { font-size: 0.68rem; padding: 0.25rem 0.5rem; }
-.action-btn.danger-btn { background: var(--danger); margin-top: 0.5rem; }
+.action-btn.danger-btn {
+  background: #c42b3a;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  margin-top: 0.5rem;
+  font-weight: 600;
+}
+.action-btn.danger-btn:hover { background: #a82230; color: #fff; }
 .modal-overlay {
   display: none;
   position: fixed;
@@ -1328,12 +1294,32 @@ body {
 }
 .modal-card.wide { width: min(640px, 100%); }
 .modal-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
-.folder-crumb {
+#folder-modal .modal-card {
+  display: flex;
+  flex-direction: column;
+  max-height: min(70vh, 520px);
+}
+#folder-modal .folder-crumb {
   font-family: var(--mono);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   color: var(--text-muted);
-  margin: 0.5rem 0;
+  margin: 0.25rem 0 0.35rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  max-height: 2.6rem;
+  overflow: auto;
   word-break: break-all;
+  flex-shrink: 0;
+}
+#folder-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.25rem;
+  margin-bottom: 0.5rem;
 }
 .folder-entry {
   display: block;

@@ -77,7 +77,7 @@ class PingMixin:
         self.discovery.update_metrics(link.hash_id, rtt_ms=rtt_ms)
         if link.transport == "serial" and self.serial_transport:
             self.serial_transport.record_ping_success(rtt_ms)
-            lq = self.serial_transport.link_quality_pct(rtt_ms=rtt_ms)
+            lq = self.serial_transport.link_quality_pct()
             link.link_quality_pct = lq
             self.discovery.update_metrics(link.hash_id, link_quality_pct=lq)
         if self._on_peer_metrics:

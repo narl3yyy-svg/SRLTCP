@@ -41,6 +41,7 @@ class SerialTransport(Transport):
         self._ping_ok = 0
         self._ping_fail = 0
         self._last_rtt_ms: float | None = None
+        self._last_link_quality_pct: float | None = None
 
     async def start(self) -> None:
         if self._running:
@@ -125,7 +126,12 @@ class SerialTransport(Transport):
 
     def record_ping_success(self, rtt_ms: float) -> None:
         self._ping_ok += 1
-        self._last_rtt_ms = rtt_ms
+        smoothed = (
+            rtt_ms
+            if self._last_rtt_ms is None
+            else (self._last_rtt_ms * 0.75) + (rtt_ms * 0.25)
+        )
+        self._last_rtt_ms = smoothed
 
     def record_ping_fail(self) -> None:
         self._ping_fail += 1
@@ -133,25 +139,23 @@ class SerialTransport(Transport):
     def last_rtt_ms(self) -> float | None:
         return self._last_rtt_ms
 
-    def link_quality_pct(self, *, rtt_ms: float | None = None) -> float:
-        """Estimate serial link quality from RTT and errors (not true RF RSSI)."""
+    def link_quality_pct(self) -> float:
+        """Estimate serial link quality from smoothed RTT and errors (not true RF RSSI)."""
         ping_total = self._ping_ok + self._ping_fail
         ping_score = 100.0
         if ping_total > 0:
             ping_score = (self._ping_ok / ping_total) * 100.0
         rtt_score = 100.0
-        effective_rtt = rtt_ms if rtt_ms is not None else self._last_rtt_ms
-        if effective_rtt is not None:
-            if effective_rtt <= 80:
-                rtt_score = 95.0
-            elif effective_rtt <= 200:
-                rtt_score = 82.0
-            elif effective_rtt <= 400:
-                rtt_score = 62.0
-            elif effective_rtt <= 800:
-                rtt_score = 42.0
-            else:
-                rtt_score = max(15.0, 100.0 - effective_rtt * 0.08)
+        if self._last_rtt_ms is not None:
+            # Continuous RTT estimate (not RF RSSI) — avoids bucket jumps at 200/400 ms
+            rtt_score = max(15.0, min(95.0, 100.0 - (self._last_rtt_ms / 12.0)))
         error_penalty = min(self._frame_errors * 8, 40)
         combined = min(ping_score, rtt_score) - error_penalty
-        return max(0.0, min(100.0, round(combined, 1)))
+        raw = max(0.0, min(100.0, round(combined / 5.0) * 5.0))
+        if self._last_link_quality_pct is None:
+            smoothed = raw
+        else:
+            smoothed = (self._last_link_quality_pct * 0.8) + (raw * 0.2)
+        smoothed = max(0.0, min(100.0, round(smoothed / 5.0) * 5.0))
+        self._last_link_quality_pct = smoothed
+        return smoothed

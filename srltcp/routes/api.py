@@ -73,6 +73,14 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                 tcp_port = int(tcp_port_raw)
             except (TypeError, ValueError):
                 return web.json_response({"error": "invalid tcp_port"}, status=400)
+            wan_port_raw = data.get("wan_port", 7825)
+            try:
+                wan_port = int(wan_port_raw)
+            except (TypeError, ValueError):
+                return web.json_response({"error": "invalid wan_port"}, status=400)
+            connection_mode = data.get("connection_mode", "auto")
+            if connection_mode not in ("auto", "lan", "wan"):
+                connection_mode = "auto"
             try:
                 peer = node.backend.trusted.add(
                     TrustedPeer(
@@ -82,6 +90,10 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                         public_key=data.get("public_key", ""),
                         tcp_host=(data.get("tcp_host") or "").strip(),
                         tcp_port=tcp_port,
+                        wan_host=(data.get("wan_host") or "").strip(),
+                        wan_port=wan_port,
+                        wan_enabled=bool(data.get("wan_enabled")),
+                        connection_mode=connection_mode,
                     )
                 ).to_dict()
             except ValueError as exc:

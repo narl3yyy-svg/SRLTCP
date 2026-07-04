@@ -1,5 +1,25 @@
 # SRLTCP Release Notes
 
+## v0.1.42 (2026-07-03)
+
+### Media & transfers
+- **Image preview** — chat shows image/video thumbnails only when transfer state is `complete` (fixes receiver missing preview and serial broken thumbnails)
+- **Transfer dock removed** — bottom progress bar removed; per-message transfer progress remains
+
+### Serial
+- **Link quality** — uses smoothed RTT (not per-ping spikes) plus EMA on displayed %; label is still an RTT/error estimate, not RF RSSI
+
+### UI
+- **Add contact** — optional WAN host, port, enable toggle, connection mode (auto/LAN/WAN)
+- **Folders modal** — scrollable file list; compact path breadcrumb
+- **Restart button** — higher contrast in Advanced settings
+
+### Android CI
+- **Single arch** — `buildozer android clean` then debug build from `android.archs = arm64-v8a` only (drops CLI `--arch` that caused dual-arch `grp` failures)
+
+### Docs
+- README security section — data paths, WAN notes, what is / is not encrypted
+
 ## v0.1.39 (2026-07-03)
 
 ### Launcher
