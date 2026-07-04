@@ -4,13 +4,13 @@ title = SRLTCP
 package.name = srltcp
 package.domain = org.srltcp
 
-source.dir = .
+source.dir = ..
 source.include_exts = py,png,jpg,kv,atlas
+source.exclude_dirs = tests, .git, .github, __pycache__, .pytest_cache, scripts, bin, .buildozer
 
 version = 1.0.0
 
-requirements = python3,kivy==2.2.1,srltcp
-requirements.source.srltcp = ../srltcp
+requirements = python3,kivy==2.2.1
 
 orientation = portrait
 fullscreen = 0
