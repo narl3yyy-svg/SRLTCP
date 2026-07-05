@@ -4,15 +4,17 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.webkit.SslErrorHandler
-import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.widget.FrameLayout
@@ -37,6 +39,14 @@ class MainActivity : AppCompatActivity() {
     ) { _ ->
         maybeStartForegroundService()
     }
+
+    private val requestStoragePermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ -> }
+
+    private val requestAllFilesAccess = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { _ -> }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,6 +83,8 @@ class MainActivity : AppCompatActivity() {
             wv.settings.domStorageEnabled = true
             wv.settings.allowFileAccess = false
             wv.settings.databaseEnabled = true
+            wv.settings.useWideViewPort = true
+            wv.settings.loadWithOverviewMode = true
             wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             wv.webViewClient = object : WebViewClientCompat() {
@@ -81,13 +93,18 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
+                    view.evaluateJavascript(
+                        "document.documentElement.classList.add('android-app');" +
+                            "if(window.applyMobileLayout)window.applyMobileLayout('android');",
+                        null
+                    )
                     statusView?.visibility = android.view.View.GONE
                     view.visibility = android.view.View.VISIBLE
                     maybeStartForegroundService()
                 }
 
                 override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
-                    val host = error.url.host
+                    val host = android.net.Uri.parse(error.url).host
                     if (host == "127.0.0.1" || host == "localhost") {
                         handler.proceed()
                     } else {
@@ -95,28 +112,68 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                override fun onReceivedError(
-                    view: WebView,
-                    request: WebResourceRequest,
-                    error: WebResourceError
-                ) {
-                    if (request.isForMainFrame) {
-                        Log.w(TAG, "WebView error: ${error.description}")
-                        scheduleLoad(2000)
-                    }
-                }
+
             }
             root.addView(wv)
         }
         setContentView(root)
 
+        requestNotificationIfNeeded()
+        requestStorageAccessThenStart()
+    }
+
+    private fun requestStorageAccessThenStart() {
+        beginServerStartup()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                requestAllFilesAccess.launch(
+                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                )
+            }
+            return
+        }
+
+        val needed = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            needed.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            needed.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        if (needed.isNotEmpty()) {
+            requestStoragePermissions.launch(needed.toTypedArray())
+        }
+    }
+
+    private fun beginServerStartup() {
         startPythonServer()
         waitForServerThenLoad()
-        requestNotificationIfNeeded()
     }
 
     private fun startPythonServer() {
-        if (serverThread?.isAlive == true) return
+        if (serverThread?.isAlive == true) {
+            try {
+                val py = Python.getInstance()
+                if (!py.getModule("srltcp.app").callAttr("is_android_server_ready").toBoolean()) {
+                    serverThread = null
+                } else {
+                    return
+                }
+            } catch (_: Exception) {
+                serverThread = null
+            }
+        }
         serverThread = Thread {
             try {
                 val py = Python.getInstance()
@@ -210,12 +267,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadWebUi() {
         val wv = webView ?: return
-        val port = resolvePort()
-        val ports = if (loadAttempt == 0) {
-            intArrayOf(port) + fallbackPorts.filter { it != port }.toIntArray()
-        } else {
-            fallbackPorts
+        if (!isServerReady()) {
+            waitForServerThenLoad()
+            return
         }
+        val port = resolvePort()
+        val ports = intArrayOf(port) + fallbackPorts.filter { it != port }.toIntArray()
         val idx = loadAttempt.coerceAtMost(ports.size - 1)
         loadAttempt++
         if (loadAttempt > ports.size + 8) {
@@ -226,6 +283,13 @@ class MainActivity : AppCompatActivity() {
         Log.i(TAG, "Loading $url (attempt $loadAttempt)")
         statusView?.text = "Connecting to $url …"
         wv.loadUrl(url)
+        handler.postDelayed({
+            if (wv.visibility != android.view.View.VISIBLE) {
+                Log.w(TAG, "Web UI not ready yet, retrying…")
+                loadAttempt = 0
+                scheduleLoad(2000)
+            }
+        }, 5000)
     }
 
     private fun resolvePort(): Int {
@@ -268,8 +332,30 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         webView?.onResume()
-        if (webView?.url.isNullOrBlank() && statusView?.visibility == android.view.View.VISIBLE) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            Environment.isExternalStorageManager() &&
+            serverThread?.isAlive != true
+        ) {
+            startPythonServer()
+            waitForServerThenLoad()
+            return
+        }
+        if (webView?.url.isNullOrBlank() &&
+            statusView?.visibility == android.view.View.VISIBLE &&
+            isServerReady()
+        ) {
             scheduleLoad(300)
+        }
+    }
+
+    private fun isServerReady(): Boolean {
+        return try {
+            Python.getInstance()
+                .getModule("srltcp.app")
+                .callAttr("is_android_server_ready")
+                .toBoolean()
+        } catch (_: Exception) {
+            false
         }
     }
 

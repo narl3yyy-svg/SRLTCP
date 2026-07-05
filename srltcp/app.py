@@ -28,6 +28,16 @@ _android_server_ready: bool = False
 _android_server_started: bool = False
 
 
+def _android_port_open(port: int) -> bool:
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="srltcp",
@@ -114,12 +124,16 @@ async def run_web(args: argparse.Namespace) -> None:
     settings = store.load()
     settings.version = __version__
 
+    from srltcp.utils.platform import is_android
+
+    if is_android():
+        settings.strict_ports = False
+
     requested_web_port = args.port or settings.web_port or WEB_PORT
     if args.name:
         settings.display_name = args.name
 
     config = _node_config_from_settings(settings, args)
-    from srltcp.utils.platform import is_android
 
     if is_android():
         config.enable_serial = False
@@ -225,28 +239,41 @@ def get_android_web_port() -> int:
 
 
 def is_android_server_ready() -> bool:
-    """True once the HTTPS site is bound (Android WebView should load after this)."""
-    return _android_server_ready
+    """True once the HTTPS site is bound and still accepting connections."""
+    global _android_server_ready
+    if not _android_server_ready:
+        return False
+    port = _android_web_port["port"]
+    if _android_port_open(port):
+        return True
+    _android_server_ready = False
+    return False
 
 
 def start_android_server() -> None:
-    """Entry point for Android Chaquopy runtime (background thread)."""
+    """Entry point for Android Chaquopy runtime."""
     import os
     import sys
 
     global _android_server_ready, _android_server_started
-    if _android_server_started:
+    if _android_server_started and is_android_server_ready():
         return
-    _android_server_started = True
+    _android_server_started = False
     _android_server_ready = False
+    _android_server_started = True
+
     os.environ["SRLTCP_ANDROID"] = "1"
     sys.argv = ["srltcp", "web", "--log-level", "INFO"]
+
     try:
         main()
     except Exception:
-        log.exception("Android server failed")
-        raise
+        _android_server_started = False
+        _android_server_ready = False
+        import logging
 
+        logging.exception("Android server failed")
+        raise
 
 def main() -> None:
     parser = build_parser()

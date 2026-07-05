@@ -41,7 +41,7 @@ bash scripts/build-android.sh
 Output:
 
 ```
-android/app/build/outputs/apk/debug/SRLTCP-0.1.50-debug.apk
+android/app/build/outputs/apk/debug/SRLTCP-0.1.51-debug.apk
 ```
 
 ### Manual steps
@@ -82,6 +82,21 @@ adb install -r android/app/build/outputs/apk/debug/SRLTCP-*-debug.apk
 
 Startup usually takes **5–30 seconds** on first launch while Python initializes.
 
+## Mobile UI (phone layout)
+
+The app reuses the same web UI as desktop, but `MainActivity` enables a **mobile layout** in the WebView:
+
+| Control | Action |
+|---------|--------|
+| **☰** (top-left) | Open/close the contacts sidebar (peers, announce, add contact) |
+| **⚙** (top-right) | Open Settings (full-screen on phone) |
+| **←** (in chat header) | Back to contacts sidebar |
+| Tap outside sidebar | Close the slide-out panel |
+
+On first launch the sidebar opens automatically so you can reach peers and settings immediately. Settings tabs, folder pickers, and other modals use the full screen height on Android.
+
+Incoming and shared files default to `Downloads/SRLTCP/` when storage access is granted (see storage permission prompt on first launch).
+
 ## Hub / network on Android
 
 - Configure **Settings → Network → Connect via hub server** like the desktop app.
@@ -97,6 +112,7 @@ Startup usually takes **5–30 seconds** on first launch while Python initialize
 | Gradle / Java errors | Use **JDK 17** (`export JAVA_HOME=/usr/lib/jvm/java-17-openjdk`) |
 | App shows "Python failed to start" | Re-run `sync-android-python.sh` and rebuild |
 | White screen | Wait 30s; check `adb logcat -s SRLTCP SRLTCPService python` |
+| Sidebar / settings not visible | Tap **☰** or **⚙** in the top bar — desktop sidebar is hidden off-screen on phones |
 | Chaquopy pip failures | Ensure network access during first Gradle build (downloads wheels) |
 
 ## Debug logcat

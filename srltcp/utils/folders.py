@@ -5,13 +5,46 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from srltcp.core.settings import android_downloads_root
+from srltcp.utils.platform import data_dir, is_android
+
+
+def _browse_roots() -> list[Path]:
+    """Directories the folder picker may list or validate under."""
+    roots: list[Path] = []
+    if is_android():
+        downloads = android_downloads_root()
+        if downloads:
+            roots.append(downloads.resolve())
+        roots.append(data_dir().resolve())
+    roots.append(Path.home().resolve())
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
 
 def _safe_root() -> Path:
-    return Path.home()
+    roots = _browse_roots()
+    return roots[0]
+
+
+def _is_under_roots(path: Path, roots: list[Path] | None = None) -> bool:
+    resolved = str(path.resolve())
+    for root in roots or _browse_roots():
+        root_s = str(root.resolve())
+        if resolved == root_s or resolved.startswith(root_s + "/"):
+            return True
+    return False
 
 
 def list_directory(path: str | None = None, *, dirs_only: bool = False) -> dict[str, Any]:
     """List a directory for the folder picker UI."""
+    roots = _browse_roots()
     root = _safe_root()
     target = Path(path).expanduser() if path else root
     try:
@@ -19,7 +52,7 @@ def list_directory(path: str | None = None, *, dirs_only: bool = False) -> dict[
     except OSError:
         target = root.resolve()
 
-    if not str(target).startswith(str(root.resolve())):
+    if not _is_under_roots(target, roots):
         target = root.resolve()
 
     if not target.is_dir():
@@ -61,8 +94,7 @@ def validate_folder(path: str) -> Path | None:
         resolved = p.resolve()
     except OSError:
         return None
-    root = _safe_root().resolve()
-    if not str(resolved).startswith(str(root)):
+    if not _is_under_roots(resolved):
         return None
     if not resolved.is_dir():
         return None

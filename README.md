@@ -1,12 +1,11 @@
 # SRLTCP
 
-[![Checks](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/checks.yml/badge.svg)](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/checks.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
 
-**Current version:** 0.1.50
+**Current version:** 0.1.51
 
 ---
 
@@ -64,7 +63,7 @@ srltcp/
 android/                    # Gradle + Chaquopy Android app (see android/README.md)
 tests/                      # pytest suite
 scripts/                    # Build helpers (check.sh, build-android.sh, sync-android-python.sh)
-.github/workflows/          # CI: checks.yml
+
 ```
 
 ### Data flow diagram
@@ -275,7 +274,7 @@ bash scripts/sync-android-python.sh
 
 **Android Studio:** open the `android/` folder, sync Gradle, then **Build APK**. Re-run `sync-android-python.sh` after editing `srltcp/`.
 
-**On the phone:** configure **Settings → Network → Connect via hub server** to reach peers without port-forwarding. Serial/USB is disabled on Android; TCP and hub work over Wi‑Fi.
+**On the phone:** the WebView uses a **mobile layout** — tap **☰** (top-left) to open the contacts sidebar, **⚙** (top-right) for Settings, and **←** in a chat to return to peers. Settings and modals open full-screen. Configure **Settings → Network → Connect via hub server** to reach peers without port-forwarding. Serial/USB is disabled on Android; TCP and hub work over Wi‑Fi. Grant **All files access** when prompted to use `Downloads/SRLTCP/` for incoming and shared folders.
 
 **Troubleshooting:**
 
@@ -285,6 +284,7 @@ bash scripts/sync-android-python.sh
 | Gradle / Java errors | Use JDK 17 (`JAVA_HOME`) |
 | App closes on launch | `adb logcat -s SRLTCP SRLTCPService python` |
 | White screen | Wait up to 30s for Python to start; tries ports 9876–9878 |
+| Can't see sidebar / settings | Tap **☰** or **⚙** in the top bar (mobile layout) |
 | No serial on Android | Expected — serial transport is disabled on Android |
 | No hub peers | Same hub host on both phones + **Announce** on each |
 
@@ -520,7 +520,7 @@ bash scripts/check.sh           # ruff + mypy + pytest
 pytest tests/ -v                # unit tests only
 ```
 
-**GitHub CI:** the [Checks](.github/workflows/checks.yml) workflow runs on every push/PR (`ruff`, `mypy`, `pytest`). Android APKs are **not** built in CI — build locally with `bash scripts/build-android.sh` (see [android/README.md](android/README.md)).
+**Quality checks (local):** run `bash scripts/check.sh` (`ruff`, `mypy`, `pytest`) before tagging a release. Android APKs are built locally with `bash scripts/build-android.sh` (see [android/README.md](android/README.md)); release APKs are attached to GitHub Releases manually.
 
 ### Project commands
 
@@ -536,6 +536,12 @@ pytest tests/ -v                # unit tests only
 ## Changelog
 
 See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
+
+### v0.1.51
+
+- **Android Downloads** — Settings → Folders defaults to `Downloads/SRLTCP/Incoming` and `Downloads/SRLTCP/Shared` on first launch
+- **Android mobile UI** — ☰ sidebar, ⚙ full-screen settings, slide-out contacts panel
+- **Local releases** — GitHub Actions workflow removed; build APK locally and attach to Releases
 
 ### v0.1.50
 

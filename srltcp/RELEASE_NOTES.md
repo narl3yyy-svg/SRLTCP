@@ -1,5 +1,17 @@
 # SRLTCP Release Notes
 
+## v0.1.51 (2026-07-05)
+
+### Android
+- **Downloads defaults** — incoming and shared folders default to `Downloads/SRLTCP/Incoming` and `Downloads/SRLTCP/Shared` on first launch (visible in Settings → Folders)
+- **Folder picker** — browse starts in Downloads on Android when storage access is granted
+- **Mobile UI** — slide-out sidebar (☰), full-screen settings (⚙), and phone layout in the WebView
+- **Startup fixes** — server health check, port fallback, storage permissions, WebView retry
+
+### Project
+- **Local builds only** — removed GitHub Actions checks workflow; APK and releases built on your machine
+- **Version** — 0.1.51 (versionCode 51)
+
 ## v0.1.50 (2026-07-05)
 
 ### Hub connectivity (replaces legacy relay)

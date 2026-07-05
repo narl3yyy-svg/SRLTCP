@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
     id("com.chaquo.python")
 }
 
@@ -11,8 +12,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 50
-        versionName = "0.1.50"
+        versionCode = 51
+        versionName = "0.1.51"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -53,6 +54,7 @@ chaquopy {
             install("cryptography")
             install("pyserial")
             install("zstandard")
+            install("tzdata")
         }
     }
 }

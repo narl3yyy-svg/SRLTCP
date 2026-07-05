@@ -1,7 +1,5 @@
 """Persistent application settings (~/.srltcp/settings.json)."""
-
 from __future__ import annotations
-
 import json
 import time
 from dataclasses import asdict, dataclass
@@ -14,7 +12,8 @@ from srltcp.core.messaging.constants import (
     WEB_PORT,
 )
 from srltcp.utils.files import ensure_dir
-from srltcp.utils.platform import data_dir
+from srltcp.utils.platform import data_dir, is_android
+
 
 DEFAULT_INCOMING = "incoming"
 DEFAULT_SHARED = "shared"
@@ -29,6 +28,53 @@ RETENTION_HOURS: dict[str, int] = {
     "forever": 999_999,
     "restart": 0,
 }
+
+
+def android_downloads_root() -> Path | None:
+    """Public Downloads directory when accessible on Android."""
+    return _android_downloads_path()
+
+
+def android_default_incoming_dir() -> str:
+    """Default incoming folder path string (Android → Downloads/SRLTCP/Incoming)."""
+    if is_android():
+        downloads = _android_downloads_path()
+        if downloads:
+            return str(downloads / "SRLTCP" / "Incoming")
+        return str(data_dir() / "transfers" / DEFAULT_INCOMING)
+    return str(data_dir() / "transfers" / DEFAULT_INCOMING)
+
+
+def android_default_shared_dir() -> str:
+    """Default shared folder path string (Android → Downloads/SRLTCP/Shared)."""
+    if is_android():
+        downloads = _android_downloads_path()
+        if downloads:
+            return str(downloads / "SRLTCP" / "Shared")
+        return str(data_dir() / DEFAULT_SHARED)
+    return str(data_dir() / DEFAULT_SHARED)
+
+
+def _android_downloads_path() -> Path | None:
+    """Return public Downloads path when readable/writable on Android."""
+    if not is_android():
+        return None
+    try:
+        from android.os import Environment
+
+        downloads = Path(
+            Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_DOWNLOADS
+            ).getAbsolutePath()
+        )
+        if not downloads.exists():
+            downloads.mkdir(parents=True, exist_ok=True)
+        probe = downloads / ".srltcp_write_probe"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return downloads
+    except Exception:
+        return None
 
 
 @dataclass
@@ -51,22 +97,36 @@ class AppSettings:
     bind_interface: str = ""
     timezone: str = ""
     show_clock: bool = True
-    clock_source: str = "system"  # system | ntp
+    clock_source: str = "system"
     ntp_server: str = "pool.ntp.org"
     wan_expose_port: bool = False
     hub_enabled: bool = False
     hub_host: str = ""
     hub_port: int = DEFAULT_TCP_PORT
-    version: str = "0.1.50"
+    version: str = "0.1.51"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:
             return Path(self.incoming_files_dir).expanduser().resolve()
+
+        if is_android():
+            downloads = _android_downloads_path()
+            if downloads:
+                return downloads / "SRLTCP" / "Incoming"
+            return data_dir() / "transfers" / DEFAULT_INCOMING
+
         return data_dir() / "transfers" / DEFAULT_INCOMING
 
     def resolved_shared_folder(self) -> Path:
         if self.shared_folder:
             return Path(self.shared_folder).expanduser().resolve()
+
+        if is_android():
+            downloads = _android_downloads_path()
+            if downloads:
+                return downloads / "SRLTCP" / "Shared"
+            return data_dir() / DEFAULT_SHARED
+
         return data_dir() / DEFAULT_SHARED
 
     def apply_retention_preset(self) -> None:
@@ -87,6 +147,20 @@ class AppSettings:
         return settings
 
 
+def _apply_android_folder_defaults(settings: AppSettings) -> bool:
+    """Persist Downloads folder paths when unset on Android."""
+    if not is_android():
+        return False
+    changed = False
+    if not str(settings.incoming_files_dir).strip():
+        settings.incoming_files_dir = android_default_incoming_dir()
+        changed = True
+    if not str(settings.shared_folder).strip():
+        settings.shared_folder = android_default_shared_dir()
+        changed = True
+    return changed
+
+
 class SettingsStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or (data_dir() / "settings.json")
@@ -94,16 +168,25 @@ class SettingsStore:
     def load(self) -> AppSettings:
         if not self.path.exists():
             settings = AppSettings()
-            self._ensure_dirs(settings)
+            if _apply_android_folder_defaults(settings):
+                self.save(settings)
+            else:
+                self._ensure_dirs(settings)
             return settings
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             settings = AppSettings.from_dict(data)
-            self._ensure_dirs(settings)
+            if _apply_android_folder_defaults(settings):
+                self.save(settings)
+            else:
+                self._ensure_dirs(settings)
             return settings
         except (json.JSONDecodeError, TypeError, ValueError):
             settings = AppSettings()
-            self._ensure_dirs(settings)
+            if _apply_android_folder_defaults(settings):
+                self.save(settings)
+            else:
+                self._ensure_dirs(settings)
             return settings
 
     def save(self, settings: AppSettings) -> None:
@@ -116,8 +199,16 @@ class SettingsStore:
         self._ensure_dirs(settings)
 
     def _ensure_dirs(self, settings: AppSettings) -> None:
-        ensure_dir(settings.resolved_incoming_dir())
-        ensure_dir(settings.resolved_shared_folder())
+        for path in (
+            settings.resolved_incoming_dir(),
+            settings.resolved_shared_folder(),
+        ):
+            try:
+                ensure_dir(path)
+            except OSError:
+                if is_android():
+                    continue
+                raise
 
 
 def prune_messages_by_retention(

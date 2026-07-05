@@ -112,10 +112,10 @@ You **cannot** read message or file content. Users should only use hubs they tru
 - The embedded WebView trusts only `127.0.0.1` / `localhost` self-signed TLS.
 - App data (identities, settings) lives in the app files directory; uninstall clears it.
 
-## GitHub / CI
+## Builds & releases
 
-- **Checks workflow** (`.github/workflows/checks.yml`) runs `ruff`, `mypy`, and `pytest` on every push/PR.
-- **No APK is built in CI** — Android builds are local via Gradle + Chaquopy (see `android/README.md`). This avoids shipping reproducibility and NDK issues from cloud builders.
+- **No GitHub Actions CI** — run `bash scripts/check.sh` locally before tagging (`ruff`, `mypy`, `pytest`).
+- **APK builds are local** — Gradle + Chaquopy on your machine (see `android/README.md`). Release APKs are uploaded to GitHub Releases manually.
 - Report supply-chain concerns through the vulnerability channel above.
 
 ## Dependency Security
