@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# SRLTCP runtime data
+.srltcp/
+identities/
+transfers/
+*.log
+
+# Android
+android/.buildozer/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+buildozer.log
+*.apk
+*.aab
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test / coverage
+.pytest-tmp/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.aider*
