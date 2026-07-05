@@ -501,10 +501,13 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         return web.json_response({"requested": True})
 
     async def version_info(_request: web.Request) -> web.Response:
+        from srltcp.utils.platform import is_android
+
         return web.json_response(
             {
                 "version": __version__,
                 "release_notes": "/api/release-notes",
+                "platform": "android" if is_android() else "desktop",
             }
         )
 

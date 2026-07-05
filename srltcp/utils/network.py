@@ -44,13 +44,22 @@ def primary_ipv4() -> str:
 
 
 def list_interfaces() -> list[dict[str, Any]]:
-    """Return IPv4 addresses with netmasks when available."""
-    if os.name == "posix" and os.path.isdir("/sys/class/net"):
-        linux = _linux_interfaces()
-        if linux:
-            return linux
-    return _fallback_interfaces()
+    """Return IPv4 addresses with netmasks when available.
 
+    Safe on Android (falls back gracefully when /sys/class/net is not readable).
+    Desktop (Arch/Ubuntu) keeps the fast ioctl method.
+    """
+    if os.name == "posix":
+        try:
+            if os.path.isdir("/sys/class/net"):
+                linux = _linux_interfaces()
+                if linux:
+                    return linux
+        except (PermissionError, OSError):
+            # On Android we usually can't read /sys/class/net
+            pass
+
+    return _fallback_interfaces()
 
 def _netmask_to_prefix(netmask: str) -> int:
     return ipaddress.ip_network(f"0.0.0.0/{netmask}", strict=False).prefixlen

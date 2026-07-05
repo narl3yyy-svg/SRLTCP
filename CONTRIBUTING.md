@@ -72,7 +72,7 @@ pre-commit run --all-files
 | `srltcp/routes/` | REST API handlers |
 | `android/` | Gradle + Chaquopy Android app |
 | `scripts/` | `check.sh`, `build-android.sh`, `sync-android-python.sh` |
-| `.github/workflows/checks.yml` | CI: lint + typecheck + tests |
+
 | `tests/` | Pytest suite |
 
 ## Coding Standards
@@ -102,11 +102,11 @@ bash scripts/build-android.sh
 
 See [android/README.md](android/README.md). Run `bash scripts/sync-android-python.sh` before Gradle whenever you change Python code.
 
-## GitHub / CI
+## GitHub / releases
 
-- **Checks** runs on every push and pull request to `main`.
-- There is **no** automated APK workflow — intentional, to avoid Buildozer/p4a fragility.
-- Do not re-add cloud APK builds without maintainer discussion and a reproducible Gradle path.
+- Run **`bash scripts/check.sh`** locally before opening a PR or tagging a release.
+- **APK builds are local** (`bash scripts/build-android.sh`) — attach release APKs to GitHub Releases when tagging.
+- Do not re-add cloud APK workflows without maintainer discussion.
 
 ## Questions
 

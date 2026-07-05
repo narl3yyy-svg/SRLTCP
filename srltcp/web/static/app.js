@@ -2675,8 +2675,46 @@
     state.settingsFormDirty = false;
   }
 
+  function isMobileLayout() {
+    return document.documentElement.classList.contains("mobile-layout");
+  }
+
+  function openSidebarMobile() {
+    if (!isMobileLayout()) return;
+    $("#sidebar")?.classList.add("open");
+    const backdrop = $("#sidebar-backdrop");
+    backdrop?.classList.remove("hidden");
+    backdrop?.setAttribute("aria-hidden", "false");
+  }
+
   function closeSidebarMobile() {
     $("#sidebar")?.classList.remove("open");
+    const backdrop = $("#sidebar-backdrop");
+    backdrop?.classList.add("hidden");
+    backdrop?.setAttribute("aria-hidden", "true");
+  }
+
+  function toggleSidebarMobile() {
+    if ($("#sidebar")?.classList.contains("open")) closeSidebarMobile();
+    else openSidebarMobile();
+  }
+
+  function applyMobileLayout(platform) {
+    if (platform == null && !document.documentElement.classList.contains("android-app")) {
+      if (!window.matchMedia("(max-width: 768px)").matches) {
+        document.documentElement.classList.remove("mobile-layout");
+        closeSidebarMobile();
+        return;
+      }
+    }
+    const root = document.documentElement;
+    const narrow = window.matchMedia("(max-width: 768px)").matches;
+    const android =
+      platform === "android" || root.classList.contains("android-app");
+    if (!android && !narrow) return;
+    root.classList.add("mobile-layout");
+    if (android) root.classList.add("android-app");
+    if (android && !state.selectedPeer) openSidebarMobile();
   }
 
   /* ── Events ── */
@@ -2689,9 +2727,18 @@
   $("#btn-announce-tcp")?.addEventListener("click", () => announceTransport("tcp"));
   $("#btn-announce-serial")?.addEventListener("click", () => announceTransport("serial"));
 
+  function openSettingsFromMobile() {
+    closeSidebarMobile();
+    openSettings();
+  }
+
   $("#btn-settings")?.addEventListener("click", openSettings);
+  $("#btn-settings-top")?.addEventListener("click", openSettingsFromMobile);
+  $("#btn-settings-chat")?.addEventListener("click", openSettingsFromMobile);
   $("#btn-close-settings")?.addEventListener("click", closeSettings);
   $("#settings-window-overlay")?.addEventListener("click", closeSettings);
+  $("#btn-menu")?.addEventListener("click", toggleSidebarMobile);
+  $("#sidebar-backdrop")?.addEventListener("click", closeSidebarMobile);
   document.querySelectorAll(".settings-tab").forEach((tab) => {
     tab.addEventListener("click", () => switchSettingsTab(tab.dataset.tab));
   });
@@ -2699,7 +2746,7 @@
   $("#btn-back")?.addEventListener("click", () => {
     $("#chat-active")?.classList.add("hidden");
     $("#chat-empty")?.classList.remove("hidden");
-    $("#sidebar")?.classList.add("open");
+    openSidebarMobile();
     state.selectedPeer = null;
     renderContacts();
   });
@@ -3045,10 +3092,18 @@
 
 
   async function initApp() {
+    applyMobileLayout(
+      document.documentElement.classList.contains("android-app")
+        ? "android"
+        : null
+    );
     const [settingsRes, versionRes] = await Promise.all([
       apiGet("/api/settings", { fallback: {} }),
       apiGet("/api/version", { fallback: {} }),
     ]);
+    if (versionRes.ok && versionRes.data?.platform) {
+      applyMobileLayout(versionRes.data.platform);
+    }
     if (settingsRes.ok && settingsRes.data) {
       state.settings = settingsRes.data;
       showSetupIfNeeded(settingsRes.data);
@@ -3064,6 +3119,16 @@
       toast("Failed to load status", "error");
     }
   }
+
+  window.applyMobileLayout = applyMobileLayout;
+
+  window.addEventListener("resize", () => {
+    applyMobileLayout(
+      document.documentElement.classList.contains("android-app")
+        ? "android"
+        : null
+    );
+  });
 
   initApp().catch((err) => {
     console.warn("init failed:", err);
