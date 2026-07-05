@@ -141,6 +141,48 @@
     };
   }
 
+  /* ── Modal helpers (reduces ~80 lines of repetitive open/close code) ── */
+  function openModal(modalEl) {
+    if (!modalEl) return;
+    modalEl.classList.add("open");
+    modalEl.setAttribute("aria-hidden", "false");
+  }
+
+  function closeModal(modalEl) {
+    if (!modalEl) return;
+    modalEl.classList.remove("open");
+    modalEl.setAttribute("aria-hidden", "true");
+  }
+
+  function setupModalClose(modalEl, extraCleanup) {
+    if (!modalEl) return;
+    modalEl.addEventListener("click", (e) => {
+      if (e.target === modalEl) {
+        closeModal(modalEl);
+        extraCleanup?.();
+      }
+    });
+  }
+
+  /* ── API helpers (reduces repetitive error toast + return blocks) ── */
+  async function postOrToast(url, body, errorFallback = "Operation failed") {
+    const { ok, data } = await apiPost(url, body);
+    if (!ok) {
+      toast(data?.error || errorFallback, "error");
+      return null;
+    }
+    return data;
+  }
+
+  async function patchOrToast(url, body, errorFallback = "Operation failed") {
+    const { ok, data } = await apiPatch(url, body);
+    if (!ok) {
+      toast(data?.error || errorFallback, "error");
+      return null;
+    }
+    return data;
+  }
+
   const JSON_HEADERS = { "Content-Type": "application/json" };
 
   async function safeFetch(url, options = {}, { silent = false, fallback = null } = {}) {
@@ -645,14 +687,14 @@
 
   function openAddContactModal() {
     resetAddContactForm();
-    $("#add-contact-modal")?.classList.add("open");
-    $("#add-contact-modal")?.setAttribute("aria-hidden", "false");
+    const modal = $("#add-contact-modal");
+    openModal(modal);
     $("#add-contact-hash")?.focus();
   }
 
   function closeAddContactModal() {
-    $("#add-contact-modal")?.classList.remove("open");
-    $("#add-contact-modal")?.setAttribute("aria-hidden", "true");
+    const modal = $("#add-contact-modal");
+    closeModal(modal);
     resetAddContactForm();
   }
 
@@ -1122,7 +1164,7 @@
     state.folderSendTarget = { hashId, peerName };
     state.folderTarget = "folder-send";
     browseFolder(null);
-    $("#folder-modal")?.classList.add("open");
+    openModal($("#folder-modal"));
   }
 
   async function sendDroppedFiles(files, hashId, peerName) {
@@ -1311,11 +1353,11 @@
     await loadShareGrants();
     renderShareGrants();
     renderShareEntries();
-    $("#share-modal")?.classList.add("open");
+    openModal($("#share-modal"));
   }
 
   function closeShareModal() {
-    $("#share-modal")?.classList.remove("open");
+    closeModal($("#share-modal"));
   }
 
   async function offerShareToSelected() {
@@ -1411,12 +1453,12 @@
     setInputValue("wan-port", String(peer.wan_port || 7825));
     setCheckbox("wan-enabled", !!peer.wan_enabled);
     setSelectValue("wan-mode", peer.connection_mode || "auto");
-    $("#wan-modal")?.classList.add("open");
+    openModal($("#wan-modal"));
     closeContactMenu();
   }
 
   function closeWanModal() {
-    $("#wan-modal")?.classList.remove("open");
+    closeModal($("#wan-modal"));
     state.wanModalTarget = null;
   }
 
@@ -2883,30 +2925,24 @@
       const { hashId, peerName } = state.folderSendTarget;
       state.folderSendTarget = null;
       state.folderTarget = null;
-      $("#folder-modal").classList.remove("open");
+      closeModal($("#folder-modal"));
       await sendFolderToPeer(path, hashId, peerName);
       return;
     }
     if (state.folderTarget) $(`#${state.folderTarget}`).value = path;
-    $("#folder-modal").classList.remove("open");
+    closeModal($("#folder-modal"));
   });
 
-  $("#folder-cancel")?.addEventListener("click", () => $("#folder-modal").classList.remove("open"));
-  $("#release-close")?.addEventListener("click", () => $("#release-modal").classList.remove("open"));
+  $("#folder-cancel")?.addEventListener("click", () => closeModal($("#folder-modal")));
+  $("#release-close")?.addEventListener("click", () => closeModal($("#release-modal")));
   $("#btn-share-folder")?.addEventListener("click", () => openShareModal("offer"));
   $("#share-close")?.addEventListener("click", closeShareModal);
-  $("#share-modal")?.addEventListener("click", (e) => {
-    if (e.target.id === "share-modal") closeShareModal();
-  });
+  setupModalClose($("#share-modal"), closeShareModal);
   $("#wan-save")?.addEventListener("click", saveWanSettings);
   $("#wan-cancel")?.addEventListener("click", closeWanModal);
-  $("#wan-modal")?.addEventListener("click", (e) => {
-    if (e.target.id === "wan-modal") closeWanModal();
-  });
+  setupModalClose($("#wan-modal"), () => { state.wanModalTarget = null; });
   $("#media-lightbox-close")?.addEventListener("click", closeMediaLightbox);
-  $("#media-lightbox")?.addEventListener("click", (e) => {
-    if (e.target.id === "media-lightbox") closeMediaLightbox();
-  });
+  setupModalClose($("#media-lightbox"), closeMediaLightbox);
   $("#media-zoom-in")?.addEventListener("click", () => setMediaZoom(0.25));
   $("#media-zoom-out")?.addEventListener("click", () => setMediaZoom(-0.25));
   $("#media-zoom-reset")?.addEventListener("click", resetMediaZoom);
@@ -2947,11 +2983,11 @@
   });
 
   $("#btn-network-viz")?.addEventListener("click", async () => {
-    $("#network-modal").classList.add("open");
+    openModal($("#network-modal"));
     await renderNetworkGraph();
   });
   $("#network-close")?.addEventListener("click", () => {
-    $("#network-modal").classList.remove("open");
+    closeModal($("#network-modal"));
     stopNetworkAnimation();
   });
   $("#network-refresh")?.addEventListener("click", () => renderNetworkGraph());

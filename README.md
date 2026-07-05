@@ -1,13 +1,12 @@
 # SRLTCP
 
 [![Checks](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/checks.yml/badge.svg)](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/checks.yml)
-[![Build Android APK](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/build-android.yml/badge.svg)](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/build-android.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
 
-**Current version:** 0.1.49
+**Current version:** 0.1.50
 
 ---
 
@@ -28,7 +27,7 @@
 | **System stats** | CPU usage & temperature in the web UI status bar |
 | **Trusted peers** | Trust-before-message security model |
 | **Ping / RTT** | Latency in ms; serial link quality % (RTT-based estimate, not RF RSSI) |
-| **Cross-platform** | Linux, macOS, Windows CLI + Android (python-for-android) |
+| **Cross-platform** | Linux, macOS, Windows CLI + Android (Chaquopy APK) |
 
 ---
 
@@ -62,10 +61,10 @@ srltcp/
   web/                      # Local UI (aiohttp + WebSocket)
   routes/                   # REST + share + WS routes
   utils/                    # Logging, files, platform helpers
-android/                    # Buildozer + python-for-android (see android/README.md)
+android/                    # Gradle + Chaquopy Android app (see android/README.md)
 tests/                      # pytest suite
-scripts/                    # Maintainer helpers (e.g. scripts/check.sh)
-.github/workflows/          # CI: build-android.yml
+scripts/                    # Build helpers (check.sh, build-android.sh, sync-android-python.sh)
+.github/workflows/          # CI: checks.yml
 ```
 
 ### Data flow diagram
@@ -172,11 +171,13 @@ The hub **never receives session keys** and cannot decrypt message or file conte
 ### What is not encrypted
 
 - LAN/UDP discovery announces (names, IPs, ports)
-- Connection metadata (who talks to whom, when, approximate sizes)
+- Hub presence (who is online on a hub — names and hash IDs)
+- Hub routing metadata (identity hash tokens, timing, approximate sizes)
+- Connection metadata (who talks to whom, when)
 - Local settings, trusted-peer list, and chat history on disk
 - Self-signed localhost HTTPS certificate (browser trust is manual)
 
-See [SECURITY.md](SECURITY.md) for vulnerability reporting and operator hardening.
+See [SECURITY.md](SECURITY.md) for vulnerability reporting, hub operator guidance, and hardening.
 
 ### Web UI hardening (v0.1.1+)
 
@@ -200,8 +201,10 @@ On first launch, the web UI shows a setup wizard. Settings persist in `~/.srltcp
 | Incoming files folder | Where received files are saved |
 | Shared folder | Default folder for browse/share |
 | LAN IP | Pinned interface for discovery & announce |
-| Auto-announce | Broadcast presence every 5 seconds (LAN only) |
-| WAN port-forward | Acknowledge you will forward TCP **7825** for internet peers |
+| Auto-announce | Broadcast presence every 5 seconds (LAN only; hub clients re-register on hub when enabled) |
+| Connect via hub | Enable outbound connection to a shared hub server (no client port-forward) |
+| Hub host / port | Public address of the headless hub (default port **7825**) |
+| WAN port-forward | Advanced: acknowledge you will forward TCP **7825** for direct WAN peers |
 | Timezone | Region for the status clock (time shown at top of sidebar) |
 | Show clock | Toggle live clock in the UI |
 
@@ -250,35 +253,44 @@ pip install -e .
 srltcp web
 ```
 
-### Android (python-for-android)
+### Android (Gradle + Chaquopy)
 
-See [android/README.md](android/README.md). The APK is built with **Buildozer** + **python-for-android** (Chaquopy was removed in v0.1.20). Targets **Android 15** (API 35), **arm64-v8a**.
+See [android/README.md](android/README.md). The APK embeds the same `srltcp/` Python code via **Chaquopy** and builds locally with **`./gradlew`** — no Buildozer or python-for-android.
 
-**Local build:**
+**Prerequisites:** JDK 17, Android SDK API 34, Python 3.12 on your build machine.
+
+**One-command local build (from repo root):**
 
 ```bash
-cd android
-buildozer android debug
-adb install -r bin/*debug*.apk
+export ANDROID_HOME="$HOME/Android/Sdk"   # adjust if needed
+bash scripts/build-android.sh
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-*-debug.apk
 ```
 
-**CI / releases:** Push to `main` or tag `v*` (or run **Build Android APK** workflow) — APK is attached to [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases) on tags. CI builds **arm64-v8a only** (avoids armeabi-v7a `grpmodule` failures on GitHub runners).
+Before each build (or when Python code changes), sources are synced automatically by `build-android.sh`. To sync only:
+
+```bash
+bash scripts/sync-android-python.sh
+```
+
+**Android Studio:** open the `android/` folder, sync Gradle, then **Build APK**. Re-run `sync-android-python.sh` after editing `srltcp/`.
+
+**On the phone:** configure **Settings → Network → Connect via hub server** to reach peers without port-forwarding. Serial/USB is disabled on Android; TCP and hub work over Wi‑Fi.
 
 **Troubleshooting:**
 
 | Symptom | What to do |
 |---------|------------|
-| CI build fails at `grpmodule.o` | Ensure workflow uses `--arch arm64-v8a` and a clean `android/.buildozer` |
-| App closes on launch | `adb logcat -s SRLTCP python:D PythonService:D` |
-| White screen | Wait 10–30s for Python service to bind HTTPS; app tries ports 9876–9878 |
+| `SDK location not found` | Set `ANDROID_HOME` or `android/local.properties` |
+| Gradle / Java errors | Use JDK 17 (`JAVA_HOME`) |
+| App closes on launch | `adb logcat -s SRLTCP SRLTCPService python` |
+| White screen | Wait up to 30s for Python to start; tries ports 9876–9878 |
 | No serial on Android | Expected — serial transport is disabled on Android |
-| No peers after reinstall | Uninstall clears app data (identities in app files dir) |
-| No discovered peers | **Announce TCP** on both devices, or **Add Contact** with hash ID |
-| Phantom trusted peers (`peer`, `deadbeef…`) | Leftover pytest fixtures — restart SRLTCP (v0.1.41+ auto-removes them) |
+| No hub peers | Same hub host on both phones + **Announce** on each |
 
 ```bash
-adb logcat -s SRLTCP python:D PythonService:D
-adb shell am start -n org.srltcp.srltcp/org.srltcp.app.MainActivity
+adb logcat -s SRLTCP SRLTCPService python:D
+adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
 ---
@@ -433,6 +445,8 @@ curl -k "https://127.0.0.1:9876/api/share/<session_id>/list?token=<token>"
 
 ### WAN / manual peer connections (internet)
 
+> **Tip:** If you do not want to port-forward on every device, use **hub mode** (see above) instead. Direct WAN is for advanced users who control router settings.
+
 SRLTCP does **not** broadcast your node to the public internet. WAN connectivity is **opt-in and manual** per trusted contact.
 
 #### Step 1 — Expose the encrypted messaging port (owner side)
@@ -501,9 +515,12 @@ pre-commit install  # optional
 # Tests use SRLTCP_DATA_DIR automatically — do not run pytest against ~/.srltcp
 
 ./run.sh web                    # dev server
-bash scripts/check.sh           # ruff + pytest
+./run.sh hub                    # local hub for testing
+bash scripts/check.sh           # ruff + mypy + pytest
 pytest tests/ -v                # unit tests only
 ```
+
+**GitHub CI:** the [Checks](.github/workflows/checks.yml) workflow runs on every push/PR (`ruff`, `mypy`, `pytest`). Android APKs are **not** built in CI — build locally with `bash scripts/build-android.sh` (see [android/README.md](android/README.md)).
 
 ### Project commands
 
@@ -520,13 +537,13 @@ pytest tests/ -v                # unit tests only
 
 See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
 
-### v0.1.44
+### v0.1.50
 
-- **Android CI** — removed invalid `%(ENV_ANDROIDSDK)s` from spec; CI symlinks SDK/NDK + installs platform-tools
-
-### v0.1.43
-
-- **Android CI** — `android.archs` moved to `[app]` in buildozer.spec (fixes dual-arch + `buildozer android clean` crash)
+- **Hub server** — headless `srltcp hub` on TCP 7825; clients dial out, announce presence, discover peers on the same hub, E2EE via opaque forwarding (no client port-forward)
+- **Settings** — hub host/port in Network tab; removed legacy multi-hop relay (`srltcp relay` on 7827, `web --relay`)
+- **Android** — rebuilt with **Gradle + Chaquopy**; local `./gradlew` build via `scripts/build-android.sh`; removed Buildozer/python-for-android and GitHub APK workflow
+- **CI** — restored Checks workflow only (`ruff`, `mypy`, `pytest`)
+- **Docs** — README, SECURITY.md, android/README.md updated for hub and local APK builds
 
 ### v0.1.42
 
@@ -535,7 +552,6 @@ See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge 
 - **Transfer UI** — removed bottom transfer dock; in-message progress bar retained
 - **Add contact** — WAN host, port, enable, and connection mode fields
 - **Settings UI** — compact folder browser; readable Restart button
-- **Android CI** — `buildozer android clean` + spec-only `arm64-v8a` (no dual-arch `--arch` flag)
 - **Docs** — expanded README security and data-transfer tables
 
 ### v0.1.41
@@ -545,12 +561,10 @@ See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge 
 - **TCP throughput** — 1 MiB chunks, no artificial send delay (encryption unchanged)
 - **Serial link %** — RTT-based estimate (554 ms ≈ 40–60% link, not misleading 100%)
 - **Trusted list** — auto-removes pytest fixture peers (`deadbeef…`, `peer`, etc.)
-- **Android CI** — arm64-v8a only build; clean `.buildozer` cache each run
 
 ### v0.1.35
 
 - Manual **Announce TCP** / **Announce Serial** validate transport and show errors when discovery cannot send
-- Android CI restored — APK build fails loudly if no `.apk` is produced
 
 ### v0.1.31
 
@@ -626,7 +640,7 @@ See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge 
 - [ ] Noise protocol framework option for handshake
 - [ ] QUIC transport backend
 - [ ] Bandwidth limiting and QoS per transfer
-- [ ] Signed release APK on GitHub Releases
+- [ ] Optional signed APK releases (local Gradle build is supported today)
 - [ ] Desktop system tray wrapper (Tauri/Electron)
 
 ---

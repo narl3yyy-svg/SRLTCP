@@ -57,7 +57,7 @@ class AppSettings:
     hub_enabled: bool = False
     hub_host: str = ""
     hub_port: int = DEFAULT_TCP_PORT
-    version: str = "0.1.39"
+    version: str = "0.1.50"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

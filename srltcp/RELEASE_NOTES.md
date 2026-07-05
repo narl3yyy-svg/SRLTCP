@@ -1,5 +1,25 @@
 # SRLTCP Release Notes
 
+## v0.1.50 (2026-07-05)
+
+### Hub connectivity (replaces legacy relay)
+- **Headless hub** — `srltcp hub --bind 0.0.0.0 --port 7825` for a shared meeting point on the internet
+- **Hub clients** — Settings → Network: enable hub, set host/port; click **Announce** to register and discover other hub users
+- **E2EE tunneling** — `RELAY_ENVELOPE` opaque forwarding; hub sees routing tokens only, not message or file content
+- **Signed registration** — hub presence requires Ed25519-signed `HUB_REGISTER` payloads
+- **Removed** — `srltcp relay` (port 7827), `web --relay`, multi-hop `RoutingTable` / `ROUTE_UPDATE`
+
+### Android (Gradle + Chaquopy rebuild)
+- **Removed** — Buildozer, python-for-android, `build-android.yml` GitHub workflow, `p4a-recipes/`
+- **Added** — standard Gradle project with Chaquopy 15, `./gradlew`, committed wrapper
+- **Scripts** — `scripts/sync-android-python.sh`, `scripts/build-android.sh` for local APK builds
+- **Docs** — `android/README.md` with JDK 17 + SDK prerequisites
+
+### CI & documentation
+- **Checks workflow** restored — `ruff`, `mypy`, `pytest` on push/PR (no cloud APK build)
+- **SECURITY.md** — hub operator trust, connection modes, Android hardening
+- **README** — hub usage, local Android build, updated settings table
+
 ## v0.1.48 (2026-07-03)
 
 ### File transfers (receiver)

@@ -193,6 +193,8 @@ class HubMixin:
             peer_id = await self._ensure_hub_connection()
             if not peer_id:
                 raise RuntimeError("hub not connected")
+        if not self.tcp_transport or not self._hub_peer_id:
+            raise RuntimeError("hub not connected")
         body = self._build_hub_register_body()
         packet = build_header(MessageType.HUB_REGISTER, body=body)
         await self.tcp_transport.send(self._hub_peer_id, packet)
@@ -360,12 +362,15 @@ class HubMixin:
 
         if not isinstance(event, TransportEvent):
             return
-        if event.kind == "disconnected" and event.peer:
-            if event.peer.peer_id == self._hub_peer_id:
-                self._hub_peer_id = None
-                self._hub_registered = False
-                for hash_id in list(self._links.keys()):
-                    link = self._links.get(hash_id)
-                    if link and link.transport == "hub":
-                        self.remove_link(hash_id)
-                self._schedule_hub_reconnect()
+        if (
+            event.kind == "disconnected"
+            and event.peer
+            and event.peer.peer_id == self._hub_peer_id
+        ):
+            self._hub_peer_id = None
+            self._hub_registered = False
+            for hash_id in list(self._links.keys()):
+                link = self._links.get(hash_id)
+                if link and link.transport == "hub":
+                    self.remove_link(hash_id)
+            self._schedule_hub_reconnect()

@@ -16,11 +16,11 @@ from srltcp.core.identity import Identity, IdentityStore
 from srltcp.core.messaging.announce import AnnounceMixin
 from srltcp.core.messaging.connect import ConnectMixin
 from srltcp.core.messaging.constants import COMPRESS_THRESHOLD, DISCOVERY_PORT
+from srltcp.core.messaging.hub import HubMixin
 from srltcp.core.messaging.links import PeerLink, PeerLinkMixin
 from srltcp.core.messaging.models import ChatMessage
 from srltcp.core.messaging.ping import PingMixin
 from srltcp.core.messaging.queue import QueueMixin
-from srltcp.core.messaging.hub import HubMixin
 from srltcp.core.messaging.share_peer import SharePeerMixin
 from srltcp.core.messaging.transfer import TransferMixin
 from srltcp.core.protocol.messages import (

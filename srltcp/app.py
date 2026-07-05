@@ -230,7 +230,7 @@ def is_android_server_ready() -> bool:
 
 
 def start_android_server() -> None:
-    """Entry point for Android python-for-android service (background thread)."""
+    """Entry point for Android Chaquopy runtime (background thread)."""
     import os
     import sys
 

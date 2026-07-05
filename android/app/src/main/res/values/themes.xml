@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.SRLTCP" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#5B8DEF</item>
+        <item name="colorPrimaryVariant">#3D6FD4</item>
+        <item name="android:statusBarColor">#0C0E14</item>
+        <item name="android:navigationBarColor">#0C0E14</item>
+    </style>
+</resources>

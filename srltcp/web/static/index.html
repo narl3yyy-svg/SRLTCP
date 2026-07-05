@@ -1,522 +1,501 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#0c0e14" />
-  <title>SRLTCP Chat</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/app.css" />
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#0c0e14" />
+<title>SRLTCP Chat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
-  <div class="app" id="app">
-    <!-- Sidebar -->
-    <aside class="sidebar" id="sidebar">
-      <div class="header-clock-row hidden" id="header-clock-row">
-        <time id="header-clock" class="header-clock">—</time>
-      </div>
-      <div class="sidebar-header">
-        <div class="brand">
-          <div class="brand-icon">SR</div>
-          <div>
-            <div class="brand-title">SRLTCP</div>
-            <div class="brand-sub" id="connection-status">Connecting…</div>
-          </div>
-        </div>
-        <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-        </button>
-      </div>
-
-      <div class="me-card" id="me-card">
-        <div class="avatar me-avatar" id="me-avatar">?</div>
-        <div class="me-info">
-          <div class="me-name" id="me-name">Loading…</div>
-          <div class="me-hash" id="me-hash">—</div>
-        </div>
-      </div>
-
-      <div class="search-wrap">
-        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-        <input type="search" id="peer-search" placeholder="Search conversations…" autocomplete="off" />
-      </div>
-
-      <div class="sidebar-actions announce-actions">
-        <button class="action-btn" id="btn-add-contact" title="Add contact manually by hash ID">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+<div class="app" id="app">
+<!-- Sidebar -->
+<aside class="sidebar" id="sidebar">
+<div class="header-clock-row hidden" id="header-clock-row">
+<time id="header-clock" class="header-clock">—</time>
+</div>
+<div class="sidebar-header">
+<div class="brand">
+<div class="brand-icon">SR</div>
+<div>
+<div class="brand-title">SRLTCP</div>
+<div class="brand-sub" id="connection-status">Connecting…</div>
+</div>
+</div>
+<button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+</button>
+</div>
+<div class="me-card" id="me-card">
+<div class="avatar me-avatar" id="me-avatar">?</div>
+<div class="me-info">
+<div class="me-name" id="me-name">Loading…</div>
+<div class="me-hash" id="me-hash">—</div>
+</div>
+</div>
+<div class="search-wrap">
+<svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+<input type="search" id="peer-search" placeholder="Search conversations…" autocomplete="off" />
+</div>
+<div class="sidebar-actions announce-actions">
+<button class="action-btn" id="btn-add-contact" title="Add contact manually by hash ID">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
           Add Contact
-        </button>
-        <button class="action-btn" id="btn-announce-tcp" title="Announce on TCP/LAN">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>
+</button>
+<button class="action-btn" id="btn-announce-tcp" title="Announce on TCP/LAN">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>
           Announce TCP
-        </button>
-        <button class="action-btn" id="btn-announce-serial" title="Announce on serial/RF">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20v-6M6 20V10M18 20V4"/></svg>
+</button>
+<button class="action-btn" id="btn-announce-serial" title="Announce on serial/RF">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20v-6M6 20V10M18 20V4"/></svg>
           Announce Serial
-        </button>
-      </div>
-
-      <div class="sidebar-tabs">
-        <button type="button" class="peer-tab active" data-tab="discovered">Discovered</button>
-        <button type="button" class="peer-tab" data-tab="trusted">Trusted</button>
-      </div>
-      <div class="contacts-label" id="contacts-label">Discovered Peers</div>
-      <nav class="contacts drop-zone" id="contacts" aria-label="Contacts"></nav>
-      <div class="drop-overlay hidden" id="drop-overlay">Drop files to send to peer</div>
-    </aside>
-
-    <!-- Main chat -->
-    <main class="chat" id="chat-panel">
-      <div class="chat-empty" id="chat-empty">
-        <div class="empty-illustration">
-          <svg viewBox="0 0 120 120" fill="none"><circle cx="60" cy="60" r="50" stroke="currentColor" stroke-width="1.5" opacity=".2"/><path d="M35 55c0-14 11-25 25-25s25 11 25 25" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".4"/><circle cx="45" cy="58" r="3" fill="currentColor" opacity=".5"/><circle cx="75" cy="58" r="3" fill="currentColor" opacity=".5"/><path d="M48 72c4 6 20 6 24 0" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".4"/></svg>
-        </div>
-        <h2>Welcome to SRLTCP</h2>
-        <p>Select a peer from the sidebar or click <strong>Announce</strong> to discover devices on your network.</p>
-        <p class="hint">All messages are end-to-end encrypted.</p>
-      </div>
-
-      <div class="chat-active hidden" id="chat-active">
-        <header class="chat-header">
-          <button class="icon-btn mobile-only" id="btn-back" aria-label="Back">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
-          </button>
-          <div class="avatar peer-avatar" id="peer-avatar">?</div>
-          <div class="chat-header-info">
-            <div class="chat-peer-name" id="chat-peer-name">Peer</div>
-            <div class="chat-peer-status" id="chat-peer-status">
-              <span class="status-dot"></span>
-              <span id="chat-peer-transport" class="transport-badge header-badge hidden" aria-hidden="true"></span>
-              <span id="chat-peer-meta">Connecting…</span>
-            </div>
-          </div>
-          <div class="chat-header-actions">
-            <button class="icon-btn" id="btn-share-folder" title="Share folder (E2EE)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            </button>
-            <button class="icon-btn" id="btn-send-folder-peer" title="Send folder">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z"/><path d="M12 11v6M9 14h6"/></svg>
-            </button>
-            <button class="icon-btn" id="btn-file" title="Send file">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-            </button>
-            <input type="file" id="file-input" class="hidden" />
-          </div>
-        </header>
-
-        <div class="messages" id="messages" role="log" aria-live="polite"></div>
-
-        <div class="transfer-dock hidden" id="transfer-dock" aria-live="polite" aria-label="Active file transfers">
-          <div class="transfer-dock-list" id="transfer-dock-list"></div>
-        </div>
-
-        <footer class="composer">
-          <div class="composer-inner">
-            <textarea id="msg-input" rows="1" placeholder="Message…" disabled></textarea>
-            <button class="send-btn" id="send-btn" disabled aria-label="Send">
-              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-            </button>
-          </div>
-        </footer>
-      </div>
-    </main>
-
-    <!-- Settings window -->
-    <div class="settings-window hidden" id="settings-window" aria-hidden="true">
-      <div class="settings-window-overlay" id="settings-window-overlay"></div>
-      <div class="settings-window-panel">
-        <header class="settings-window-header">
-          <h3>Settings</h3>
-          <button class="icon-btn" id="btn-close-settings" aria-label="Close">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
-          </button>
-        </header>
-        <nav class="settings-tabs" role="tablist">
-          <button type="button" class="settings-tab active" data-tab="general">General</button>
-          <button type="button" class="settings-tab" data-tab="network">Network</button>
-          <button type="button" class="settings-tab" data-tab="serial">Serial</button>
-          <button type="button" class="settings-tab" data-tab="folders">Folders</button>
-          <button type="button" class="settings-tab" data-tab="clock">Clock</button>
-          <button type="button" class="settings-tab" data-tab="advanced">Advanced</button>
-        </nav>
-        <form id="settings-form" class="settings-window-body">
-          <div class="settings-panel active" data-panel="general">
-            <label class="field">
-              <span>Display name</span>
-              <input type="text" id="set-name" maxlength="64" required />
-            </label>
-            <label class="field">
-              <span>Keep messages</span>
-              <select id="set-retention">
-                <option value="1d">1 day</option>
-                <option value="1w">1 week</option>
-                <option value="1m">1 month</option>
-                <option value="1y">1 year</option>
-                <option value="forever">Forever</option>
-                <option value="restart">Until restart</option>
-              </select>
-            </label>
-          </div>
-          <div class="settings-panel" data-panel="network">
-            <label class="field">
-              <span>Web UI port (HTTPS)</span>
-              <input type="number" id="set-web-port" min="1024" max="65535" />
-              <small>Default 9876 — restart required</small>
-            </label>
-            <label class="field">
-              <span>TCP peer port</span>
-              <input type="number" id="set-tcp-port" min="1024" max="65535" />
-              <small>Default 7825 — restart required; use the same on every peer</small>
-            </label>
-            <label class="field">
-              <span>UDP discovery port</span>
-              <input type="number" id="set-discovery-port" min="1024" max="65535" />
-              <small>Default 7826 — restart required; use the same on every peer</small>
-            </label>
-            <label class="field checkbox-field">
-              <input type="checkbox" id="set-strict-ports" checked />
-              <span>Use exact ports (fail if busy instead of auto-incrementing)</span>
-            </label>
-            <label class="field">
-              <span>Network interface / IP</span>
-              <select id="set-lan-ip"></select>
-            </label>
-            <label class="field checkbox-field">
-              <input type="checkbox" id="set-auto-announce" />
-              <span>Auto-announce on startup (LAN only)</span>
-            </label>
-            <label class="field checkbox-field">
-              <input type="checkbox" id="set-hub-enabled" />
-              <span>Connect via hub server (no port-forward needed)</span>
-            </label>
-            <label class="field">
-              <span>Hub server host</span>
-              <input type="text" id="set-hub-host" placeholder="hub.example.com or 203.0.113.10" />
-              <small>Public address of Bob's headless hub — port-forward this on the hub host only</small>
-            </label>
-            <label class="field">
-              <span>Hub server port</span>
-              <input type="number" id="set-hub-port" min="1024" max="65535" value="7825" />
-              <small>Default 7825 — must match the hub server's listen port</small>
-            </label>
-            <label class="field checkbox-field">
-              <input type="checkbox" id="set-wan-expose" />
-              <span>I will port-forward TCP 7825 for direct WAN peers (advanced)</span>
-            </label>
-            <p class="field-hint">With a hub configured, click <strong>Announce</strong> to register on the hub and discover other hub users. All traffic remains E2EE — the hub cannot read messages.</p>
-            <button type="button" class="action-btn" id="btn-network-viz">Network map</button>
-          </div>
-          <div class="settings-panel" data-panel="serial">
-            <label class="field checkbox-field">
-              <input type="checkbox" id="set-enable-serial" />
-              <span>Enable serial transport</span>
-            </label>
-            <label class="field">
-              <span>Serial port</span>
-              <select id="set-serial-port"></select>
-              <small id="set-serial-hint">Arch: <code>sudo usermod -aG uucp $USER</code> then log out/in. Both peers need serial open to discover.</small>
-            </label>
-            <label class="field">
-              <span>Baud rate</span>
-              <select id="set-serial-baud"></select>
-            </label>
-          </div>
-          <div class="settings-panel" data-panel="folders">
-            <label class="field">
-              <span>Incoming files folder</span>
-              <div class="folder-row">
-                <input type="text" id="set-incoming" placeholder="~/.srltcp/transfers/incoming" readonly />
-                <button type="button" class="action-btn small" data-browse="set-incoming">Browse</button>
-              </div>
-            </label>
-            <label class="field">
-              <span>Default shared folder</span>
-              <div class="folder-row">
-                <input type="text" id="set-shared" placeholder="~/.srltcp/shared" readonly />
-                <button type="button" class="action-btn small" data-browse="set-shared">Browse</button>
-              </div>
-            </label>
-          </div>
-          <div class="settings-panel" data-panel="clock">
-            <label class="field checkbox-field">
-              <input type="checkbox" id="set-show-clock" checked />
-              <span>Show clock at top of sidebar</span>
-            </label>
-            <label class="field">
-              <span>Timezone</span>
-              <select id="set-timezone"></select>
-            </label>
-            <label class="field">
-              <span>Clock source</span>
-              <select id="set-clock-source">
-                <option value="system">This machine (local)</option>
-                <option value="ntp">NTP server (online)</option>
-              </select>
-            </label>
-            <label class="field" id="ntp-server-field">
-              <span>NTP server</span>
-              <input type="text" id="set-ntp-server" placeholder="pool.ntp.org" />
-              <small>Used when clock source is NTP</small>
-            </label>
-          </div>
-          <div class="settings-panel" data-panel="advanced">
-            <section class="drawer-section">
-              <h4>Your Identities</h4>
-              <div id="identities"></div>
-            </section>
-            <section class="drawer-section">
-              <h4>Active Transfers</h4>
-              <div id="transfers"></div>
-            </section>
-            <section class="drawer-section">
-              <h4>Activity</h4>
-              <div class="activity-log" id="activity-log"></div>
-            </section>
-            <button type="button" class="action-btn danger-btn" id="btn-restart">Restart SRLTCP</button>
-          </div>
-          <footer class="settings-window-footer">
-            <button type="submit" class="action-btn save-btn">Save settings</button>
-          </footer>
-        </form>
-      </div>
-    </div>
-
-    <!-- First-run setup -->
-    <div class="setup-overlay hidden" id="setup-overlay">
-      <div class="setup-card">
-        <div class="setup-icon">SR</div>
-        <h2>Welcome to SRLTCP</h2>
-        <p class="setup-lead">Configure your node for secure peer-to-peer chat and file transfer.</p>
-        <form id="setup-form" class="settings-form">
-          <label class="field">
-            <span>Your display name</span>
-            <input type="text" id="setup-name" maxlength="64" required placeholder="e.g. archlinux" />
-          </label>
-          <label class="field">
-            <span>HTTPS port (localhost)</span>
-            <input type="number" id="setup-web-port" value="9876" min="1024" max="65535" />
-          </label>
-          <label class="field">
-            <span>Keep messages</span>
-            <select id="setup-retention">
-              <option value="1d">1 day</option>
-              <option value="1w" selected>1 week</option>
-              <option value="1m">1 month</option>
-              <option value="1y">1 year</option>
-              <option value="forever">Forever</option>
-              <option value="restart">Until restart</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Incoming files folder</span>
-            <div class="folder-row">
-              <input type="text" id="setup-incoming" placeholder="Default: ~/.srltcp/transfers/incoming" readonly />
-              <button type="button" class="action-btn small" data-browse="setup-incoming">Browse</button>
-            </div>
-          </label>
-          <label class="field">
-            <span>Default shared folder</span>
-            <div class="folder-row">
-              <input type="text" id="setup-shared" placeholder="Default: ~/.srltcp/shared" readonly />
-              <button type="button" class="action-btn small" data-browse="setup-shared">Browse</button>
-            </div>
-          </label>
-          <label class="field">
-            <span>Network interface / IP</span>
-            <select id="setup-lan-ip" required></select>
-          </label>
-          <label class="field checkbox-field">
-            <input type="checkbox" id="setup-auto-announce" />
-            <span>Auto-announce on LAN</span>
-          </label>
-          <button type="submit" class="action-btn save-btn">Get started</button>
-        </form>
-        <p class="setup-foot">🔒 Localhost HTTPS only · E2EE · GPL v3</p>
-      </div>
-    </div>
-
-    <footer class="status-bar" id="status-bar">
-      <div class="stat-item" id="stat-cpu">
-        <span class="stat-label">CPU</span>
-        <span class="stat-value">—</span>
-      </div>
-      <div class="stat-item" id="stat-temp">
-        <span class="stat-label">Temp</span>
-        <span class="stat-value">—</span>
-      </div>
-      <div class="stat-item hidden" id="stat-clock" aria-hidden="true"></div>
-      <div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.44</div>
-    </footer>
-
-    <div class="modal-overlay" id="folder-modal">
-      <div class="modal-card">
-        <h3>Choose folder</h3>
-        <div class="folder-crumb" id="folder-crumb"></div>
-        <div id="folder-list"></div>
-        <div class="modal-actions">
-          <button type="button" class="action-btn" id="folder-select">Select</button>
-          <button type="button" class="action-btn secondary" id="folder-cancel">Cancel</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="modal-overlay" id="network-modal">
-      <div class="modal-card wide">
-        <h3>Network map</h3>
-        <p class="hint">Your node (center) and discovered/trusted peers. Solid lines are active encrypted links; dashed lines are discovered only.</p>
-        <div class="network-legend" aria-hidden="false">
-          <span class="legend-self">You</span>
-          <span class="legend-trusted">Trusted</span>
-          <span class="legend-discovered">Discovered</span>
-          <span class="legend-link">Active link</span>
-        </div>
-        <canvas id="network-canvas" width="640" height="360" class="network-canvas"></canvas>
-        <div class="modal-actions">
-          <button type="button" class="action-btn" id="network-refresh">Refresh</button>
-          <button type="button" class="action-btn secondary" id="network-close">Close</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="modal-overlay" id="media-lightbox" aria-hidden="true">
-      <div class="media-lightbox-panel">
-        <button type="button" class="media-lightbox-close" id="media-lightbox-close" aria-label="Close">&times;</button>
-        <div class="media-lightbox-toolbar">
-          <button type="button" class="media-zoom-btn" id="media-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
-          <span class="media-zoom-level" id="media-zoom-level">100%</span>
-          <button type="button" class="media-zoom-btn" id="media-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
-          <button type="button" class="media-zoom-btn" id="media-zoom-reset" title="Reset zoom" aria-label="Reset zoom">Reset</button>
-        </div>
-        <div id="media-lightbox-body" class="media-lightbox-body"></div>
-        <a class="file-download media-lightbox-download" id="media-lightbox-download" href="#" download target="_blank" rel="noopener">Download</a>
-      </div>
-    </div>
-
-    <div class="modal-overlay" id="wan-modal">
-      <div class="modal-card">
-        <h3>WAN peer endpoint</h3>
-        <p class="modal-hint">Manual host/port for internet connections. Verify identity out-of-band before trusting.</p>
-        <label class="field"><span>Host or domain</span><input type="text" id="wan-host" placeholder="203.0.113.10 or peer.example.com" /></label>
-        <label class="field"><span>TCP port</span><input type="number" id="wan-port" min="1" max="65535" value="7825" /></label>
-        <label class="field checkbox-field"><input type="checkbox" id="wan-enabled" /><span>Enable WAN endpoint for this peer</span></label>
-        <label class="field"><span>Connection mode</span>
-          <select id="wan-mode">
-            <option value="auto">Auto (LAN first, then WAN)</option>
-            <option value="lan">LAN only</option>
-            <option value="wan">WAN only</option>
-          </select>
-        </label>
-        <div class="modal-actions">
-          <button type="button" class="action-btn" id="wan-save">Save</button>
-          <button type="button" class="action-btn secondary" id="wan-cancel">Cancel</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="modal-overlay" id="share-modal">
-      <div class="modal-card wide">
-        <h3>Shared folder (E2EE)</h3>
-        <p class="modal-hint">Browse a peer's shared folder over the encrypted link. Downloads use secure file transfer.</p>
-        <div id="share-offer-options" class="share-offer-options hidden">
-          <label class="field"><span>Time limit</span>
-            <select id="share-ttl">
-              <option value="1m">1 minute</option>
-              <option value="5m">5 minutes</option>
-              <option value="1h" selected>1 hour</option>
-              <option value="1d">1 day</option>
-              <option value="1w">1 week</option>
-              <option value="forever">Forever</option>
-            </select>
-          </label>
-          <label class="field"><span>Download limit</span>
-            <select id="share-download-limit">
-              <option value="1">1 download</option>
-              <option value="2">2 downloads</option>
-              <option value="5">5 downloads</option>
-              <option value="10">10 downloads</option>
-              <option value="25">25 downloads</option>
-              <option value="unlimited" selected>Unlimited</option>
-            </select>
-          </label>
-        </div>
-        <div id="share-grants-list" class="share-grants-list"></div>
-        <div id="share-entries" class="share-entries"></div>
-        <div class="modal-actions">
-          <button type="button" class="action-btn secondary" id="share-close">Close</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="modal-overlay" id="release-modal">
-      <div class="modal-card wide">
-        <h3>Release Notes</h3>
-        <pre class="release-notes" id="release-notes-body"></pre>
-        <button type="button" class="action-btn" id="release-close">Close</button>
-      </div>
-    </div>
-
-    <div class="modal-overlay" id="add-contact-modal" aria-hidden="true">
-      <div class="modal-card">
-        <h3>Add contact manually</h3>
-        <p class="hint">Enter a peer's 32-character hash ID (from their SRLTCP profile). Set LAN and/or WAN host/port for manual connections when discovery is unavailable.</p>
-        <label class="field"><span>Hash ID</span>
-          <input type="text" id="add-contact-hash" placeholder="32 hex characters" autocomplete="off" spellcheck="false" />
-        </label>
-        <label class="field"><span>Display name</span>
-          <input type="text" id="add-contact-name" placeholder="Peer name" />
-        </label>
-        <label class="field"><span>Transport</span>
-          <select id="add-contact-transport">
-            <option value="tcp" selected>TCP / LAN</option>
-            <option value="serial">Serial / RF</option>
-          </select>
-        </label>
-        <label class="field"><span>LAN host (optional)</span>
-          <input type="text" id="add-contact-host" placeholder="e.g. 10.0.0.5" />
-        </label>
-        <label class="field"><span>LAN TCP port</span>
-          <input type="number" id="add-contact-port" value="7825" min="1" max="65535" />
-        </label>
-        <h4 class="drawer-subhead">WAN (optional)</h4>
-        <label class="field"><span>WAN host or domain</span>
-          <input type="text" id="add-contact-wan-host" placeholder="203.0.113.10 or peer.example.com" />
-        </label>
-        <label class="field"><span>WAN TCP port</span>
-          <input type="number" id="add-contact-wan-port" value="7825" min="1" max="65535" />
-        </label>
-        <label class="field checkbox-field">
-          <input type="checkbox" id="add-contact-wan-enabled" />
-          <span>Enable WAN endpoint for this contact</span>
-        </label>
-        <label class="field"><span>Connection mode</span>
-          <select id="add-contact-wan-mode">
-            <option value="auto">Auto (LAN first, then WAN)</option>
-            <option value="lan">LAN only</option>
-            <option value="wan">WAN only</option>
-          </select>
-        </label>
-        <div class="modal-actions">
-          <button type="button" class="action-btn secondary" id="add-contact-cancel">Cancel</button>
-          <button type="button" class="action-btn" id="add-contact-save">Add &amp; trust</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="contact-menu hidden" id="contact-menu" role="menu" aria-hidden="true">
-      <button type="button" class="contact-menu-item" data-action="copy-hash">Copy hash ID</button>
-      <button type="button" class="contact-menu-item" data-action="send-folder">Send folder…</button>
-      <button type="button" class="contact-menu-item" data-action="clear-chat">Clear chat history</button>
-      <button type="button" class="contact-menu-item" data-action="rename">Rename contact</button>
-      <button type="button" class="contact-menu-item" data-action="wan">WAN / manual endpoint</button>
-      <button type="button" class="contact-menu-item" data-action="share">Share folder (E2EE)</button>
-      <button type="button" class="contact-menu-item" data-action="block">Block contact</button>
-      <button type="button" class="contact-menu-item danger" data-action="delete">Delete contact</button>
-    </div>
-
-    <div class="toast-container" id="toasts"></div>
-  </div>
-  <script src="/static/app.js"></script>
+</button>
+</div>
+<div class="sidebar-tabs">
+<button type="button" class="peer-tab active" data-tab="discovered">Discovered</button>
+<button type="button" class="peer-tab" data-tab="trusted">Trusted</button>
+</div>
+<div class="contacts-label" id="contacts-label">Discovered Peers</div>
+<nav class="contacts drop-zone" id="contacts" aria-label="Contacts"></nav>
+<div class="drop-overlay hidden" id="drop-overlay">Drop files to send to peer</div>
+</aside>
+<!-- Main chat -->
+<main class="chat" id="chat-panel">
+<div class="chat-empty" id="chat-empty">
+<div class="empty-illustration">
+<svg viewBox="0 0 120 120" fill="none"><circle cx="60" cy="60" r="50" stroke="currentColor" stroke-width="1.5" opacity=".2"/><path d="M35 55c0-14 11-25 25-25s25 11 25 25" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".4"/><circle cx="45" cy="58" r="3" fill="currentColor" opacity=".5"/><circle cx="75" cy="58" r="3" fill="currentColor" opacity=".5"/><path d="M48 72c4 6 20 6 24 0" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".4"/></svg>
+</div>
+<h2>Welcome to SRLTCP</h2>
+<p>Select a peer from the sidebar or click <strong>Announce</strong> to discover devices on your network.</p>
+<p class="hint">All messages are end-to-end encrypted.</p>
+</div>
+<div class="chat-active hidden" id="chat-active">
+<header class="chat-header">
+<button class="icon-btn mobile-only" id="btn-back" aria-label="Back">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+</button>
+<div class="avatar peer-avatar" id="peer-avatar">?</div>
+<div class="chat-header-info">
+<div class="chat-peer-name" id="chat-peer-name">Peer</div>
+<div class="chat-peer-status" id="chat-peer-status">
+<span class="status-dot"></span>
+<span id="chat-peer-transport" class="transport-badge header-badge hidden" aria-hidden="true"></span>
+<span id="chat-peer-meta">Connecting…</span>
+</div>
+</div>
+<div class="chat-header-actions">
+<button class="icon-btn" id="btn-share-folder" title="Share folder (E2EE)">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+</button>
+<button class="icon-btn" id="btn-send-folder-peer" title="Send folder">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z"/><path d="M12 11v6M9 14h6"/></svg>
+</button>
+<button class="icon-btn" id="btn-file" title="Send file">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+</button>
+<input type="file" id="file-input" class="hidden" />
+</div>
+</header>
+<div class="messages" id="messages" role="log" aria-live="polite"></div>
+<div class="transfer-dock hidden" id="transfer-dock" aria-live="polite" aria-label="Active file transfers">
+<div class="transfer-dock-list" id="transfer-dock-list"></div>
+</div>
+<footer class="composer">
+<div class="composer-inner">
+<textarea id="msg-input" rows="1" placeholder="Message…" disabled></textarea>
+<button class="send-btn" id="send-btn" disabled aria-label="Send">
+<svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+</button>
+</div>
+</footer>
+</div>
+</main>
+<!-- Settings window -->
+<div class="settings-window hidden" id="settings-window" aria-hidden="true">
+<div class="settings-window-overlay" id="settings-window-overlay"></div>
+<div class="settings-window-panel">
+<header class="settings-window-header">
+<h3>Settings</h3>
+<button class="icon-btn" id="btn-close-settings" aria-label="Close">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+</button>
+</header>
+<nav class="settings-tabs" role="tablist">
+<button type="button" class="settings-tab active" data-tab="general">General</button>
+<button type="button" class="settings-tab" data-tab="network">Network</button>
+<button type="button" class="settings-tab" data-tab="serial">Serial</button>
+<button type="button" class="settings-tab" data-tab="folders">Folders</button>
+<button type="button" class="settings-tab" data-tab="clock">Clock</button>
+<button type="button" class="settings-tab" data-tab="advanced">Advanced</button>
+</nav>
+<form id="settings-form" class="settings-window-body">
+<div class="settings-panel active" data-panel="general">
+<label class="field">
+<span>Display name</span>
+<input type="text" id="set-name" maxlength="64" required />
+</label>
+<label class="field">
+<span>Keep messages</span>
+<select id="set-retention">
+<option value="1d">1 day</option>
+<option value="1w">1 week</option>
+<option value="1m">1 month</option>
+<option value="1y">1 year</option>
+<option value="forever">Forever</option>
+<option value="restart">Until restart</option>
+</select>
+</label>
+</div>
+<div class="settings-panel" data-panel="network">
+<label class="field">
+<span>Web UI port (HTTPS)</span>
+<input type="number" id="set-web-port" min="1024" max="65535" />
+<small>Default 9876 — restart required</small>
+</label>
+<label class="field">
+<span>TCP peer port</span>
+<input type="number" id="set-tcp-port" min="1024" max="65535" />
+<small>Default 7825 — restart required; use the same on every peer</small>
+</label>
+<label class="field">
+<span>UDP discovery port</span>
+<input type="number" id="set-discovery-port" min="1024" max="65535" />
+<small>Default 7826 — restart required; use the same on every peer</small>
+</label>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-strict-ports" checked />
+<span>Use exact ports (fail if busy instead of auto-incrementing)</span>
+</label>
+<label class="field">
+<span>Network interface / IP</span>
+<select id="set-lan-ip"></select>
+</label>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-auto-announce" />
+<span>Auto-announce on startup (LAN only)</span>
+</label>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-hub-enabled" />
+<span>Connect via hub server (no port-forward needed)</span>
+</label>
+<label class="field">
+<span>Hub server host</span>
+<input type="text" id="set-hub-host" placeholder="hub.example.com or 203.0.113.10" />
+<small>Public address of Bob's headless hub — port-forward this on the hub host only</small>
+</label>
+<label class="field">
+<span>Hub server port</span>
+<input type="number" id="set-hub-port" min="1024" max="65535" value="7825" />
+<small>Default 7825 — must match the hub server's listen port</small>
+</label>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-wan-expose" />
+<span>I will port-forward TCP 7825 for direct WAN peers (advanced)</span>
+</label>
+<p class="field-hint">With a hub configured, click <strong>Announce</strong> to register on the hub and discover other hub users. All traffic remains E2EE — the hub cannot read messages.</p>
+<button type="button" class="action-btn" id="btn-network-viz">Network map</button>
+</div>
+<div class="settings-panel" data-panel="serial">
+<label class="field checkbox-field">
+<input type="checkbox" id="set-enable-serial" />
+<span>Enable serial transport</span>
+</label>
+<label class="field">
+<span>Serial port</span>
+<select id="set-serial-port"></select>
+<small id="set-serial-hint">Arch: <code>sudo usermod -aG uucp $USER</code> then log out/in. Both peers need serial open to discover.</small>
+</label>
+<label class="field">
+<span>Baud rate</span>
+<select id="set-serial-baud"></select>
+</label>
+</div>
+<div class="settings-panel" data-panel="folders">
+<label class="field">
+<span>Incoming files folder</span>
+<div class="folder-row">
+<input type="text" id="set-incoming" placeholder="~/.srltcp/transfers/incoming" readonly />
+<button type="button" class="action-btn small" data-browse="set-incoming">Browse</button>
+</div>
+</label>
+<label class="field">
+<span>Default shared folder</span>
+<div class="folder-row">
+<input type="text" id="set-shared" placeholder="~/.srltcp/shared" readonly />
+<button type="button" class="action-btn small" data-browse="set-shared">Browse</button>
+</div>
+</label>
+</div>
+<div class="settings-panel" data-panel="clock">
+<label class="field checkbox-field">
+<input type="checkbox" id="set-show-clock" checked />
+<span>Show clock at top of sidebar</span>
+</label>
+<label class="field">
+<span>Timezone</span>
+<select id="set-timezone"></select>
+</label>
+<label class="field">
+<span>Clock source</span>
+<select id="set-clock-source">
+<option value="system">This machine (local)</option>
+<option value="ntp">NTP server (online)</option>
+</select>
+</label>
+<label class="field" id="ntp-server-field">
+<span>NTP server</span>
+<input type="text" id="set-ntp-server" placeholder="pool.ntp.org" />
+<small>Used when clock source is NTP</small>
+</label>
+</div>
+<div class="settings-panel" data-panel="advanced">
+<section class="drawer-section">
+<h4>Your Identities</h4>
+<div id="identities"></div>
+</section>
+<section class="drawer-section">
+<h4>Active Transfers</h4>
+<div id="transfers"></div>
+</section>
+<section class="drawer-section">
+<h4>Activity</h4>
+<div class="activity-log" id="activity-log"></div>
+</section>
+<button type="button" class="action-btn danger-btn" id="btn-restart">Restart SRLTCP</button>
+</div>
+<footer class="settings-window-footer">
+<button type="submit" class="action-btn save-btn">Save settings</button>
+</footer>
+</form>
+</div>
+</div>
+<!-- First-run setup -->
+<div class="setup-overlay hidden" id="setup-overlay">
+<div class="setup-card">
+<div class="setup-icon">SR</div>
+<h2>Welcome to SRLTCP</h2>
+<p class="setup-lead">Configure your node for secure peer-to-peer chat and file transfer.</p>
+<form id="setup-form" class="settings-form">
+<label class="field">
+<span>Your display name</span>
+<input type="text" id="setup-name" maxlength="64" required placeholder="e.g. archlinux" />
+</label>
+<label class="field">
+<span>HTTPS port (localhost)</span>
+<input type="number" id="setup-web-port" value="9876" min="1024" max="65535" />
+</label>
+<label class="field">
+<span>Keep messages</span>
+<select id="setup-retention">
+<option value="1d">1 day</option>
+<option value="1w" selected>1 week</option>
+<option value="1m">1 month</option>
+<option value="1y">1 year</option>
+<option value="forever">Forever</option>
+<option value="restart">Until restart</option>
+</select>
+</label>
+<label class="field">
+<span>Incoming files folder</span>
+<div class="folder-row">
+<input type="text" id="setup-incoming" placeholder="Default: ~/.srltcp/transfers/incoming" readonly />
+<button type="button" class="action-btn small" data-browse="setup-incoming">Browse</button>
+</div>
+</label>
+<label class="field">
+<span>Default shared folder</span>
+<div class="folder-row">
+<input type="text" id="setup-shared" placeholder="Default: ~/.srltcp/shared" readonly />
+<button type="button" class="action-btn small" data-browse="setup-shared">Browse</button>
+</div>
+</label>
+<label class="field">
+<span>Network interface / IP</span>
+<select id="setup-lan-ip" required></select>
+</label>
+<label class="field checkbox-field">
+<input type="checkbox" id="setup-auto-announce" />
+<span>Auto-announce on LAN</span>
+</label>
+<button type="submit" class="action-btn save-btn">Get started</button>
+</form>
+<p class="setup-foot">🔒 Localhost HTTPS only · E2EE · GPL v3</p>
+</div>
+</div>
+<footer class="status-bar" id="status-bar">
+<div class="stat-item" id="stat-cpu">
+<span class="stat-label">CPU</span>
+<span class="stat-value">—</span>
+</div>
+<div class="stat-item" id="stat-temp">
+<span class="stat-label">Temp</span>
+<span class="stat-value">—</span>
+</div>
+<div class="stat-item hidden" id="stat-clock" aria-hidden="true"></div>
+<div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.44</div>
+</footer>
+<div class="modal-overlay" id="folder-modal">
+<div class="modal-card">
+<h3>Choose folder</h3>
+<div class="folder-crumb" id="folder-crumb"></div>
+<div id="folder-list"></div>
+<div class="modal-actions">
+<button type="button" class="action-btn" id="folder-select">Select</button>
+<button type="button" class="action-btn secondary" id="folder-cancel">Cancel</button>
+</div>
+</div>
+</div>
+<div class="modal-overlay" id="network-modal">
+<div class="modal-card wide">
+<h3>Network map</h3>
+<p class="hint">Your node (center) and discovered/trusted peers. Solid lines are active encrypted links; dashed lines are discovered only.</p>
+<div class="network-legend" aria-hidden="false">
+<span class="legend-self">You</span>
+<span class="legend-trusted">Trusted</span>
+<span class="legend-discovered">Discovered</span>
+<span class="legend-link">Active link</span>
+</div>
+<canvas id="network-canvas" width="640" height="360" class="network-canvas"></canvas>
+<div class="modal-actions">
+<button type="button" class="action-btn" id="network-refresh">Refresh</button>
+<button type="button" class="action-btn secondary" id="network-close">Close</button>
+</div>
+</div>
+</div>
+<div class="modal-overlay" id="media-lightbox" aria-hidden="true">
+<div class="media-lightbox-panel">
+<button type="button" class="media-lightbox-close" id="media-lightbox-close" aria-label="Close">&times;</button>
+<div class="media-lightbox-toolbar">
+<button type="button" class="media-zoom-btn" id="media-zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
+<span class="media-zoom-level" id="media-zoom-level">100%</span>
+<button type="button" class="media-zoom-btn" id="media-zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+<button type="button" class="media-zoom-btn" id="media-zoom-reset" title="Reset zoom" aria-label="Reset zoom">Reset</button>
+</div>
+<div id="media-lightbox-body" class="media-lightbox-body"></div>
+<a class="file-download media-lightbox-download" id="media-lightbox-download" href="#" download target="_blank" rel="noopener">Download</a>
+</div>
+</div>
+<div class="modal-overlay" id="wan-modal">
+<div class="modal-card">
+<h3>WAN peer endpoint</h3>
+<p class="modal-hint">Manual host/port for internet connections. Verify identity out-of-band before trusting.</p>
+<label class="field"><span>Host or domain</span><input type="text" id="wan-host" placeholder="203.0.113.10 or peer.example.com" /></label>
+<label class="field"><span>TCP port</span><input type="number" id="wan-port" min="1" max="65535" value="7825" /></label>
+<label class="field checkbox-field"><input type="checkbox" id="wan-enabled" /><span>Enable WAN endpoint for this peer</span></label>
+<label class="field"><span>Connection mode</span>
+<select id="wan-mode">
+<option value="auto">Auto (LAN first, then WAN)</option>
+<option value="lan">LAN only</option>
+<option value="wan">WAN only</option>
+</select>
+</label>
+<div class="modal-actions">
+<button type="button" class="action-btn" id="wan-save">Save</button>
+<button type="button" class="action-btn secondary" id="wan-cancel">Cancel</button>
+</div>
+</div>
+</div>
+<div class="modal-overlay" id="share-modal">
+<div class="modal-card wide">
+<h3>Shared folder (E2EE)</h3>
+<p class="modal-hint">Browse a peer's shared folder over the encrypted link. Downloads use secure file transfer.</p>
+<div id="share-offer-options" class="share-offer-options hidden">
+<label class="field"><span>Time limit</span>
+<select id="share-ttl">
+<option value="1m">1 minute</option>
+<option value="5m">5 minutes</option>
+<option value="1h" selected>1 hour</option>
+<option value="1d">1 day</option>
+<option value="1w">1 week</option>
+<option value="forever">Forever</option>
+</select>
+</label>
+<label class="field"><span>Download limit</span>
+<select id="share-download-limit">
+<option value="1">1 download</option>
+<option value="2">2 downloads</option>
+<option value="5">5 downloads</option>
+<option value="10">10 downloads</option>
+<option value="25">25 downloads</option>
+<option value="unlimited" selected>Unlimited</option>
+</select>
+</label>
+</div>
+<div id="share-grants-list" class="share-grants-list"></div>
+<div id="share-entries" class="share-entries"></div>
+<div class="modal-actions">
+<button type="button" class="action-btn secondary" id="share-close">Close</button>
+</div>
+</div>
+</div>
+<div class="modal-overlay" id="release-modal">
+<div class="modal-card wide">
+<h3>Release Notes</h3>
+<pre class="release-notes" id="release-notes-body"></pre>
+<button type="button" class="action-btn" id="release-close">Close</button>
+</div>
+</div>
+<div class="modal-overlay" id="add-contact-modal" aria-hidden="true">
+<div class="modal-card">
+<h3>Add contact manually</h3>
+<p class="hint">Enter a peer's 32-character hash ID (from their SRLTCP profile). Set LAN and/or WAN host/port for manual connections when discovery is unavailable.</p>
+<label class="field"><span>Hash ID</span>
+<input type="text" id="add-contact-hash" placeholder="32 hex characters" autocomplete="off" spellcheck="false" />
+</label>
+<label class="field"><span>Display name</span>
+<input type="text" id="add-contact-name" placeholder="Peer name" />
+</label>
+<label class="field"><span>Transport</span>
+<select id="add-contact-transport">
+<option value="tcp" selected>TCP / LAN</option>
+<option value="serial">Serial / RF</option>
+</select>
+</label>
+<label class="field"><span>LAN host (optional)</span>
+<input type="text" id="add-contact-host" placeholder="e.g. 10.0.0.5" />
+</label>
+<label class="field"><span>LAN TCP port</span>
+<input type="number" id="add-contact-port" value="7825" min="1" max="65535" />
+</label>
+<h4 class="drawer-subhead">WAN (optional)</h4>
+<label class="field"><span>WAN host or domain</span>
+<input type="text" id="add-contact-wan-host" placeholder="203.0.113.10 or peer.example.com" />
+</label>
+<label class="field"><span>WAN TCP port</span>
+<input type="number" id="add-contact-wan-port" value="7825" min="1" max="65535" />
+</label>
+<label class="field checkbox-field">
+<input type="checkbox" id="add-contact-wan-enabled" />
+<span>Enable WAN endpoint for this contact</span>
+</label>
+<label class="field"><span>Connection mode</span>
+<select id="add-contact-wan-mode">
+<option value="auto">Auto (LAN first, then WAN)</option>
+<option value="lan">LAN only</option>
+<option value="wan">WAN only</option>
+</select>
+</label>
+<div class="modal-actions">
+<button type="button" class="action-btn secondary" id="add-contact-cancel">Cancel</button>
+<button type="button" class="action-btn" id="add-contact-save">Add &amp; trust</button>
+</div>
+</div>
+</div>
+<div class="contact-menu hidden" id="contact-menu" role="menu" aria-hidden="true">
+<button type="button" class="contact-menu-item" data-action="copy-hash">Copy hash ID</button>
+<button type="button" class="contact-menu-item" data-action="send-folder">Send folder…</button>
+<button type="button" class="contact-menu-item" data-action="clear-chat">Clear chat history</button>
+<button type="button" class="contact-menu-item" data-action="rename">Rename contact</button>
+<button type="button" class="contact-menu-item" data-action="wan">WAN / manual endpoint</button>
+<button type="button" class="contact-menu-item" data-action="share">Share folder (E2EE)</button>
+<button type="button" class="contact-menu-item" data-action="block">Block contact</button>
+<button type="button" class="contact-menu-item danger" data-action="delete">Delete contact</button>
+</div>
+<div class="toast-container" id="toasts"></div>
+</div>
+<script src="/static/app.js"></script>
 </body>
 </html>

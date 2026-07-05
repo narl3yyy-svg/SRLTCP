@@ -13,8 +13,8 @@ from aiohttp import web
 
 from srltcp import __version__
 from srltcp.core.messaging.share_peer import SHARE_DOWNLOAD_LIMITS, SHARE_TTL_SECONDS
-from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.core.protocol.messages import is_valid_transfer_id
+from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.core.trusted import TrustedPeer, is_valid_hash_id
 from srltcp.utils.folders import list_directory
 from srltcp.utils.logging import get_logger
