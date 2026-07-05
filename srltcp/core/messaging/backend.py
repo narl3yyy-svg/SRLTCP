@@ -20,7 +20,7 @@ from srltcp.core.messaging.links import PeerLink, PeerLinkMixin
 from srltcp.core.messaging.models import ChatMessage
 from srltcp.core.messaging.ping import PingMixin
 from srltcp.core.messaging.queue import QueueMixin
-from srltcp.core.messaging.relay import RelayMixin
+from srltcp.core.messaging.hub import HubMixin
 from srltcp.core.messaging.share_peer import SharePeerMixin
 from srltcp.core.messaging.transfer import TransferMixin
 from srltcp.core.protocol.messages import (
@@ -50,7 +50,10 @@ class NodeConfig:
     tcp_port: int = 7825
     discovery_port: int = DISCOVERY_PORT
     strict_ports: bool = True
-    relay_mode: bool = False
+    hub_mode: bool = False
+    hub_enabled: bool = False
+    hub_host: str = ""
+    hub_port: int = 7825
     enable_tcp: bool = True
     enable_serial: bool = False
     serial_port: str = ""
@@ -69,7 +72,7 @@ class MessagingBackend(
     QueueMixin,
     TransferMixin,
     SharePeerMixin,
-    RelayMixin,
+    HubMixin,
 ):
     """Central messaging orchestrator."""
 
@@ -104,7 +107,7 @@ class MessagingBackend(
         self._init_queue()
         self._init_transfer()
         self._init_share_peer()
-        self._init_relay()
+        self._init_hub()
 
     def set_callbacks(
         self,
@@ -135,9 +138,10 @@ class MessagingBackend(
         self._running = True
 
         if self.config.enable_tcp:
-            self.identities["tcp"] = self.identity_store.load_or_create(
-                self.config.name, "tcp"
-            )
+            if not self.config.hub_mode:
+                self.identities["tcp"] = self.identity_store.load_or_create(
+                    self.config.name, "tcp"
+                )
             self.tcp_transport = TCPTransport(
                 host=self.config.bind_host,
                 port=self.config.tcp_port,
@@ -166,19 +170,24 @@ class MessagingBackend(
                 self._record_serial_failure(self.serial_transport.port, exc)
                 self.serial_transport = None
 
-        if self.config.announce:
+        if self.config.announce and not self.config.hub_mode:
             await self.start_announce_loop()
-        await self.start_ping_loop()
+        if not self.config.hub_mode:
+            await self.start_ping_loop()
+        if self._hub_enabled():
+            await self.start_hub_client()
 
         log.info(
-            "MessagingBackend started (tcp=%s, serial=%s, relay=%s)",
+            "MessagingBackend started (tcp=%s, serial=%s, hub_mode=%s, hub_client=%s)",
             bool(self.tcp_transport),
             bool(self.serial_transport),
-            self.config.relay_mode,
+            self.config.hub_mode,
+            self._hub_enabled(),
         )
 
     async def stop(self) -> None:
         self._running = False
+        await self.stop_hub_client()
         await self.stop_announce_loop()
         await self.stop_ping_loop()
         for task in list(self._reconnect_tasks.values()):
@@ -338,6 +347,8 @@ class MessagingBackend(
         if event.kind == "discovered" and event.data and event.peer:
             await self._handle_discovered(event.peer.address, "tcp", event.data)
         elif event.kind == "disconnected" and event.peer:
+            if self.config.hub_mode:
+                await self._handle_hub_depart_server(event.peer.peer_id)
             stale = self.get_link_by_peer_id(event.peer.peer_id)
             link_name = stale.peer_name if stale else ""
             link_hash = self.remove_link_for_peer(event.peer.peer_id)
@@ -345,8 +356,6 @@ class MessagingBackend(
                 if stale and not link_name:
                     link_name = stale.peer_name
                 self._pending_handshakes.pop(link_hash, None)
-                if self.config.relay_mode:
-                    self.routing.remove_for_peer(event.peer.peer_id)
                 if self.has_active_transfer_for(link_hash):
                     await self._recover_incoming_transfers_for_peer(link_hash)
                 transfer_active = self.has_active_transfer_for(link_hash)
@@ -380,6 +389,7 @@ class MessagingBackend(
                         "error": event.error,
                     }
                 )
+        self._on_hub_transport_event(event)
 
     async def _on_transport_frame(self, peer: TransportPeer, payload: bytes) -> None:
         try:
@@ -389,6 +399,13 @@ class MessagingBackend(
             return
 
         try:
+            if self.config.hub_mode:
+                if msg_type == MessageType.HUB_REGISTER:
+                    await self._handle_hub_register_server(peer.peer_id, body)
+                elif msg_type == MessageType.RELAY_ENVELOPE:
+                    await self._handle_hub_relay_server(peer.peer_id, body)
+                return
+
             if msg_type == MessageType.ANNOUNCE:
                 if peer.transport == "serial":
                     log.info("Serial ANNOUNCE received on %s", peer.address)
@@ -466,10 +483,20 @@ class MessagingBackend(
                     body = link.crypto.decrypt(body)
                 if link:
                     await self._handle_share_request(link.hash_id, body)
+            elif msg_type == MessageType.HUB_REGISTER:
+                if self.config.hub_mode:
+                    await self._handle_hub_register_server(peer.peer_id, body)
+            elif msg_type == MessageType.HUB_PRESENCE:
+                if not self.config.hub_mode:
+                    await self._handle_hub_presence_client(body)
+            elif msg_type == MessageType.HUB_DEPART:
+                if not self.config.hub_mode:
+                    await self._handle_hub_depart_client(body)
             elif msg_type == MessageType.RELAY_ENVELOPE:
-                await self._handle_relay_envelope(peer.peer_id, body)
-            elif msg_type == MessageType.ROUTE_UPDATE:
-                await self._handle_route_update(peer.peer_id, body)
+                if self.config.hub_mode:
+                    await self._handle_hub_relay_server(peer.peer_id, body)
+                else:
+                    await self._handle_hub_relay_client(body)
         except Exception as exc:
             log.warning(
                 "Handler failed for msg_type=%s from %s: %s",
@@ -477,15 +504,6 @@ class MessagingBackend(
                 peer.peer_id[:8],
                 exc,
             )
-
-    async def _dispatch_encrypted(self, peer_id: str, inner: bytes) -> None:
-        try:
-            msg_type, flags, _, _, body = parse_header(inner)
-        except Exception:
-            return
-        link = self.get_link_by_peer_id(peer_id)
-        if msg_type == MessageType.TEXT and link:
-            await self._handle_text(peer_id, body, flags)
 
     def is_trusted(self, hash_id: str) -> bool:
         peer = self.trusted.get(hash_id)
@@ -579,7 +597,10 @@ class MessagingBackend(
         return build_header(msg_type, flags=Flags.ENCRYPTED | Flags.E2EE, body=encrypted)
 
     async def _send_raw(self, peer_id: str, transport: str, packet: bytes) -> None:
-        if transport == "tcp" and self.tcp_transport:
+        if transport == "hub":
+            dest_hash = self._peer_id_to_hash.get(peer_id) or peer_id.removeprefix("hub-")
+            await self._send_via_hub(dest_hash, packet)
+        elif transport == "tcp" and self.tcp_transport:
             await self.tcp_transport.send(peer_id, packet)
         elif transport == "serial" and self.serial_transport:
             await self.serial_transport.send(peer_id, packet)
@@ -621,6 +642,8 @@ class MessagingBackend(
                 "baud": self.config.serial_baud,
                 "error": self._serial_error,
             }
+        if self._hub_enabled() or self.config.hub_mode:
+            status["hub"] = self.hub_status()
         return status
 
     def _prune_messages(self) -> None:
@@ -636,8 +659,11 @@ class MessagingBackend(
         own_hashes = {i.hash_id for i in self.identities.values()}
         own_keys = {i.public_bytes().hex() for i in self.identities.values()}
         trusted_hashes = {t.hash_id for t in self.trusted.list_peers()}
+        hub_only = self._hub_enabled()
         peers = []
         for p in self.discovery.list_peers():
+            if hub_only and p.transport != "hub":
+                continue
             if p.hash_id in own_hashes or p.public_key in own_keys:
                 self.discovery.remove(p.hash_id)
                 continue

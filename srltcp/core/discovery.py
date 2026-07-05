@@ -53,12 +53,15 @@ class DiscoveryRegistry:
             data = decode_payload(payload)
         except Exception:
             return None, False
-        if data.get("type") != "announce":
+        ann_type = data.get("type", "")
+        if ann_type not in ("announce", "hub_presence", "hub_register"):
             return None, False
         hash_id = data.get("hash_id", "")
         if not hash_id:
             return None, False
         ann_transport = str(data.get("transport", transport))
+        if data.get("via_hub") or ann_type in ("hub_presence", "hub_register"):
+            ann_transport = "hub"
         peer_key = f"{ann_transport}:{hash_id}"
         is_new = peer_key not in self._peers
         existing = self._peers.get(peer_key)

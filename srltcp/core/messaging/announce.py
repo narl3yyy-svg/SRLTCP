@@ -70,14 +70,17 @@ class AnnounceMixin:
 
         payload = self.build_announce_payload(transport_name)
         if transport_name == "tcp":
-            if not self.tcp_transport:
+            if hasattr(self, "_hub_enabled") and self._hub_enabled():
+                await self._send_hub_register()
+            elif not self.tcp_transport:
                 raise AnnounceError(transport_name, "TCP transport is not enabled")
-            self.tcp_transport.set_announce_payload(payload)
-            if not await self.tcp_transport.broadcast_discovery(payload):
-                raise AnnounceError(
-                    transport_name,
-                    "UDP discovery socket is not available — restart the node",
-                )
+            else:
+                self.tcp_transport.set_announce_payload(payload)
+                if not await self.tcp_transport.broadcast_discovery(payload):
+                    raise AnnounceError(
+                        transport_name,
+                        "UDP discovery socket is not available — restart the node",
+                    )
         elif transport_name == "serial":
             if not self.serial_transport and self.config.enable_serial:
                 result = await self.ensure_serial_transport()

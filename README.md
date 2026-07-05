@@ -5,9 +5,9 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-**SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P mode, and optionally uses a lightweight **headless relay server** that routes traffic without decrypting end-to-end encrypted payloads.
+**SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
 
-**Current version:** 0.1.44
+**Current version:** 0.1.49
 
 ---
 
@@ -17,7 +17,7 @@
 |---------|-------------|
 | **Dual transports** | TCP/IP networking + USB Serial (pyserial) |
 | **P2P mode** | Direct encrypted links between peers on LAN or serial cable |
-| **Relay mode** | Optional headless server forwards opaque E2EE envelopes |
+| **Hub server** | Optional headless hub — clients dial out, discover each other, E2EE via hub |
 | **Secure messaging** | Ed25519 identity + X25519 key exchange + AES-GCM |
 | **Fast file transfer** | Chunked streaming (1 MiB TCP / 8 KiB serial), zstd on TCP, resume support |
 | **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
@@ -54,8 +54,8 @@ srltcp/
       announce.py           # Discovery broadcasts
       queue.py              # Offline message queue
       transfer.py           # Chunked file transfer
-      routing.py            # Relay routing table
-      relay.py              # Opaque envelope forwarding
+      hub.py                # Hub client + server forwarding
+      presence.py           # Hub presence registry
   transports/
     tcp.py                  # TCP listener + UDP discovery
     serial.py               # USB serial (pyserial)
@@ -96,12 +96,13 @@ flowchart TB
     MB <--> SER
     TCP --> UDP
 
-    subgraph Relay["Optional Headless Relay :7827"]
-        RT[Routing Table]
+    subgraph Hub["Optional Headless Hub :7825"]
+        PR[Presence Registry]
         FWD[Opaque Envelope Forward]
-        RT --> FWD
+        PR --> FWD
     end
 
+    MB -.->|outbound dial| Hub
     MB -.->|RELAY_ENVELOPE| FWD
     FWD -.->|cannot decrypt| MB
 ```
@@ -153,20 +154,20 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 | **USB Serial** | Same framed protocol over serial | Yes — identical E2EE session |
 | **UDP discovery (7826)** | Peer announces (hash, name, endpoints) | No — discovery metadata is plaintext on LAN |
 | **Web UI (9876)** | Browser ↔ local node over HTTPS | Localhost TLS only; chat/file APIs proxy local data |
-| **Relay (optional 7827)** | `RELAY_ENVELOPE` route token + opaque blob | Relay sees routing metadata only, not content |
+| **Hub (optional 7825)** | `RELAY_ENVELOPE` routing tokens + opaque blob | Hub sees hash routing tokens only, not content |
 
 **File transfer flow:** upload to local staging → `FILE_OFFER` (encrypted JSON) → `FILE_ACCEPT` → encrypted `FILE_CHUNK` stream → `FILE_COMPLETE` with SHA-256 verify. The receiver writes to your configured incoming folder; the Web UI serves completed files from disk for preview/download.
 
 **WAN use:** Forward **TCP 7825** to your node. Traffic after handshake is E2EE. An observer on the internet can still see connection timing, packet sizes, and your public IP — verify peer hash IDs out-of-band before trusting. Set WAN host/port per contact (Add contact or contact menu → WAN).
 
-### Relay privacy
+### Hub privacy
 
-In relay mode, the server forwards `RELAY_ENVELOPE` packets containing only:
+When using a hub, the server forwards `RELAY_ENVELOPE` packets containing only:
 
-- A 16-byte route token (destination hash prefix)
-- An opaque encrypted blob
+- 16-byte binary routing tokens (destination and source identity hashes)
+- An opaque encrypted blob (handshake, chat, file chunks — all E2EE)
 
-The relay **never receives session keys** and cannot decrypt message or file content.
+The hub **never receives session keys** and cannot decrypt message or file content. Hub registration is signed with your Ed25519 identity to reduce presence spoofing.
 
 ### What is not encrypted
 
@@ -300,19 +301,45 @@ Start the web UI on two machines on the same LAN:
 2. Select a discovered peer in the sidebar
 3. Send encrypted messages in the chat panel
 
-### Headless relay server
+### Hub server (recommended for internet users)
 
-Run a 24/7 relay on a VPS or always-on LAN host:
-
-```bash
-./run.sh relay --bind 0.0.0.0 --port 7827
-```
-
-Clients connect through the relay with E2EE — the relay only routes opaque envelopes:
+Bob runs a headless hub on a machine with a public IP (home PC with port-forward, or a VPS). **Only Bob** needs to forward **TCP 7825** on his router.
 
 ```bash
-./run.sh web --relay --name "client-a"
+# Bob — always-on hub (default port 7825)
+./run.sh hub --bind 0.0.0.0 --port 7825
+
+# Custom port (update router forward and client settings to match)
+./run.sh hub --bind 0.0.0.0 --port 9000
 ```
+
+Alice and John run normal clients — **no port-forward on their routers**:
+
+```bash
+./run.sh web --name "alice"
+./run.sh web --name "john"
+```
+
+In each client: **Settings → Network**
+
+1. Enable **Connect via hub server**
+2. Enter Bob's public host (`hub.bob.example.com` or IP) and port (`7825`)
+3. Save settings
+
+Then click **Announce** (TCP button). Each client registers on Bob's hub. Alice sees John in **Discovered** (and vice versa) only when both use the **same** hub. Trust the peer, open chat, and message — traffic is tunneled through the hub but remains end-to-end encrypted.
+
+```
+Alice (home)                    Bob's hub (port 7825)              John (home)
+   |---- outbound TCP ---------->|                                |
+   |                             |<--------- outbound TCP --------|
+   |<======== RELAY_ENVELOPE (opaque E2EE) =======================>|
+```
+
+**Security notes:**
+
+- Verify peer **hash IDs** out-of-band before trusting
+- Do **not** port-forward port **9876** (web UI stays localhost-only)
+- Hub operator sees who is online and approximate traffic timing/sizes, not message content
 
 ### USB Serial P2P
 
@@ -459,9 +486,9 @@ SRLTCP listens on **TCP 7825** by default for encrypted P2P messaging (handshake
 **Tips for maximum speed:**
 
 - Use wired Ethernet or USB 3 serial adapters at 115200+ baud
-- Prefer direct P2P over relay (one less hop)
+- Prefer direct LAN P2P when on the same network (one less hop than hub)
 - Disable compression for pre-compressed archives (future: per-file flag)
-- Run relay on a low-latency host close to all peers
+- Run the hub on a low-latency host close to your users
 
 ---
 
@@ -483,7 +510,7 @@ pytest tests/ -v                # unit tests only
 | Command | Description |
 |---------|-------------|
 | `srltcp web` | Web UI + P2P node |
-| `srltcp relay` | Headless relay server |
+| `srltcp hub` | Headless connection hub server |
 | `srltcp send` | One-shot CLI message |
 | `srltcp identity` | Show local hash IDs |
 
@@ -592,7 +619,7 @@ See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge 
 
 ## Roadmap
 
-- [ ] Multi-hop relay with source routing and loop prevention
+- [ ] Multi-hop hub chains with source routing and loop prevention
 - [ ] Android USB serial Chaquopy shim (full OTG support)
 - [ ] Folder sync (bidirectional, incremental)
 - [ ] Contact book with pinned peer hashes

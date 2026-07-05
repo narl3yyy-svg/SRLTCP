@@ -1,7 +1,7 @@
 """Messaging constants and timeouts."""
 
 DEFAULT_TCP_PORT = 7825
-RELAY_TCP_PORT = 7827
+DEFAULT_HUB_PORT = 7825
 DISCOVERY_PORT = 7826
 WEB_PORT = 9876
 

@@ -188,10 +188,24 @@
               <span>Auto-announce on startup (LAN only)</span>
             </label>
             <label class="field checkbox-field">
-              <input type="checkbox" id="set-wan-expose" />
-              <span>I will port-forward TCP 7825 for WAN peers</span>
+              <input type="checkbox" id="set-hub-enabled" />
+              <span>Connect via hub server (no port-forward needed)</span>
             </label>
-            <p class="field-hint">WAN peers must be added manually with host + port. All traffic is E2EE after handshake.</p>
+            <label class="field">
+              <span>Hub server host</span>
+              <input type="text" id="set-hub-host" placeholder="hub.example.com or 203.0.113.10" />
+              <small>Public address of Bob's headless hub — port-forward this on the hub host only</small>
+            </label>
+            <label class="field">
+              <span>Hub server port</span>
+              <input type="number" id="set-hub-port" min="1024" max="65535" value="7825" />
+              <small>Default 7825 — must match the hub server's listen port</small>
+            </label>
+            <label class="field checkbox-field">
+              <input type="checkbox" id="set-wan-expose" />
+              <span>I will port-forward TCP 7825 for direct WAN peers (advanced)</span>
+            </label>
+            <p class="field-hint">With a hub configured, click <strong>Announce</strong> to register on the hub and discover other hub users. All traffic remains E2EE — the hub cannot read messages.</p>
             <button type="button" class="action-btn" id="btn-network-viz">Network map</button>
           </div>
           <div class="settings-panel" data-panel="serial">

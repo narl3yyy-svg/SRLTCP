@@ -117,19 +117,38 @@ class CryptoBox:
         return aes.decrypt(nonce, ct, aad)
 
 
-def relay_wrap(inner_payload: bytes, route_token: bytes) -> bytes:
-    """
-    Wrap an E2EE payload for relay forwarding.
-    Relay sees only route_token + opaque blob (no session keys).
-    """
-    token = route_token[:16].ljust(16, b"\x00")
-    return token + inner_payload
+def _hash_to_token(hash_id: str) -> bytes:
+    cleaned = hash_id.strip().lower()
+    if len(cleaned) != 32 or any(c not in "0123456789abcdef" for c in cleaned):
+        raise ValueError("hash_id must be 32 lowercase hex chars")
+    return bytes.fromhex(cleaned)
 
 
-def relay_unwrap(wrapped: bytes) -> tuple[bytes, bytes]:
+def relay_wrap(
+    inner_payload: bytes,
+    dest_hash: str,
+    *,
+    src_hash: str | None = None,
+) -> bytes:
+    """
+    Wrap an E2EE payload for hub forwarding.
+    Hub sees only routing tokens (16-byte hash prefixes) + opaque blob.
+    """
+    dest = _hash_to_token(dest_hash)
+    if src_hash:
+        src = _hash_to_token(src_hash)
+        return dest + src + inner_payload
+    return dest + inner_payload
+
+
+def relay_unwrap(wrapped: bytes) -> tuple[str, str | None, bytes]:
     if len(wrapped) < 16:
         raise ValueError("relay envelope too short")
-    return wrapped[:16].rstrip(b"\x00"), wrapped[16:]
+    dest_hash = wrapped[:16].hex()
+    if len(wrapped) >= 32:
+        src_hash = wrapped[16:32].hex()
+        return dest_hash, src_hash, wrapped[32:]
+    return dest_hash, None, wrapped[16:]
 
 
 def sign_bytes(private_key: Ed25519PrivateKey, data: bytes) -> bytes:

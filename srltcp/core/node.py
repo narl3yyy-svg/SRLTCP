@@ -42,7 +42,7 @@ class ShareSession:
 
 
 class SRLTCPNode:
-    """Top-level node combining messaging, sharing, and relay."""
+    """Top-level node combining messaging, sharing, and optional hub connectivity."""
 
     def __init__(self, config: NodeConfig, settings: AppSettings) -> None:
         self.config = config
@@ -83,6 +83,9 @@ class SRLTCPNode:
         self.config.enable_serial = settings.enable_serial
         self.config.serial_port = settings.serial_port
         self.config.serial_baud = settings.serial_baud
+        self.config.hub_enabled = settings.hub_enabled
+        self.config.hub_host = settings.hub_host
+        self.config.hub_port = settings.hub_port
         incoming = str(settings.resolved_incoming_dir())
         self.config.incoming_dir = incoming
         if hasattr(self.backend, "_transfer_dir"):
@@ -94,6 +97,7 @@ class SRLTCPNode:
         if settings.auto_announce != old_announce:
             await self.backend.set_auto_announce(settings.auto_announce)
         await self.backend.apply_serial_transport()
+        await self.backend.apply_hub_settings()
         if settings.message_retention_hours == 0:
             self.backend.clear_messages()
 
@@ -153,13 +157,13 @@ class SRLTCPNode:
     def status(self) -> dict[str, Any]:
         return {
             "name": self.config.name,
-            "relay_mode": self.config.relay_mode,
+            "hub_mode": self.config.hub_mode,
+            "hub": self.backend.hub_status(),
             "identities": self.backend.get_identities(),
             "links": self.backend.list_links(),
             "peers": self.backend.get_discovered_peers(),
             "trusted": self.backend.get_trusted_peers(),
             "transfers": self.backend.list_transfers(),
-            "routes": self.backend.routing.all_routes() if self.config.relay_mode else [],
             "settings": self.settings.to_dict(),
             "web_port": self.settings.web_port,
             "version": __version__,

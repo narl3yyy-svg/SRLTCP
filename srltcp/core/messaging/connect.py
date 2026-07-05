@@ -7,6 +7,7 @@ import contextlib
 import time
 from typing import TYPE_CHECKING
 
+from srltcp.core.messaging.hub import hub_synthetic_peer_id
 from srltcp.core.messaging.links import PeerLink
 from srltcp.core.protocol.crypto import KeyExchange, load_public_key
 from srltcp.core.protocol.messages import MessageType, build_header, decode_payload, encode_payload
@@ -115,7 +116,9 @@ class ConnectMixin:
         peer_id = link.transport_peer_id
         transport = link.transport
         self.remove_link(hash_id)
-        if transport == "tcp" and self.tcp_transport:
+        if transport == "hub":
+            pass
+        elif transport == "tcp" and self.tcp_transport:
             await self.tcp_transport.disconnect(peer_id)
 
     async def connect_to_peer(
@@ -144,10 +147,20 @@ class ConnectMixin:
             return discovered.transport
         trusted = self.trusted.get(hash_id)
         if trusted:
+            if self._hub_enabled():
+                return "hub"
             return trusted.transport
+        if self._hub_enabled():
+            return "hub"
         return requested
 
     def _is_link_reachable(self: MessagingBackend, link: PeerLink) -> bool:
+        if link.transport == "hub":
+            return bool(
+                self._hub_peer_id
+                and self.tcp_transport
+                and self.tcp_transport.has_peer(self._hub_peer_id)
+            )
         if link.transport == "tcp" and self.tcp_transport:
             return self.tcp_transport.has_peer(link.transport_peer_id)
         if link.transport == "serial" and self.serial_transport:
@@ -222,6 +235,27 @@ class ConnectMixin:
             trusted.public_key if trusted else ""
         )
         pub_bytes = bytes.fromhex(pub_hex) if pub_hex else b"\x00" * 32
+
+        if transport == "hub":
+            if not self._hub_enabled():
+                log.warning("Hub transport requested but hub is not configured")
+                return False
+            hub_conn = await self._ensure_hub_connection()
+            if not hub_conn:
+                log.warning("Cannot connect to %s — hub unreachable", hash_id[:8])
+                return False
+            synthetic = hub_synthetic_peer_id(hash_id)
+            link = PeerLink(
+                hash_id=hash_id,
+                transport_peer_id=synthetic,
+                transport="hub",
+                address=f"hub:{self.config.hub_host}",
+                public_key=pub_bytes,
+                peer_name=peer_name,
+            )
+            self.register_link(link)
+            await self._initiate_handshake(hash_id)
+            return True
 
         if transport == "tcp" and self.tcp_transport:
             endpoint = self._resolve_tcp_endpoint(

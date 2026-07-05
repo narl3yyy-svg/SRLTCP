@@ -540,6 +540,14 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         updated.web_port = max(1024, min(updated.web_port, 65535))
         updated.tcp_port = max(1024, min(updated.tcp_port, 65535))
         updated.discovery_port = max(1024, min(updated.discovery_port, 65535))
+        updated.hub_port = max(1024, min(updated.hub_port or 7825, 65535))
+        if updated.hub_enabled and updated.hub_host:
+            from srltcp.utils.wan import validate_wan_host
+
+            try:
+                validate_wan_host(str(updated.hub_host).strip())
+            except ValueError as exc:
+                return web.json_response({"error": str(exc)}, status=400)
         if updated.clock_source not in ("system", "ntp"):
             updated.clock_source = "system"
         if updated.ntp_server:

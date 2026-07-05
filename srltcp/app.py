@@ -9,9 +9,9 @@ import sys
 from srltcp import __version__
 from srltcp.core.messaging.backend import NodeConfig
 from srltcp.core.messaging.constants import (
+    DEFAULT_HUB_PORT,
     DEFAULT_TCP_PORT,
     DISCOVERY_PORT,
-    RELAY_TCP_PORT,
     WEB_PORT,
 )
 from srltcp.core.node import SRLTCPNode
@@ -59,7 +59,6 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--serial", action="store_true", help="Enable USB serial transport")
     web.add_argument("--serial-port", default="", help="Serial device path")
     web.add_argument("--no-tcp", action="store_true", help="Disable TCP transport")
-    web.add_argument("--relay", action="store_true", help="Enable relay/router mode")
     web.add_argument("--log-level", default="INFO", help="Log level")
     web.add_argument(
         "--debug",
@@ -67,11 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Verbose debug logging (all backend activity)",
     )
 
-    relay = sub.add_parser("relay", help="Start headless relay server")
-    relay.add_argument("--name", default="srltcp-relay", help="Relay name")
-    relay.add_argument("--bind", default="0.0.0.0", help="Bind address")
-    relay.add_argument("--port", type=int, default=RELAY_TCP_PORT, help="Relay TCP port")
-    relay.add_argument("--log-level", default="INFO", help="Log level")
+    hub = sub.add_parser("hub", help="Start headless connection hub server")
+    hub.add_argument("--name", default="srltcp-hub", help="Hub display name (logs only)")
+    hub.add_argument("--bind", default="0.0.0.0", help="Bind address")
+    hub.add_argument("--port", type=int, default=DEFAULT_HUB_PORT, help="Hub TCP port")
+    hub.add_argument("--log-level", default="INFO", help="Log level")
 
     send = sub.add_parser("send", help="Send a message (CLI)")
     send.add_argument("--recipient", required=True, help="Recipient hash ID")
@@ -96,7 +95,9 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         tcp_port=tcp_port,
         discovery_port=discovery_port,
         strict_ports=settings.strict_ports,
-        relay_mode=args.relay,
+        hub_enabled=settings.hub_enabled,
+        hub_host=settings.hub_host,
+        hub_port=settings.hub_port or DEFAULT_HUB_PORT,
         enable_tcp=not args.no_tcp,
         enable_serial=args.serial or settings.enable_serial,
         serial_port=args.serial_port or settings.serial_port or default_serial_port(),
@@ -169,15 +170,15 @@ async def run_web(args: argparse.Namespace) -> None:
     await shutdown.run_cleanup()
 
 
-async def run_relay(args: argparse.Namespace) -> None:
+async def run_hub(args: argparse.Namespace) -> None:
     config = NodeConfig(
         name=args.name,
         bind_host=args.bind,
         tcp_port=args.port,
-        relay_mode=True,
+        hub_mode=True,
         enable_tcp=True,
         enable_serial=False,
-        announce=True,
+        announce=False,
     )
     settings = AppSettings(display_name=args.name, setup_complete=True)
     node = SRLTCPNode(config, settings)
@@ -185,7 +186,7 @@ async def run_relay(args: argparse.Namespace) -> None:
     shutdown.add_hook(node.stop)
 
     await node.start()
-    log.info("Headless relay listening on %s:%d (Ctrl+C to stop)", args.bind, args.port)
+    log.info("Headless hub listening on %s:%d (Ctrl+C to stop)", args.bind, args.port)
     await shutdown.wait()
     await shutdown.run_cleanup()
 
@@ -257,8 +258,8 @@ def main() -> None:
 
     if args.command == "web":
         asyncio.run(run_web(args))
-    elif args.command == "relay":
-        asyncio.run(run_relay(args))
+    elif args.command == "hub":
+        asyncio.run(run_hub(args))
     elif args.command == "send":
         asyncio.run(run_send(args))
     elif args.command == "identity":

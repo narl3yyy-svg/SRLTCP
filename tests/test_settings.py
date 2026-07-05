@@ -38,6 +38,19 @@ def test_settings_persist(tmp_path: Path) -> None:
     assert loaded.message_retention_hours == 24
 
 
+def test_hub_settings_persist(tmp_path: Path) -> None:
+    store = SettingsStore(path=tmp_path / "settings.json")
+    settings = store.load()
+    settings.hub_enabled = True
+    settings.hub_host = "hub.example.com"
+    settings.hub_port = 7825
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.hub_enabled is True
+    assert loaded.hub_host == "hub.example.com"
+    assert loaded.hub_port == 7825
+
+
 def test_wan_expose_port_persist(tmp_path: Path) -> None:
     store = SettingsStore(path=tmp_path / "settings.json")
     settings = store.load()

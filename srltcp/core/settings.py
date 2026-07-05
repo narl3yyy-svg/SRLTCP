@@ -54,6 +54,9 @@ class AppSettings:
     clock_source: str = "system"  # system | ntp
     ntp_server: str = "pool.ntp.org"
     wan_expose_port: bool = False
+    hub_enabled: bool = False
+    hub_host: str = ""
+    hub_port: int = DEFAULT_TCP_PORT
     version: str = "0.1.39"
 
     def resolved_incoming_dir(self) -> Path:

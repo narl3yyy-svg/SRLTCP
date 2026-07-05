@@ -28,7 +28,9 @@ class MessageType(IntEnum):
     SHARE_LIST = 0x40
     SHARE_REQUEST = 0x41
     RELAY_ENVELOPE = 0x50
-    ROUTE_UPDATE = 0x51
+    HUB_REGISTER = 0x52
+    HUB_PRESENCE = 0x53
+    HUB_DEPART = 0x54
     ERROR = 0xFF
 
 

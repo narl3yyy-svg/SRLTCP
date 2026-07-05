@@ -366,7 +366,7 @@
 
   function transportBadge(transport) {
     const t = (transport || "tcp").toLowerCase();
-    const label = t === "serial" ? "SERIAL" : "TCP";
+    const label = t === "serial" ? "SERIAL" : t === "hub" ? "HUB" : "TCP";
     return `<span class="transport-badge ${t}">${label}</span>`;
   }
 
@@ -864,10 +864,17 @@
   async function announceTransport(transport) {
     const btn = transport === "tcp" ? $("#btn-announce-tcp") : $("#btn-announce-serial");
     const status = state.transportStatus?.[transport];
-    if (btn?.disabled || status && !status.active) {
+    if (transport === "tcp" && state.settings?.hub_enabled) {
+      if (!state.transportStatus?.hub?.connected) {
+        toast("Hub not connected — check hub host in Settings → Network", "error");
+        return;
+      }
+    } else if (btn?.disabled || status && !status.active) {
       const hint = transport === "serial"
         ? "Serial port not open — enable serial in settings and check /dev permissions"
-        : "TCP transport unavailable — restart the node";
+        : state.settings?.hub_enabled
+          ? "Hub not connected — check hub host in Settings → Network"
+          : "TCP transport unavailable — restart the node";
       toast(hint);
       return;
     }
@@ -881,7 +888,10 @@
       return;
     }
     const bursts = data.bursts || 3;
-    toast(`Announced on ${transport.toUpperCase()} (${bursts}× burst)`);
+    const hubMsg = state.settings?.hub_enabled && transport === "tcp";
+    toast(hubMsg
+      ? `Registered on hub (${bursts}× burst)`
+      : `Announced on ${transport.toUpperCase()} (${bursts}× burst)`);
     logActivity(`Announced on ${transport}`);
     setTimeout(loadPeers, 800);
     setTimeout(loadPeers, 2000);
@@ -905,7 +915,7 @@
       return;
     }
     const transport = activeLinkTransport(hashId);
-    const label = transport === "serial" ? "SERIAL" : "TCP";
+    const label = transport === "serial" ? "SERIAL" : transport === "hub" ? "HUB" : "TCP";
     badge.textContent = label;
     badge.className = `transport-badge header-badge ${transport}`;
     badge.removeAttribute("aria-hidden");
@@ -1496,6 +1506,9 @@
     setInputValue("set-incoming", settings.incoming_files_dir || "");
     setInputValue("set-shared", settings.shared_folder || "");
     setCheckbox("set-auto-announce", !!settings.auto_announce);
+    setCheckbox("set-hub-enabled", !!settings.hub_enabled);
+    setInputValue("set-hub-host", settings.hub_host || "");
+    setInputValue("set-hub-port", String(settings.hub_port || 7825));
     setCheckbox("set-wan-expose", !!settings.wan_expose_port);
     setCheckbox("set-enable-serial", !!settings.enable_serial);
     loadSerialSettings(settings.serial_port || "", settings.serial_baud || 57600);
@@ -1794,11 +1807,17 @@
 
     const tcpBtn = $("#btn-announce-tcp");
     if (tcpBtn) {
+      const hubOn = !!state.settings?.hub_enabled;
+      const hubConnected = !!transportStatus.hub?.connected;
       const tcpActive = !!transportStatus.tcp?.active;
-      tcpBtn.disabled = !tcpActive;
-      tcpBtn.title = tcpActive
-        ? "Announce on TCP/LAN"
-        : "TCP transport unavailable — restart the node";
+      tcpBtn.disabled = hubOn ? !hubConnected : !tcpActive;
+      tcpBtn.title = hubOn
+        ? (hubConnected
+          ? "Announce on hub — discover other hub users"
+          : "Hub not connected — check Settings → Network")
+        : (tcpActive
+          ? "Announce on TCP/LAN"
+          : "TCP transport unavailable — restart the node");
     }
 
     const serialBtn = $("#btn-announce-serial");
@@ -2706,6 +2725,9 @@
       shared_folder: $(`#${prefix}-shared`)?.value.trim() || "",
       lan_ip: $(`#${prefix}-lan-ip`)?.value || "",
       auto_announce: $(`#${prefix}-auto-announce`)?.checked || false,
+      hub_enabled: $("#set-hub-enabled")?.checked || false,
+      hub_host: ($("#set-hub-host")?.value || "").trim(),
+      hub_port: parseInt($("#set-hub-port")?.value || "7825", 10),
       wan_expose_port: $("#set-wan-expose")?.checked || false,
       enable_serial: $("#set-enable-serial")?.checked || false,
       serial_port: $("#set-serial-port")?.value || "",

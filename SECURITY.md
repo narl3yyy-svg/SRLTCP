@@ -29,7 +29,7 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 
 - **Message and file payloads** are encrypted with AES-256-GCM after an Ed25519-signed X25519 key exchange.
 - **Session keys** are derived via HKDF-SHA256 with explicit salt and direction labels (`srltcp-v2-send` / `srltcp-v2-recv`).
-- **Relay mode** wraps opaque E2EE blobs; relays do not hold session keys.
+- **Hub mode** wraps opaque E2EE blobs; hub servers do not hold session keys.
 - **Web UI** is served over **HTTPS on localhost only** (self-signed cert generated locally).
 
 ### What is not protected
