@@ -12,8 +12,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 51
-        versionName = "0.1.51"
+        versionCode = 52
+        versionName = "0.1.52"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")

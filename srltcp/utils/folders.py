@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -98,4 +99,34 @@ def validate_folder(path: str) -> Path | None:
         return None
     if not resolved.is_dir():
         return None
+    return resolved
+
+
+def _deletable(path: Path, roots: list[Path] | None = None) -> bool:
+    """Return True when a directory may be removed (never storage roots)."""
+    resolved = path.resolve()
+    for root in roots or _browse_roots():
+        root_r = root.resolve()
+        if resolved == root_r:
+            return False
+        try:
+            rel = resolved.relative_to(root_r)
+        except ValueError:
+            continue
+        if not rel.parts:
+            return False
+        if root_r.name.lower() in ("download", "downloads") and len(rel.parts) < 2:
+            return False
+        return True
+    return False
+
+
+def delete_directory(path: str) -> Path:
+    """Delete a folder under allowed browse roots."""
+    resolved = validate_folder(path)
+    if not resolved:
+        raise ValueError("invalid or inaccessible folder")
+    if not _deletable(resolved):
+        raise ValueError("folder cannot be deleted from this location")
+    shutil.rmtree(resolved)
     return resolved

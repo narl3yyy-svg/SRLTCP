@@ -1,5 +1,15 @@
 # SRLTCP Release Notes
 
+## v0.1.52 (2026-07-05)
+
+### Android
+- **Folder delete** — Settings → Folders **Delete** removes the folder on device and clears the saved path (no longer re-applies Downloads default after you clear it)
+- **File attachments** — WebView file picker (`WebChromeClient.onShowFileChooser`) so paperclip send works on Android
+- **Status bar** — fixed chat composer clipping; CPU stat hidden on Android (temperature only)
+
+### Docs
+- README changelog moved here; development and Android build instructions expanded
+
 ## v0.1.51 (2026-07-05)
 
 ### Android

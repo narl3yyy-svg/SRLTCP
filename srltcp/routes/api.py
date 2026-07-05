@@ -576,6 +576,21 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         dirs_only = request.rel_url.query.get("dirs_only") in ("1", "true", "yes")
         return web.json_response(list_directory(path, dirs_only=dirs_only))
 
+    async def delete_folder(request: web.Request) -> web.Response:
+        from srltcp.utils.folders import delete_directory
+
+        data = await request.json()
+        path_str = str(data.get("path", "")).strip()
+        if not path_str:
+            return web.json_response({"error": "path required"}, status=400)
+        try:
+            removed = delete_directory(path_str)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except OSError as exc:
+            return web.json_response({"error": f"delete failed: {exc}"}, status=500)
+        return web.json_response({"deleted": str(removed)})
+
     async def identity_regenerate(request: web.Request) -> web.Response:
         transport = request.match_info.get("transport", "tcp")
         if transport not in ("tcp", "serial"):
@@ -775,6 +790,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_get("/api/settings", settings_get)
     app.router.add_post("/api/settings", settings_post)
     app.router.add_get("/api/browse", browse_folders)
+    app.router.add_post("/api/folders/delete", delete_folder)
     app.router.add_post("/api/identities/{transport}/regenerate", identity_regenerate)
     app.router.add_delete("/api/identities/{transport}", identity_delete)
     app.router.add_get("/api/release-notes", release_notes)

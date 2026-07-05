@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
 
-**Current version:** 0.1.51
+**Current version:** 0.1.52
 
 ---
 
@@ -254,44 +254,61 @@ srltcp web
 
 ### Android (Gradle + Chaquopy)
 
-See [android/README.md](android/README.md). The APK embeds the same `srltcp/` Python code via **Chaquopy** and builds locally with **`./gradlew`** — no Buildozer or python-for-android.
+See [android/README.md](android/README.md). The APK embeds the same `srltcp/` Python code via **Chaquopy** — built **locally** with Gradle (no cloud CI).
 
-**Prerequisites:** JDK 17, Android SDK API 34, Python 3.12 on your build machine.
+**Prerequisites**
 
-**One-command local build (from repo root):**
-
-```bash
-export ANDROID_HOME="$HOME/Android/Sdk"   # adjust if needed
-bash scripts/build-android.sh
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-*-debug.apk
-```
-
-Before each build (or when Python code changes), sources are synced automatically by `build-android.sh`. To sync only:
+| Tool | Notes |
+|------|--------|
+| **JDK 17** | `export JAVA_HOME=/usr/lib/jvm/java-17-openjdk` |
+| **Android SDK API 34** | Platform + build-tools 34.x |
+| **Python 3.12** | Used by Chaquopy to compile the embedded runtime |
+| **adb** | USB debugging enabled on the phone |
 
 ```bash
-bash scripts/sync-android-python.sh
+export ANDROID_HOME="$HOME/Android/Sdk"
+export PATH="$PATH:$ANDROID_HOME/platform-tools"
 ```
 
-**Android Studio:** open the `android/` folder, sync Gradle, then **Build APK**. Re-run `sync-android-python.sh` after editing `srltcp/`.
+**Clean rebuild (recommended after Python or Android changes)**
 
-**On the phone:** the WebView uses a **mobile layout** — tap **☰** (top-left) to open the contacts sidebar, **⚙** (top-right) for Settings, and **←** in a chat to return to peers. Settings and modals open full-screen. Configure **Settings → Network → Connect via hub server** to reach peers without port-forwarding. Serial/USB is disabled on Android; TCP and hub work over Wi‑Fi. Grant **All files access** when prompted to use `Downloads/SRLTCP/` for incoming and shared folders.
+```bash
+cd /path/to/SRLTCP
+bash scripts/sync-android-python.sh          # copy srltcp/ into the APK tree
+cd android
+rm -rf app/build .gradle build               # remove old build artifacts
+./gradlew clean
+./gradlew assembleDebug renameDebugApk
+```
 
-**Troubleshooting:**
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.1.52-debug.apk`
+
+**One-command build** (sync + Gradle): `bash scripts/build-android.sh`
+
+**Install on a connected device**
+
+```bash
+adb uninstall com.srltcp.app                 # optional — fresh install
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.1.52-debug.apk
+adb shell am start -n com.srltcp.app/.MainActivity
+```
+
+**Live logs (device attached via USB)**
+
+```bash
+adb logcat -c                               # clear old logs
+adb logcat -s SRLTCP:* python.stderr:*      # follow SRLTCP + Python output
+```
+
+**On the phone:** tap **☰** for contacts, **⚙** for Settings (full-screen). Default folders: `Downloads/SRLTCP/Incoming` and `Downloads/SRLTCP/Shared` (grant storage access when prompted). Serial/USB is disabled; TCP and hub work over Wi‑Fi.
 
 | Symptom | What to do |
 |---------|------------|
-| `SDK location not found` | Set `ANDROID_HOME` or `android/local.properties` |
-| Gradle / Java errors | Use JDK 17 (`JAVA_HOME`) |
-| App closes on launch | `adb logcat -s SRLTCP SRLTCPService python` |
-| White screen | Wait up to 30s for Python to start; tries ports 9876–9878 |
-| Can't see sidebar / settings | Tap **☰** or **⚙** in the top bar (mobile layout) |
-| No serial on Android | Expected — serial transport is disabled on Android |
-| No hub peers | Same hub host on both phones + **Announce** on each |
-
-```bash
-adb logcat -s SRLTCP SRLTCPService python:D
-adb shell am start -n com.srltcp.app/.MainActivity
-```
+| `SDK location not found` | Set `ANDROID_HOME` or `android/local.properties` with `sdk.dir=...` |
+| Gradle / Java errors | Use JDK 17 |
+| White screen | Wait ~30s for Python; check logcat |
+| File attach fails | Rebuild with v0.1.52+ (WebView file picker) |
+| Can't delete shared folder | Use **Delete** in Settings → Folders (v0.1.52+) |
 
 ---
 
@@ -508,21 +525,18 @@ SRLTCP listens on **TCP 7825** by default for encrypted P2P messaging (handshake
 
 ## Development
 
+### Desktop / Python
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pre-commit install  # optional
 # Tests use SRLTCP_DATA_DIR automatically — do not run pytest against ~/.srltcp
 
-./run.sh web                    # dev server
-./run.sh hub                    # local hub for testing
-bash scripts/check.sh           # ruff + mypy + pytest
-pytest tests/ -v                # unit tests only
+./run.sh web                    # HTTPS web UI + P2P node (https://127.0.0.1:9876)
+./run.sh hub                    # headless hub on TCP 7825
+bash scripts/check.sh           # ruff + mypy + pytest (run before tagging)
+pytest tests/ -v
 ```
-
-**Quality checks (local):** run `bash scripts/check.sh` (`ruff`, `mypy`, `pytest`) before tagging a release. Android APKs are built locally with `bash scripts/build-android.sh` (see [android/README.md](android/README.md)); release APKs are attached to GitHub Releases manually.
-
-### Project commands
 
 | Command | Description |
 |---------|-------------|
@@ -530,114 +544,32 @@ pytest tests/ -v                # unit tests only
 | `srltcp hub` | Headless connection hub server |
 | `srltcp send` | One-shot CLI message |
 | `srltcp identity` | Show local hash IDs |
+| `bash scripts/sync-android-python.sh` | Copy `srltcp/` into Android project before Gradle |
+| `bash scripts/build-android.sh` | Full local APK build |
+
+**Releases:** bump `srltcp/__init__.py` and `android/app/build.gradle.kts`, update `srltcp/RELEASE_NOTES.md`, build the APK locally, tag `vX.Y.Z`, attach APK + source zip to [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases).
 
 ---
 
 ## Changelog
 
-See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the status bar for release notes.
-
-### v0.1.51
-
-- **Android Downloads** — Settings → Folders defaults to `Downloads/SRLTCP/Incoming` and `Downloads/SRLTCP/Shared` on first launch
-- **Android mobile UI** — ☰ sidebar, ⚙ full-screen settings, slide-out contacts panel
-- **Local releases** — GitHub Actions workflow removed; build APK locally and attach to Releases
-
-### v0.1.50
-
-- **Hub server** — headless `srltcp hub` on TCP 7825; clients dial out, announce presence, discover peers on the same hub, E2EE via opaque forwarding (no client port-forward)
-- **Settings** — hub host/port in Network tab; removed legacy multi-hop relay (`srltcp relay` on 7827, `web --relay`)
-- **Android** — rebuilt with **Gradle + Chaquopy**; local `./gradlew` build via `scripts/build-android.sh`; removed Buildozer/python-for-android and GitHub APK workflow
-- **CI** — restored Checks workflow only (`ruff`, `mypy`, `pytest`)
-- **Docs** — README, SECURITY.md, android/README.md updated for hub and local APK builds
-
-### v0.1.42
-
-- **Image preview** — screenshots/images show in chat only after transfer completes (sender and receiver); fixes broken serial/TCP previews
-- **Serial link %** — smoothed RTT + EMA display (reduces 62↔82% flicker; still RTT-based, not RF RSSI)
-- **Transfer UI** — removed bottom transfer dock; in-message progress bar retained
-- **Add contact** — WAN host, port, enable, and connection mode fields
-- **Settings UI** — compact folder browser; readable Restart button
-- **Docs** — expanded README security and data-transfer tables
-
-### v0.1.41
-
-- **Video receive fix** — MP4 preview only after transfer completes (partial files cannot play in browsers)
-- **Transfer UI** — throttled progress updates; no full chat re-render every chunk
-- **TCP throughput** — 1 MiB chunks, no artificial send delay (encryption unchanged)
-- **Serial link %** — RTT-based estimate (554 ms ≈ 40–60% link, not misleading 100%)
-- **Trusted list** — auto-removes pytest fixture peers (`deadbeef…`, `peer`, etc.)
-
-### v0.1.35
-
-- Manual **Announce TCP** / **Announce Serial** validate transport and show errors when discovery cannot send
-
-### v0.1.31
-
-- Receiver **Download file** link when transfers complete; folder zips named `temp.zip`, `temp1.zip`, …
-- Reconnect/connect timeout handling; Android CI SDK symlink fix
-
-### v0.1.30
-
-- Scrollable trusted-contact right-click menu on small screens
-- **Delete** key removes the selected trusted peer
-- Android 15 (API 35) APK; CI build fixed (arm64-v8a only)
-
-### v0.1.17
-
-- Share lifecycle limits, revoke, folder ZIP download; trusted peer list fix
-- Receiver Save file on complete; media pan; Android crash fixes; 512 KiB chunks
-
-### v0.1.16
-
-- Drag-and-drop file send; E2EE shared folders; manual WAN peer endpoints (TCP 7825)
-- Receiver transfer bar clears on complete; share/WAN WebSocket events; security hardening
-
-### v0.1.15
-
-- No UI flicker during transfers; transfer dock hides on receiver; media lightbox zoom
-- Post-transfer connection cooldown; unread badges on trusted peers; improved notifications
-- Trusted contact list readability; Android lifecycle fixes
-
-### v0.1.14
-
-- Stable large file transfers (no per-chunk fsync, async chunk handling, send lock)
-- Media lightbox, copy/delete icons, transfer dock auto-hide, handshake polling
-- HKDF explicit info strings; Android foreground service fixes
-
-### v0.1.10
-
-- Fixed DELETE contact (405), file transfer disconnects, reconnect backoff, serial handshake wait
-- Tabbed settings window, transfer progress dock with cancel, `--debug` flag, NTP clock source
-
-### v0.1.9
-
-- Fixed connection storms and unstable reconnect loops; serial outbound connect
-- Setup folder browse works above the wizard overlay; trusted peers hidden from Discovered
-- Network map shows links; contact ⋮ menu (clear chat, rename, block, delete)
-- Clock at top of sidebar (time only); timezone in settings; Android APK stability fixes
-
-### v0.1.4
-
-- Ctrl+C now exits promptly (WebSocket + transport teardown)
-- APK build fixed for Chaquopy 15 Gradle DSL
-
-### v0.1.3
-
-- Handshake UI and reconnect fixes; RTT shown when connected
-- Serial port and baud rate dropdowns (USB devices)
-- Self-node removed from discovered peers; APK build fixed
-
-### v0.1.2
-
-- Fixed discovery spam; auto-announce off by default with passive discovery
-- Trusted peers required for messaging and file transfer
-- Ping/RTT (ms) and serial RF link quality (%)
-- File upload via browser with progress bar and MB/s speed
-- Settings: serial transport, folder pickers, retention presets, restart
-- Identity create/regenerate/delete for TCP and serial
+Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the app status bar for in-app release notes.
 
 ## Roadmap
+
+**Done (v0.1.50–0.1.52)**
+
+- [x] Headless hub server (E2EE tunneling, no port-forward for clients)
+- [x] Android Gradle + Chaquopy rebuild (local `./gradlew` builds)
+- [x] Android mobile UI (slide-out sidebar, full-screen settings)
+- [x] Downloads folder defaults for incoming/shared files on Android
+- [x] Local APK releases (no GitHub Actions CI)
+- [x] Android file attach via WebView file picker (v0.1.52)
+- [x] Settings folder delete on Android (v0.1.52)
+- [x] Android status bar layout fix (chat no longer clipped) (v0.1.52)
+- [x] Android status bar shows temperature only (CPU hidden) (v0.1.52)
+
+**Planned**
 
 - [ ] Multi-hop hub chains with source routing and loop prevention
 - [ ] Android USB serial Chaquopy shim (full OTG support)
@@ -646,7 +578,7 @@ See [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge 
 - [ ] Noise protocol framework option for handshake
 - [ ] QUIC transport backend
 - [ ] Bandwidth limiting and QoS per transfer
-- [ ] Optional signed APK releases (local Gradle build is supported today)
+- [ ] Signed APK releases (release keystore)
 - [ ] Desktop system tray wrapper (Tauri/Electron)
 
 ---
