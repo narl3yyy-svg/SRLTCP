@@ -1,7 +1,7 @@
 # SRLTCP
 
 [![Checks](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/checks.yml/badge.svg)](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/checks.yml)
-[![Build Android APK](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/build-apk.yml/badge.svg)](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/build-apk.yml)
+[![Build Android APK](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/build-android.yml/badge.svg)](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/build-android.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
@@ -65,7 +65,7 @@ srltcp/
 android/                    # Buildozer + python-for-android (see android/README.md)
 tests/                      # pytest suite
 scripts/                    # Maintainer helpers (e.g. scripts/check.sh)
-.github/workflows/          # CI: checks.yml, build-apk.yml
+.github/workflows/          # CI: build-android.yml
 ```
 
 ### Data flow diagram
