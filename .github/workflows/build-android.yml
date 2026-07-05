@@ -37,9 +37,9 @@ jobs:
           path: |
             ~/.buildozer
             ~/.gradle/caches
-          key: ${{ runner.os }}-buildozer-v3-${{ hashFiles('android/buildozer.spec', 'android/p4a-recipes/**') }}
+          key: ${{ runner.os }}-buildozer-v4-${{ hashFiles('android/buildozer.spec', 'android/p4a-recipes/**') }}
           restore-keys: |
-            ${{ runner.os }}-buildozer-v3-
+            ${{ runner.os }}-buildozer-v4-
 
       - name: Install system dependencies
         run: |
@@ -75,7 +75,6 @@ jobs:
           grep -E 'android\.archs = arm64-v8a' buildozer.spec
           grep -E 'p4a\.local_recipes = p4a-recipes' buildozer.spec
           test -f p4a-recipes/python3/__init__.py
-          test -f p4a-recipes/python3/patches/disable-grp.patch
 
       - name: Clean stale P4A builds
         run: |

@@ -10,7 +10,6 @@ from pythonforandroid.recipes.python3 import Python3Recipe as _BasePython3Recipe
 from pythonforandroid.util import ensure_dir
 
 _UPSTREAM_RECIPE_DIR = join(dirname(pythonforandroid.__file__), "recipes", "python3")
-_LOCAL_RECIPE_DIR = dirname(__file__)
 _GRP_SETUP_LINE = "*grp*\n"
 
 
@@ -22,13 +21,6 @@ class Python3Recipe(_BasePython3Recipe):
     def apply_patches(self, arch, build_dir=None):
         # p4a master calls apply_patches(arch) only; build_dir is optional.
         super().apply_patches(arch, build_dir=build_dir)
-        build_dir = build_dir if build_dir else self.get_build_dir(arch.arch)
-        local_patch = join(_LOCAL_RECIPE_DIR, "patches", "disable-grp.patch")
-        if exists(local_patch):
-            from pythonforandroid.logger import shprint
-            import sh
-
-            shprint(sh.patch, "-d", build_dir, "-p1", "-i", local_patch)
         self._ensure_grp_disabled(arch)
 
     def _ensure_grp_disabled(self, arch):
