@@ -1624,13 +1624,36 @@
     if (!selectedTz) selectEl.value = current;
   }
 
+  function isAndroidApp() {
+    return document.documentElement.classList.contains("android-app") ||
+      state.settings?.platform === "android";
+  }
+
+  async function deleteSettingsFolder(inputId) {
+    const input = $(`#${inputId}`);
+    const folderPath = input?.value?.trim();
+    if (!folderPath) {
+      toast("No folder selected", "error");
+      return;
+    }
+    if (!confirm(`Delete folder on device?\n\n${folderPath}\n\nThis cannot be undone.`)) return;
+    const { ok, data } = await apiPost("/api/folders/delete", { path: folderPath }, { fallback: {} });
+    if (!ok) {
+      toast(data?.error || "Could not delete folder", "error");
+      return;
+    }
+    if (input) input.value = "";
+    await saveSettings(settingsPayload("set"), false);
+    toast("Folder deleted");
+  }
+
   async function pollSystemStats() {
     const { ok, data } = await apiGet("/api/system", { fallback: {} });
     if (!ok || !data) return;
     const cpuEl = $("#stat-cpu .stat-value");
     const tempEl = $("#stat-temp .stat-value");
     const headerClock = $("#header-clock");
-    if (data.cpu_percent != null && cpuEl) {
+    if (!isAndroidApp() && data.cpu_percent != null && cpuEl) {
       cpuEl.textContent = `${data.cpu_percent}%`;
       cpuEl.className = "stat-value" + (data.cpu_percent > 80 ? " hot" : data.cpu_percent > 50 ? " warn" : "");
     }
@@ -2903,6 +2926,12 @@
   });
 
   document.addEventListener("click", (e) => {
+    const deleteFolderBtn = e.target.closest("[data-folder-delete]");
+    if (deleteFolderBtn) {
+      deleteSettingsFolder(deleteFolderBtn.dataset.folderDelete);
+      return;
+    }
+
     const browseBtn = e.target.closest("[data-browse]");
     if (browseBtn) {
       e.preventDefault();
@@ -3102,7 +3131,12 @@
       apiGet("/api/version", { fallback: {} }),
     ]);
     if (versionRes.ok && versionRes.data?.platform) {
+      state.settings = state.settings || {};
+      state.settings.platform = versionRes.data.platform;
       applyMobileLayout(versionRes.data.platform);
+      if (versionRes.data.platform === "android") {
+        $("#stat-cpu")?.classList.add("hidden");
+      }
     }
     if (settingsRes.ok && settingsRes.data) {
       state.settings = settingsRes.data;

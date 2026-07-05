@@ -41,7 +41,7 @@ bash scripts/build-android.sh
 Output:
 
 ```
-android/app/build/outputs/apk/debug/SRLTCP-0.1.51-debug.apk
+android/app/build/outputs/apk/debug/SRLTCP-0.1.52-debug.apk
 ```
 
 ### Manual steps

@@ -26,6 +26,7 @@
   --sidebar-w: 320px;
   --header-h: 64px;
   --composer-h: 72px;
+  --status-bar-h: 38px;
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
@@ -1076,6 +1077,15 @@ body {
   border-right: none;
   padding-bottom: env(safe-area-inset-bottom, 0);
 }
+.mobile-layout.android-app #stat-cpu { display: none !important; }
+.mobile-layout .chat,
+.mobile-layout .chat-active,
+.mobile-layout .chat-empty-body {
+  padding-bottom: calc(var(--status-bar-h) + env(safe-area-inset-bottom, 0));
+}
+.mobile-layout .composer {
+  margin-bottom: calc(var(--status-bar-h) + env(safe-area-inset-bottom, 0));
+}
 .mobile-layout .settings-window { padding: 0; align-items: stretch; }
 .mobile-layout .settings-window-panel {
   width: 100%;
@@ -1107,9 +1117,7 @@ body {
 .mobile-layout .chat-header {
   padding-top: env(safe-area-inset-top, 0);
 }
-.mobile-layout .composer {
-  padding-bottom: env(safe-area-inset-bottom, 0);
-}
+
 .mobile-layout.android-app .chat-empty .mobile-only { display: flex; }
 /* ── Responsive (narrow browser windows) ── */
 @media (max-width: 768px) {

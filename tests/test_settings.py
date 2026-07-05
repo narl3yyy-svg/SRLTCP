@@ -11,7 +11,7 @@ def test_settings_defaults(tmp_path: Path) -> None:
     store = SettingsStore(path=tmp_path / "settings.json")
     settings = store.load()
     assert settings.auto_announce is False
-    assert settings.version == "0.1.51"
+    assert settings.version == "0.1.52"
     assert settings.tcp_port == 7825
     assert settings.discovery_port == 7826
     assert settings.strict_ports is True

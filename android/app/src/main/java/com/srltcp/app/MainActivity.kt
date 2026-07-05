@@ -15,6 +15,8 @@ import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.webkit.SslErrorHandler
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.widget.FrameLayout
@@ -33,6 +35,20 @@ class MainActivity : AppCompatActivity() {
     private val fallbackPorts = intArrayOf(9876, 9877, 9878)
     private var serverThread: Thread? = null
     private var serviceStarted = false
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+
+    private val fileChooserLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val callback = filePathCallback
+        filePathCallback = null
+        if (callback == null) return@registerForActivityResult
+        val uris = WebChromeClient.FileChooserParams.parseResult(
+            result.resultCode,
+            result.data
+        )
+        callback.onReceiveValue(uris)
+    }
 
     private val requestNotificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -81,12 +97,31 @@ class MainActivity : AppCompatActivity() {
             wv.visibility = android.view.View.GONE
             wv.settings.javaScriptEnabled = true
             wv.settings.domStorageEnabled = true
-            wv.settings.allowFileAccess = false
+            wv.settings.allowFileAccess = true
+            wv.settings.allowContentAccess = true
             wv.settings.databaseEnabled = true
             wv.settings.useWideViewPort = true
             wv.settings.loadWithOverviewMode = true
             wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+            wv.webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    webView: WebView,
+                    filePathCallback: ValueCallback<Array<Uri>>,
+                    fileChooserParams: FileChooserParams
+                ): Boolean {
+                    this@MainActivity.filePathCallback?.onReceiveValue(null)
+                    this@MainActivity.filePathCallback = filePathCallback
+                    return try {
+                        fileChooserLauncher.launch(fileChooserParams.createIntent())
+                        true
+                    } catch (e: Exception) {
+                        Log.e(TAG, "File chooser failed", e)
+                        this@MainActivity.filePathCallback = null
+                        false
+                    }
+                }
+            }
             wv.webViewClient = object : WebViewClientCompat() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     return false
@@ -95,6 +130,7 @@ class MainActivity : AppCompatActivity() {
                 override fun onPageFinished(view: WebView, url: String) {
                     view.evaluateJavascript(
                         "document.documentElement.classList.add('android-app');" +
+                            "document.getElementById('stat-cpu')?.classList.add('hidden');" +
                             "if(window.applyMobileLayout)window.applyMobileLayout('android');",
                         null
                     )

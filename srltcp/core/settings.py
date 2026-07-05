@@ -103,7 +103,7 @@ class AppSettings:
     hub_enabled: bool = False
     hub_host: str = ""
     hub_port: int = DEFAULT_TCP_PORT
-    version: str = "0.1.51"
+    version: str = "0.1.52"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:
@@ -147,8 +147,8 @@ class AppSettings:
         return settings
 
 
-def _apply_android_folder_defaults(settings: AppSettings) -> bool:
-    """Persist Downloads folder paths when unset on Android."""
+def apply_android_folder_defaults(settings: AppSettings) -> bool:
+    """Set Downloads folder paths on first-run Android only."""
     if not is_android():
         return False
     changed = False
@@ -168,7 +168,7 @@ class SettingsStore:
     def load(self) -> AppSettings:
         if not self.path.exists():
             settings = AppSettings()
-            if _apply_android_folder_defaults(settings):
+            if apply_android_folder_defaults(settings):
                 self.save(settings)
             else:
                 self._ensure_dirs(settings)
@@ -176,14 +176,11 @@ class SettingsStore:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             settings = AppSettings.from_dict(data)
-            if _apply_android_folder_defaults(settings):
-                self.save(settings)
-            else:
-                self._ensure_dirs(settings)
+            self._ensure_dirs(settings)
             return settings
         except (json.JSONDecodeError, TypeError, ValueError):
             settings = AppSettings()
-            if _apply_android_folder_defaults(settings):
+            if apply_android_folder_defaults(settings):
                 self.save(settings)
             else:
                 self._ensure_dirs(settings)
