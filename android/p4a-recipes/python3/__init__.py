@@ -19,8 +19,10 @@ class Python3Recipe(_BasePython3Recipe):
         # Local override has no patches/ tree — use upstream p4a recipe files.
         return _UPSTREAM_RECIPE_DIR
 
-    def apply_patches(self, arch, build_dir):
-        super().apply_patches(arch, build_dir)
+    def apply_patches(self, arch, build_dir=None):
+        # p4a master calls apply_patches(arch) only; build_dir is optional.
+        super().apply_patches(arch, build_dir=build_dir)
+        build_dir = build_dir if build_dir else self.get_build_dir(arch.arch)
         local_patch = join(_LOCAL_RECIPE_DIR, "patches", "disable-grp.patch")
         if exists(local_patch):
             from pythonforandroid.logger import shprint

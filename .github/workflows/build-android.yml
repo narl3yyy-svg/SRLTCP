@@ -37,9 +37,9 @@ jobs:
           path: |
             ~/.buildozer
             ~/.gradle/caches
-          key: ${{ runner.os }}-buildozer-v2-${{ hashFiles('android/buildozer.spec', 'android/p4a-recipes/**') }}
+          key: ${{ runner.os }}-buildozer-v3-${{ hashFiles('android/buildozer.spec', 'android/p4a-recipes/**') }}
           restore-keys: |
-            ${{ runner.os }}-buildozer-v2-
+            ${{ runner.os }}-buildozer-v3-
 
       - name: Install system dependencies
         run: |
