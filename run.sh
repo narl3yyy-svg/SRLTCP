@@ -59,7 +59,8 @@ stop_stale_srltcp() {
   kill -KILL $pids 2>/dev/null || true
 }
 
-# Usage: ./run.sh web [--debug] [--port 9876]
+# Usage: ./run.sh [web] [--debug] [--port 9876]
+#        ./run.sh relay --bind 0.0.0.0 --port 7827
 #        ./run.sh stop   — release ports from a stale instance
 if [[ "${1:-}" == "stop" ]]; then
   stop_stale_srltcp
@@ -67,7 +68,10 @@ if [[ "${1:-}" == "stop" ]]; then
   exit 0
 fi
 
-if [[ "${1:-}" == "web" ]]; then
+if [[ "${1:-}" == "web" || "${1:-}" == "relay" ]]; then
+  stop_stale_srltcp
+elif [[ -z "${1:-}" ]]; then
+  set -- web
   stop_stale_srltcp
 fi
 
