@@ -33,6 +33,8 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 - **Session keys** are derived via HKDF-SHA256 with explicit salt and direction labels (`srltcp-v2-send` / `srltcp-v2-recv`).
 - **Hub forwarding** wraps opaque E2EE blobs. Hub servers never receive session keys and cannot decrypt chat or file content.
 - **Hub registration** is signed with the client's Ed25519 identity; the hub rejects unsigned or mismatched registrations.
+- **LAN UDP announces** (port 7826) are signed with the sender's Ed25519 identity key. Receiving peers verify the signature and `hash_id` ↔ `public_key` binding before displaying or trusting a discovered peer. Unsigned or invalid announces are dropped.
+- **Optional Noise XX handshake** — Settings → Network → Handshake protocol. Uses `Noise_XX_25519_ChaChaPoly_SHA256`; session keys are HKDF-derived from the Noise handshake hash. Both peers must select the same protocol.
 - **Web UI** is served over **HTTPS on localhost only** (self-signed cert generated locally).
 - **Share sessions** use constant-time token comparison; path traversal is blocked on file APIs.
 
@@ -40,7 +42,7 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 
 | Data | Visibility |
 |------|------------|
-| LAN UDP discovery (7826) | Plaintext names, IPs, ports on the local network |
+| LAN UDP discovery (7826) | Plaintext names, IPs, ports on the local network — **signed** (Ed25519) since v0.1.57; spoofing without the private key is rejected |
 | Hub presence | Hub operator sees who registered (hash ID prefix, display name) and when |
 | Hub routing | Hub sees source/destination identity hash tokens and approximate packet sizes/timing |
 | WAN / hub TCP | Observers see connection endpoints, timing, and volume — not decrypted payloads |
@@ -71,8 +73,10 @@ You **cannot** read message or file content. Users should only use hubs they tru
 
 - Peers on the same LAN or serial bus may observe traffic patterns.
 - Users must **verify peer identity** (32-char hash ID) out-of-band before trusting a contact.
+- LAN announce signatures authenticate discovery metadata but do **not** encrypt it — anyone on the LAN can still observe that you exist and read names/endpoints.
 - Hub presence signatures reduce spoofing but do not replace out-of-band identity verification before trusting.
 - Blocked peers are rejected at the application layer but may still appear in discovery or hub presence until TTL expires.
+- Noise XX is experimental; mismatched handshake protocols between peers cause connection failure by design.
 
 ## Hardening Guidelines for Operators
 
@@ -120,6 +124,6 @@ You **cannot** read message or file content. Users should only use hubs they tru
 
 ## Dependency Security
 
-Runtime dependencies are declared in `pyproject.toml` with minimum versions (`aiohttp`, `aiofiles`, `cryptography`, `pyserial`, `zstandard`). Dev tools: `ruff`, `mypy`, `pytest`. Android adds Chaquopy-managed pip packages at APK build time.
+Runtime dependencies are declared in `pyproject.toml` with minimum versions (`aiohttp`, `aiofiles`, `cryptography`, `pyserial`, `zstandard`, `noiseprotocol`). Dev tools: `ruff`, `mypy`, `pytest`. Android adds Chaquopy-managed pip packages at APK build time.
 
 Report dependency or supply-chain issues through the same vulnerability channel.

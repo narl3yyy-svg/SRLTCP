@@ -565,6 +565,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                     )
         if updated.clock_source not in ("system", "ntp"):
             updated.clock_source = "system"
+        if updated.handshake_protocol not in ("identity", "noise_xx"):
+            updated.handshake_protocol = "identity"
         if updated.ntp_server:
             updated.ntp_server = str(updated.ntp_server).strip()[:253]
 

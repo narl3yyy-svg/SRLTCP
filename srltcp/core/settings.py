@@ -19,6 +19,7 @@ DEFAULT_INCOMING = "incoming"
 DEFAULT_SHARED = "shared"
 
 RetentionPreset = Literal["1d", "1w", "1m", "1y", "forever", "restart"]
+HandshakeProtocol = Literal["identity", "noise_xx"]
 
 RETENTION_HOURS: dict[str, int] = {
     "1d": 24,
@@ -104,7 +105,8 @@ class AppSettings:
     hub_host: str = ""
     hub_lan_host: str = ""
     hub_port: int = DEFAULT_TCP_PORT
-    version: str = "0.1.56"
+    handshake_protocol: str = "identity"
+    version: str = "0.1.57"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

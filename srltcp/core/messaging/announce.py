@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from srltcp.core.messaging.constants import DISCOVERY_PORT
 from srltcp.core.protocol.messages import MessageType, build_header, encode_payload
+from srltcp.core.protocol.signed import sign_payload
 from srltcp.utils.logging import get_logger
 from srltcp.utils.network import primary_ipv4
 
@@ -45,18 +46,17 @@ class AnnounceMixin:
             if self.tcp_transport
             else DISCOVERY_PORT
         )
-        return encode_payload(
-            {
-                "type": "announce",
-                "hash_id": identity.hash_id,
-                "name": identity.name,
-                "public_key": identity.public_bytes().hex(),
-                "transport": transport,
-                "tcp_host": self._lan_ip(),
-                "tcp_port": self.config.tcp_port,
-                "discovery_port": discovery_port,
-            }
-        )
+        payload = {
+            "type": "announce",
+            "hash_id": identity.hash_id,
+            "name": identity.name,
+            "public_key": identity.public_bytes().hex(),
+            "transport": transport,
+            "tcp_host": self._lan_ip(),
+            "tcp_port": self.config.tcp_port,
+            "discovery_port": discovery_port,
+        }
+        return sign_payload(payload, identity.private_key)
 
     def _lan_ip(self: MessagingBackend) -> str:
         if self.config.lan_ip:

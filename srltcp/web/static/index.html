@@ -212,6 +212,14 @@
 <input type="number" id="set-hub-port" min="1024" max="65535" value="7825" />
 <small>Default 7825 — must match the hub server's listen port</small>
 </label>
+<label class="field">
+<span>Handshake protocol</span>
+<select id="set-handshake-protocol">
+<option value="identity">Identity (Ed25519 + X25519) — default</option>
+<option value="noise_xx">Noise XX (experimental)</option>
+</select>
+<small>Both peers must use the same protocol. Noise XX uses Noise_XX_25519_ChaChaPoly_SHA256.</small>
+</label>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-wan-expose" />
 <span>I will port-forward TCP 7825 for direct WAN peers (advanced)</span>

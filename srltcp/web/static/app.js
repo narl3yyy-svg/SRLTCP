@@ -1567,6 +1567,7 @@
     setInputValue("set-hub-lan-host", settings.hub_lan_host || "");
     setInputValue("set-hub-port", String(settings.hub_port || 7825));
     setCheckbox("set-wan-expose", !!settings.wan_expose_port);
+    setSelectValue("set-handshake-protocol", settings.handshake_protocol || "identity");
     setCheckbox("set-enable-serial", !!settings.enable_serial);
     loadSerialSettings(settings.serial_port || "", settings.serial_baud || 57600);
     const tzEl = $("#set-timezone");
@@ -2999,6 +3000,7 @@
       hub_lan_host: ($("#set-hub-lan-host")?.value || "").trim(),
       hub_port: parseInt($("#set-hub-port")?.value || "7825", 10),
       wan_expose_port: $("#set-wan-expose")?.checked || false,
+      handshake_protocol: $("#set-handshake-protocol")?.value || "identity",
       enable_serial: $("#set-enable-serial")?.checked || false,
       serial_port: $("#set-serial-port")?.value || "",
       serial_baud: parseInt($("#set-serial-baud")?.value || "57600", 10),

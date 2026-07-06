@@ -87,6 +87,7 @@ class SRLTCPNode:
         self.config.hub_host = settings.hub_host
         self.config.hub_lan_host = settings.hub_lan_host
         self.config.hub_port = settings.hub_port
+        self.config.handshake_protocol = settings.handshake_protocol
         incoming = str(settings.resolved_incoming_dir())
         self.config.incoming_dir = incoming
         if hasattr(self.backend, "_transfer_dir"):
