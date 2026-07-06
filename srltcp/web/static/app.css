@@ -1115,6 +1115,74 @@ body {
 
 .mobile-layout.android-app .chat-empty .mobile-only { display: flex; }
 
+/* Android stack navigation — sidebar is the home screen */
+.mobile-layout.android-app .app {
+  display: block;
+  height: 100%;
+}
+.mobile-layout.android-app .sidebar {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  max-width: 100%;
+  transform: none;
+  transition: none;
+  z-index: 10;
+  box-shadow: none;
+}
+.mobile-layout.android-app .sidebar.android-nav-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+.mobile-layout.android-app .chat {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: none;
+  flex-direction: column;
+  padding-bottom: calc(var(--status-bar-h) + env(safe-area-inset-bottom, 0));
+}
+.mobile-layout.android-app .chat.android-nav-visible {
+  display: flex;
+}
+.mobile-layout.android-app .chat-empty {
+  display: none !important;
+}
+.mobile-layout.android-app .sidebar-backdrop {
+  display: none !important;
+}
+.mobile-layout.android-app #btn-settings-top,
+.mobile-layout.android-app #btn-settings-chat,
+.mobile-layout.android-app .mobile-topbar {
+  display: none !important;
+}
+.mobile-layout.android-app .settings-window {
+  z-index: 30;
+}
+.mobile-layout.android-app #media-lightbox.open {
+  z-index: 40;
+  padding: 0;
+  align-items: stretch;
+}
+.mobile-layout.android-app .media-lightbox-panel {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  padding: env(safe-area-inset-top, 0) 0 env(safe-area-inset-bottom, 0);
+}
+.mobile-layout.android-app .media-lightbox-body {
+  flex: 1;
+  max-height: none;
+}
+.mobile-layout.android-app .lightbox-image,
+.mobile-layout.android-app .lightbox-video {
+  max-width: 100%;
+  max-height: 100%;
+  width: 100%;
+  object-fit: contain;
+}
+
 /* ── Responsive (narrow browser windows) ── */
 @media (max-width: 768px) {
   .app { grid-template-columns: 1fr; }
