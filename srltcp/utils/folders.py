@@ -35,11 +35,13 @@ def _safe_root() -> Path:
 
 
 def _is_under_roots(path: Path, roots: list[Path] | None = None) -> bool:
-    resolved = str(path.resolve())
+    resolved = path.resolve()
     for root in roots or _browse_roots():
-        root_s = str(root.resolve())
-        if resolved == root_s or resolved.startswith(root_s + "/"):
+        try:
+            resolved.relative_to(root.resolve())
             return True
+        except ValueError:
+            continue
     return False
 
 
