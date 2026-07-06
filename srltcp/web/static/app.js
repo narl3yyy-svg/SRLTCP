@@ -341,7 +341,16 @@
 
   function notifyUser(title, body, { tag, silent = false } = {}) {
     if (!silent) toast(body, "info");
-    if (!document.hidden || silent) return;
+    const hidden = document.hidden;
+    const androidBridge = window.SRLTCPAndroid;
+    const androidBg = typeof androidBridge?.isInBackground === "function"
+      && androidBridge.isInBackground();
+    if (androidBridge?.showNotification && (hidden || androidBg)) {
+      try {
+        androidBridge.showNotification(title || "SRLTCP", body || "", tag || "");
+      } catch (_) { /* ignore */ }
+    }
+    if (!hidden || silent) return;
     if (!("Notification" in window)) return;
     const show = () => {
       try {
@@ -650,6 +659,7 @@
       if (pRes.ok) state.peers = pRes.data || [];
       if (tRes.ok) state.trusted = tRes.data || [];
       renderContacts();
+      if (state._restorePeer) applyRestoredPeer();
     } finally {
       state.loadingPeers = false;
     }
@@ -2030,6 +2040,7 @@
     renderContacts();
     loadMessages();
     if (!isPeerLinked(hashId) && !inTransferCooldown(hashId)) connectPeer(hashId, false);
+    saveMobileSession();
   }
 
   function updatePeerStatus(text) {
@@ -2698,8 +2709,46 @@
     state.settingsFormDirty = false;
   }
 
+  const MOBILE_SESSION_KEY = "srltcp_mobile_session";
+
   function isMobileLayout() {
     return document.documentElement.classList.contains("mobile-layout");
+  }
+
+  function saveMobileSession() {
+    if (!document.documentElement.classList.contains("android-app")) return;
+    try {
+      sessionStorage.setItem(
+        MOBILE_SESSION_KEY,
+        JSON.stringify({
+          selectedPeer: state.selectedPeer,
+          selectedName: state.selectedName,
+          sidebarOpen: !!$("#sidebar")?.classList.contains("open"),
+        })
+      );
+    } catch (_) { /* ignore */ }
+  }
+
+  function peekMobileSession() {
+    if (!document.documentElement.classList.contains("android-app")) return null;
+    try {
+      const raw = sessionStorage.getItem(MOBILE_SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function applyRestoredPeer() {
+    const saved = state._restorePeer;
+    if (!saved?.selectedPeer) return;
+    delete state._restorePeer;
+    const peer = state.peers.find((p) => p.hash_id === saved.selectedPeer)
+      || state.trusted.find((p) => p.hash_id === saved.selectedPeer);
+    const name = saved.selectedName || peer?.name || saved.selectedPeer.slice(0, 8);
+    selectPeer(saved.selectedPeer, name);
+    if (saved.sidebarOpen) openSidebarMobile();
+    else closeSidebarMobile();
   }
 
   function openSidebarMobile() {
@@ -2737,7 +2786,53 @@
     if (!android && !narrow) return;
     root.classList.add("mobile-layout");
     if (android) root.classList.add("android-app");
-    if (android && !state.selectedPeer) openSidebarMobile();
+    if (android) {
+      const saved = peekMobileSession();
+      if (saved?.selectedPeer) {
+        state._restorePeer = saved;
+      } else if (!state.selectedPeer) {
+        openSidebarMobile();
+      }
+    }
+  }
+
+  function setupAndroidGestures() {
+    const panel = $("#chat-active");
+    if (!panel) return;
+    let startX = 0;
+    let startY = 0;
+    let tracking = false;
+
+    panel.addEventListener("touchstart", (e) => {
+      if (!document.documentElement.classList.contains("android-app")) return;
+      if (panel.classList.contains("hidden") || !state.selectedPeer) return;
+      const t = e.touches[0];
+      if (!t || t.clientX > 48) return;
+      startX = t.clientX;
+      startY = t.clientY;
+      tracking = true;
+    }, { passive: true });
+
+    panel.addEventListener("touchend", (e) => {
+      if (!tracking) return;
+      tracking = false;
+      const t = e.changedTouches[0];
+      if (!t) return;
+      const dx = t.clientX - startX;
+      const dy = Math.abs(t.clientY - startY);
+      if (dx < 72 || dy > 96) return;
+      const sidebarOpen = $("#sidebar")?.classList.contains("open");
+      if (!sidebarOpen) {
+        openSidebarMobile();
+        saveMobileSession();
+        return;
+      }
+      closeSidebarMobile();
+      saveMobileSession();
+      try {
+        window.SRLTCPAndroid?.moveToBackground();
+      } catch (_) { /* ignore */ }
+    }, { passive: true });
   }
 
   /* ── Events ── */
@@ -2771,7 +2866,9 @@
     $("#chat-empty")?.classList.remove("hidden");
     openSidebarMobile();
     state.selectedPeer = null;
+    state.selectedName = null;
     renderContacts();
+    saveMobileSession();
   });
 
   $("#peer-search")?.addEventListener("input", debounce((e) => {
@@ -3155,6 +3252,19 @@
   }
 
   window.applyMobileLayout = applyMobileLayout;
+
+  document.addEventListener("visibilitychange", () => {
+    saveMobileSession();
+    if (!document.hidden && document.documentElement.classList.contains("android-app")) {
+      try {
+        if (window.Notification && Notification.permission === "default") {
+          Notification.requestPermission();
+        }
+      } catch (_) { /* ignore */ }
+    }
+  });
+
+  setupAndroidGestures();
 
   window.addEventListener("resize", () => {
     applyMobileLayout(

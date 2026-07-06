@@ -33,10 +33,14 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private var loadAttempt = 0
     private var pageLoaded = false
+    private var uiRestored = false
     private var serverThread: Thread? = null
     private var serviceStarted = false
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var isClosing = false
+
+    var isActivityResumed = false
+        private set
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -73,6 +77,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         super.onCreate(savedInstanceState)
+        SRLTCPNotifier.ensureChannels(this)
 
         SRLTCPApplication.pythonError?.let {
             showFatal("Python failed to start:\n$it")
@@ -105,6 +110,7 @@ class MainActivity : AppCompatActivity() {
             wv.settings.loadWithOverviewMode = true
             wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+            wv.addJavascriptInterface(SRLTCPBridge(this@MainActivity), "SRLTCPAndroid")
             wv.webChromeClient = object : WebChromeClient() {
                 override fun onShowFileChooser(
                     webView: WebView,
@@ -175,8 +181,33 @@ class MainActivity : AppCompatActivity() {
         }
         setContentView(root)
 
+        if (savedInstanceState != null) {
+            webView?.restoreState(savedInstanceState)
+            val url = webView?.url
+            if (!url.isNullOrBlank() && url != "about:blank") {
+                uiRestored = true
+                pageLoaded = true
+                webView?.visibility = android.view.View.VISIBLE
+                statusView?.visibility = android.view.View.GONE
+            }
+        }
+
         requestNotificationIfNeeded()
         requestStorageAccessThenStart()
+    }
+
+    fun postAlertNotification(title: String, body: String, tag: String) {
+        if (isClosing || isFinishing) return
+        if (isActivityResumed) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        SRLTCPNotifier.postAlert(this, title, body, tag)
     }
 
     private fun requestStorageAccessThenStart() {
@@ -215,6 +246,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun beginServerStartup() {
         startPythonServer()
+        if (uiRestored && isServerReady()) {
+            maybeStartForegroundService()
+            return
+        }
         waitForServerThenLoad()
     }
 
@@ -388,6 +423,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        isActivityResumed = false
         super.onPause()
         webView?.onPause()
         if (isFinishing) {
@@ -398,12 +434,15 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         if (isFinishing) {
             prepareForClose()
+        } else {
+            maybeStartForegroundService()
         }
         super.onStop()
     }
 
     override fun onResume() {
         super.onResume()
+        isActivityResumed = true
         if (isClosing) return
         webView?.onResume()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
@@ -449,8 +488,15 @@ class MainActivity : AppCompatActivity() {
         statusView?.visibility = android.view.View.GONE
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        webView?.saveState(outState)
+    }
+
     override fun onDestroy() {
-        prepareForClose()
+        if (isFinishing) {
+            prepareForClose()
+        }
         handler.removeCallbacksAndMessages(null)
         if (isFinishing) {
             try {

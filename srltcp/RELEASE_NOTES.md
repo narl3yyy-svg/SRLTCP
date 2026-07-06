@@ -1,5 +1,13 @@
 # SRLTCP Release Notes
 
+## v0.1.54 (2026-07-06)
+
+### Android
+- **Background notifications** — native alerts for messages, transfers, and disconnects while the app is backgrounded (foreground service + alert channel)
+- **Session restore** — reopening from recents returns to the same chat; cold start still opens the sidebar first
+- **Edge swipe** — swipe from the left edge in an active chat opens the sidebar; swipe again minimizes to background
+- **Settings UI** — folder row layout tweaks; hide Delete on narrow/mobile folder rows
+
 ## v0.1.53 (2026-07-05)
 
 ### Android
