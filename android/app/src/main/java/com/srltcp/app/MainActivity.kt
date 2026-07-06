@@ -32,10 +32,11 @@ class MainActivity : AppCompatActivity() {
     private var statusView: TextView? = null
     private val handler = Handler(Looper.getMainLooper())
     private var loadAttempt = 0
-    private val fallbackPorts = intArrayOf(9876, 9877, 9878)
+    private var pageLoaded = false
     private var serverThread: Thread? = null
     private var serviceStarted = false
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var isClosing = false
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -128,6 +129,10 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
+                    if (isClosing || isFinishing || url == "about:blank") return
+                    pageLoaded = true
+                    loadAttempt = 0
+                    handler.removeCallbacks(loadRetryRunnable)
                     view.evaluateJavascript(
                         "document.documentElement.classList.add('android-app');" +
                             "document.getElementById('stat-cpu')?.classList.add('hidden');" +
@@ -140,6 +145,10 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+                    if (isClosing || isFinishing) {
+                        handler.cancel()
+                        return
+                    }
                     val host = android.net.Uri.parse(error.url).host
                     if (host == "127.0.0.1" || host == "localhost") {
                         handler.proceed()
@@ -148,7 +157,19 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-
+                @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+                override fun onReceivedError(
+                    view: WebView,
+                    errorCode: Int,
+                    description: String?,
+                    failingUrl: String?
+                ) {
+                    if (isClosing || isFinishing) {
+                        view.stopLoading()
+                        return
+                    }
+                    super.onReceivedError(view, errorCode, description, failingUrl)
+                }
             }
             root.addView(wv)
         }
@@ -296,36 +317,42 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val loadUiRunnable = Runnable { loadWebUi() }
+    private val loadRetryRunnable = Runnable {
+        if (isClosing || pageLoaded) return@Runnable
+        val wv = webView ?: return@Runnable
+        if (wv.visibility == android.view.View.VISIBLE) return@Runnable
+        Log.w(TAG, "Web UI not ready yet, retrying…")
+        scheduleLoad(2000)
+    }
+
     private fun scheduleLoad(delayMs: Long) {
-        handler.removeCallbacksAndMessages(null)
-        handler.postDelayed({ loadWebUi() }, delayMs)
+        if (isClosing) return
+        handler.removeCallbacks(loadUiRunnable)
+        handler.removeCallbacks(loadRetryRunnable)
+        handler.postDelayed(loadUiRunnable, delayMs)
     }
 
     private fun loadWebUi() {
+        if (isClosing) return
         val wv = webView ?: return
         if (!isServerReady()) {
             waitForServerThenLoad()
             return
         }
-        val port = resolvePort()
-        val ports = intArrayOf(port) + fallbackPorts.filter { it != port }.toIntArray()
-        val idx = loadAttempt.coerceAtMost(ports.size - 1)
         loadAttempt++
-        if (loadAttempt > ports.size + 8) {
-            showFatal("Cannot reach SRLTCP web UI.\nTried ports: ${ports.joinToString()}")
+        if (loadAttempt > 12) {
+            showFatal("Cannot reach SRLTCP web UI on port ${resolvePort()}.")
             return
         }
-        val url = "https://127.0.0.1:${ports[idx]}/"
+        pageLoaded = false
+        handler.removeCallbacks(loadRetryRunnable)
+        val port = resolvePort()
+        val url = "https://127.0.0.1:$port/"
         Log.i(TAG, "Loading $url (attempt $loadAttempt)")
         statusView?.text = "Connecting to $url …"
         wv.loadUrl(url)
-        handler.postDelayed({
-            if (wv.visibility != android.view.View.VISIBLE) {
-                Log.w(TAG, "Web UI not ready yet, retrying…")
-                loadAttempt = 0
-                scheduleLoad(2000)
-            }
-        }, 5000)
+        handler.postDelayed(loadRetryRunnable, 5000)
     }
 
     private fun resolvePort(): Int {
@@ -363,10 +390,21 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         webView?.onPause()
+        if (isFinishing) {
+            prepareForClose()
+        }
+    }
+
+    override fun onStop() {
+        if (isFinishing) {
+            prepareForClose()
+        }
+        super.onStop()
     }
 
     override fun onResume() {
         super.onResume()
+        if (isClosing) return
         webView?.onResume()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
             Environment.isExternalStorageManager() &&
@@ -395,7 +433,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun prepareForClose() {
+        if (isClosing) return
+        isClosing = true
+        pageLoaded = false
+        handler.removeCallbacks(loadRetryRunnable)
+        handler.removeCallbacksAndMessages(null)
+        webView?.let { wv ->
+            try {
+                wv.stopLoading()
+                wv.loadUrl("about:blank")
+                wv.visibility = android.view.View.GONE
+            } catch (_: Exception) { /* ignore */ }
+        }
+        statusView?.visibility = android.view.View.GONE
+    }
+
     override fun onDestroy() {
+        prepareForClose()
         handler.removeCallbacksAndMessages(null)
         if (isFinishing) {
             try {

@@ -1,11 +1,19 @@
 # SRLTCP Release Notes
 
+## v0.1.53 (2026-07-05)
+
+### Android
+- **APK naming** — output is `SRLTCP-0.1.53.apk` (no `-debug` suffix)
+- **Chat layout** — single status-bar inset (fixes excess padding from v0.1.52); composer sits just above the footer bar
+- **Swipe to close** — suppress WebView “connection refused” error page when removing the app from recents
+- **Load retry** — fixed stacked retries hitting wrong ports (9877/9878) after backgrounding
+
 ## v0.1.52 (2026-07-05)
 
 ### Android
 - **Folder delete** — Settings → Folders **Delete** removes the folder on device and clears the saved path (no longer re-applies Downloads default after you clear it)
 - **File attachments** — WebView file picker (`WebChromeClient.onShowFileChooser`) so paperclip send works on Android
-- **Status bar** — fixed chat composer clipping; CPU stat hidden on Android (temperature only)
+- **Status bar** — extra bottom padding for chat (tuned in v0.1.53); CPU stat hidden on Android (temperature only)
 
 ### Docs
 - README changelog moved here; development and Android build instructions expanded
@@ -15,7 +23,7 @@
 ### Android
 - **Downloads defaults** — incoming and shared folders default to `Downloads/SRLTCP/Incoming` and `Downloads/SRLTCP/Shared` on first launch (visible in Settings → Folders)
 - **Folder picker** — browse starts in Downloads on Android when storage access is granted
-- **Mobile UI** — slide-out sidebar (☰), full-screen settings (⚙), and phone layout in the WebView
+- **Mobile UI** — slide-out sidebar (☰), full-screen settings (⚙), phone layout, chat above status bar
 - **Startup fixes** — server health check, port fallback, storage permissions, WebView retry
 
 ### Project

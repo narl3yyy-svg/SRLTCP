@@ -12,8 +12,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 52
-        versionName = "0.1.52"
+        versionCode = 53
+        versionName = "0.1.53"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -73,7 +73,7 @@ tasks.register("renameDebugApk") {
         outDir.listFiles()
             ?.filter { it.isFile && it.extension == "apk" && !it.name.startsWith("SRLTCP-") }
             ?.forEach { src ->
-                val dest = File(outDir, "SRLTCP-$version-debug.apk")
+                val dest = File(outDir, "SRLTCP-$version.apk")
                 if (dest.exists()) dest.delete()
                 src.renameTo(dest)
             }
@@ -88,7 +88,7 @@ tasks.register("renameReleaseApk") {
         outDir.listFiles()
             ?.filter { it.isFile && it.extension == "apk" && !it.name.startsWith("SRLTCP-") }
             ?.forEach { src ->
-                val dest = File(outDir, "SRLTCP-$version-release.apk")
+                val dest = File(outDir, "SRLTCP-$version.apk")
                 if (dest.exists()) dest.delete()
                 src.renameTo(dest)
             }
