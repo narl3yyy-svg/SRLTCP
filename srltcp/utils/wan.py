@@ -61,6 +61,36 @@ def validate_wan_port(port: int) -> int:
     return port
 
 
+def is_private_or_lan_host(host: str) -> bool:
+    """True when host is a private/reserved IP (valid for same-LAN hub dial)."""
+    cleaned = host.strip()
+    if not cleaned:
+        return False
+    try:
+        return _is_private_ip(str(ipaddress.ip_address(cleaned)))
+    except ValueError:
+        return False
+
+
+def validate_hub_host(host: str) -> str:
+    """Validate hub server host — allows LAN/private IPs or public WAN hosts."""
+    cleaned = host.strip()
+    if not cleaned or len(cleaned) > 253:
+        raise ValueError("invalid hub host")
+    if cleaned in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        raise ValueError("localhost not allowed for hub server")
+    try:
+        ip = ipaddress.ip_address(cleaned)
+        if _is_private_ip(str(ip)):
+            return str(ip)
+        return validate_wan_host(cleaned)
+    except ValueError as exc:
+        msg = str(exc)
+        if "does not appear to be an IPv4 or IPv6 address" in msg:
+            return validate_wan_host(cleaned)
+        raise
+
+
 def resolve_wan_endpoint(host: str, port: int) -> WanEndpoint:
     """Resolve hostname and ensure result is suitable for outbound WAN dial."""
     host = validate_wan_host(host)

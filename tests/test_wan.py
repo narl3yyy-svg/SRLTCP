@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 
 from srltcp.utils.wan import (
+    is_private_or_lan_host,
     resolve_wan_endpoint,
+    validate_hub_host,
     validate_wan_host,
     validate_wan_port,
 )
@@ -50,6 +52,16 @@ def test_resolve_wan_endpoint_ip(monkeypatch: pytest.MonkeyPatch) -> None:
     assert ep.host == "8.8.8.8"
     assert ep.port == 7825
     assert ep.resolved_ip == "8.8.8.8"
+
+
+def test_validate_hub_host_allows_private_lan() -> None:
+    assert validate_hub_host("192.168.1.50") == "192.168.1.50"
+    assert validate_hub_host("10.0.0.5") == "10.0.0.5"
+    assert is_private_or_lan_host("192.168.1.50") is True
+
+
+def test_validate_hub_host_public_still_validates() -> None:
+    assert validate_hub_host("8.8.8.8") == "8.8.8.8"
 
 
 def test_resolve_wan_endpoint_rejects_private_resolution(

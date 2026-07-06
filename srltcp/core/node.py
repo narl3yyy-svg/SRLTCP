@@ -85,6 +85,7 @@ class SRLTCPNode:
         self.config.serial_baud = settings.serial_baud
         self.config.hub_enabled = settings.hub_enabled
         self.config.hub_host = settings.hub_host
+        self.config.hub_lan_host = settings.hub_lan_host
         self.config.hub_port = settings.hub_port
         incoming = str(settings.resolved_incoming_dir())
         self.config.incoming_dir = incoming

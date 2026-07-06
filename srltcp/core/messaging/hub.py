@@ -23,7 +23,12 @@ from srltcp.core.protocol.messages import (
 )
 from srltcp.transports.base import TransportPeer
 from srltcp.utils.logging import get_logger
-from srltcp.utils.wan import resolve_wan_endpoint, validate_wan_port
+from srltcp.utils.wan import (
+    is_private_or_lan_host,
+    resolve_wan_endpoint,
+    validate_hub_host,
+    validate_wan_port,
+)
 
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
@@ -60,12 +65,37 @@ class HubMixin:
         self._hub_connect_task = None
         self._hub_registered = False
 
+    def _hub_host_configured(self: MessagingBackend) -> bool:
+        return bool(
+            self.config.hub_host.strip()
+            or getattr(self.config, "hub_lan_host", "").strip()
+        )
+
     def _hub_enabled(self: MessagingBackend) -> bool:
         return bool(
             not self.config.hub_mode
             and self.config.hub_enabled
-            and self.config.hub_host.strip()
+            and self._hub_host_configured()
         )
+
+    def _hub_connect_targets(self: MessagingBackend) -> list[tuple[str, int]]:
+        port = validate_wan_port(self.config.hub_port)
+        targets: list[tuple[str, int]] = []
+        lan = getattr(self.config, "hub_lan_host", "").strip()
+        wan = self.config.hub_host.strip()
+        if lan:
+            targets.append((lan, port))
+        if wan and (wan, port) not in targets:
+            targets.append((wan, port))
+        return targets
+
+    def _resolve_hub_connect(self: MessagingBackend, host: str, port: int) -> tuple[str, int]:
+        port = validate_wan_port(port)
+        cleaned = host.strip()
+        if is_private_or_lan_host(cleaned):
+            return cleaned, port
+        endpoint = resolve_wan_endpoint(cleaned, port)
+        return endpoint.host, endpoint.port
 
     def hub_status(self: MessagingBackend) -> dict[str, object]:
         connected = bool(
@@ -76,6 +106,7 @@ class HubMixin:
         return {
             "enabled": self._hub_enabled(),
             "host": self.config.hub_host,
+            "lan_host": getattr(self.config, "hub_lan_host", ""),
             "port": self.config.hub_port,
             "connected": connected,
             "registered": self._hub_registered,
@@ -113,19 +144,28 @@ class HubMixin:
             return self._hub_peer_id
         if not self.tcp_transport:
             return None
-        host = self.config.hub_host.strip()
-        port = validate_wan_port(self.config.hub_port)
-        try:
-            endpoint = resolve_wan_endpoint(host, port)
-            peer_id = await self.tcp_transport.connect(endpoint.host, endpoint.port)
-            self._hub_peer_id = peer_id
-            self._hub_registered = False
-            log.info("Connected to hub at %s:%d", endpoint.host, endpoint.port)
-            return peer_id
-        except (OSError, TimeoutError, ConnectionError, ValueError) as exc:
-            log.warning("Hub connection to %s:%d failed: %s", host, port, exc)
-            self._schedule_hub_reconnect()
+        targets = self._hub_connect_targets()
+        if not targets:
             return None
+        last_exc: Exception | None = None
+        for host, port in targets:
+            try:
+                dial_host, dial_port = self._resolve_hub_connect(host, port)
+                peer_id = await self.tcp_transport.connect(dial_host, dial_port)
+                self._hub_peer_id = peer_id
+                self._hub_registered = False
+                log.info("Connected to hub at %s:%d", dial_host, dial_port)
+                return peer_id
+            except (OSError, TimeoutError, ConnectionError, ValueError) as exc:
+                last_exc = exc
+                log.warning("Hub connection to %s:%d failed: %s", host, port, exc)
+        if last_exc is not None:
+            log.warning(
+                "Hub unreachable on all configured targets (%s)",
+                ", ".join(f"{h}:{p}" for h, p in targets),
+            )
+        self._schedule_hub_reconnect()
+        return None
 
     def _schedule_hub_reconnect(self: MessagingBackend) -> None:
         if self.config.hub_mode or not self._hub_enabled() or not self._running:
@@ -189,12 +229,28 @@ class HubMixin:
         return data
 
     async def _send_hub_register(self: MessagingBackend) -> None:
+        from srltcp.core.messaging.announce import AnnounceError
+
         if not self._hub_peer_id or not self.tcp_transport:
             peer_id = await self._ensure_hub_connection()
             if not peer_id:
-                raise RuntimeError("hub not connected")
+                targets = self._hub_connect_targets()
+                tried = ", ".join(f"{h}:{p}" for h, p in targets) or "none"
+                lan = getattr(self.config, "hub_lan_host", "").strip()
+                hint = (
+                    f"Hub not connected ({tried}). "
+                    "Check port-forward on the hub host"
+                )
+                if lan:
+                    hint += " and verify the hub LAN address"
+                else:
+                    hint += (
+                        " — on the same LAN as the hub, set Hub LAN address "
+                        "to the hub machine's local IP (e.g. 192.168.x.x)"
+                    )
+                raise AnnounceError("tcp", hint)
         if not self.tcp_transport or not self._hub_peer_id:
-            raise RuntimeError("hub not connected")
+            raise AnnounceError("tcp", "Hub not connected")
         body = self._build_hub_register_body()
         packet = build_header(MessageType.HUB_REGISTER, body=body)
         await self.tcp_transport.send(self._hub_peer_id, packet)

@@ -1560,6 +1560,7 @@
     setCheckbox("set-auto-announce", !!settings.auto_announce);
     setCheckbox("set-hub-enabled", !!settings.hub_enabled);
     setInputValue("set-hub-host", settings.hub_host || "");
+    setInputValue("set-hub-lan-host", settings.hub_lan_host || "");
     setInputValue("set-hub-port", String(settings.hub_port || 7825));
     setCheckbox("set-wan-expose", !!settings.wan_expose_port);
     setCheckbox("set-enable-serial", !!settings.enable_serial);
@@ -2715,15 +2716,20 @@
     return document.documentElement.classList.contains("mobile-layout");
   }
 
+  function mobileSessionStorage() {
+    return document.documentElement.classList.contains("android-app")
+      ? localStorage
+      : sessionStorage;
+  }
+
   function saveMobileSession() {
     if (!document.documentElement.classList.contains("android-app")) return;
     try {
-      sessionStorage.setItem(
+      mobileSessionStorage().setItem(
         MOBILE_SESSION_KEY,
         JSON.stringify({
           selectedPeer: state.selectedPeer,
           selectedName: state.selectedName,
-          sidebarOpen: !!$("#sidebar")?.classList.contains("open"),
         })
       );
     } catch (_) { /* ignore */ }
@@ -2732,7 +2738,7 @@
   function peekMobileSession() {
     if (!document.documentElement.classList.contains("android-app")) return null;
     try {
-      const raw = sessionStorage.getItem(MOBILE_SESSION_KEY);
+      const raw = mobileSessionStorage().getItem(MOBILE_SESSION_KEY);
       return raw ? JSON.parse(raw) : null;
     } catch (_) {
       return null;
@@ -2747,8 +2753,7 @@
       || state.trusted.find((p) => p.hash_id === saved.selectedPeer);
     const name = saved.selectedName || peer?.name || saved.selectedPeer.slice(0, 8);
     selectPeer(saved.selectedPeer, name);
-    if (saved.sidebarOpen) openSidebarMobile();
-    else closeSidebarMobile();
+    closeSidebarMobile();
   }
 
   function openSidebarMobile() {
@@ -2794,45 +2799,6 @@
         openSidebarMobile();
       }
     }
-  }
-
-  function setupAndroidGestures() {
-    const panel = $("#chat-active");
-    if (!panel) return;
-    let startX = 0;
-    let startY = 0;
-    let tracking = false;
-
-    panel.addEventListener("touchstart", (e) => {
-      if (!document.documentElement.classList.contains("android-app")) return;
-      if (panel.classList.contains("hidden") || !state.selectedPeer) return;
-      const t = e.touches[0];
-      if (!t || t.clientX > 48) return;
-      startX = t.clientX;
-      startY = t.clientY;
-      tracking = true;
-    }, { passive: true });
-
-    panel.addEventListener("touchend", (e) => {
-      if (!tracking) return;
-      tracking = false;
-      const t = e.changedTouches[0];
-      if (!t) return;
-      const dx = t.clientX - startX;
-      const dy = Math.abs(t.clientY - startY);
-      if (dx < 72 || dy > 96) return;
-      const sidebarOpen = $("#sidebar")?.classList.contains("open");
-      if (!sidebarOpen) {
-        openSidebarMobile();
-        saveMobileSession();
-        return;
-      }
-      closeSidebarMobile();
-      saveMobileSession();
-      try {
-        window.SRLTCPAndroid?.moveToBackground();
-      } catch (_) { /* ignore */ }
-    }, { passive: true });
   }
 
   /* ── Events ── */
@@ -2936,6 +2902,7 @@
       auto_announce: $(`#${prefix}-auto-announce`)?.checked || false,
       hub_enabled: $("#set-hub-enabled")?.checked || false,
       hub_host: ($("#set-hub-host")?.value || "").trim(),
+      hub_lan_host: ($("#set-hub-lan-host")?.value || "").trim(),
       hub_port: parseInt($("#set-hub-port")?.value || "7825", 10),
       wan_expose_port: $("#set-wan-expose")?.checked || false,
       enable_serial: $("#set-enable-serial")?.checked || false,
@@ -3263,8 +3230,6 @@
       } catch (_) { /* ignore */ }
     }
   });
-
-  setupAndroidGestures();
 
   window.addEventListener("resize", () => {
     applyMobileLayout(

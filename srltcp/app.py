@@ -107,6 +107,7 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         strict_ports=settings.strict_ports,
         hub_enabled=settings.hub_enabled,
         hub_host=settings.hub_host,
+        hub_lan_host=settings.hub_lan_host,
         hub_port=settings.hub_port or DEFAULT_HUB_PORT,
         enable_tcp=not args.no_tcp,
         enable_serial=args.serial or settings.enable_serial,

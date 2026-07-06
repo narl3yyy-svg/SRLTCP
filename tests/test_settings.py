@@ -11,7 +11,7 @@ def test_settings_defaults(tmp_path: Path) -> None:
     store = SettingsStore(path=tmp_path / "settings.json")
     settings = store.load()
     assert settings.auto_announce is False
-    assert settings.version == "0.1.54"
+    assert settings.version == "0.1.55"
     assert settings.tcp_port == 7825
     assert settings.discovery_port == 7826
     assert settings.strict_ports is True
@@ -43,11 +43,13 @@ def test_hub_settings_persist(tmp_path: Path) -> None:
     settings = store.load()
     settings.hub_enabled = True
     settings.hub_host = "hub.example.com"
+    settings.hub_lan_host = "192.168.1.50"
     settings.hub_port = 7825
     store.save(settings)
     loaded = store.load()
     assert loaded.hub_enabled is True
     assert loaded.hub_host == "hub.example.com"
+    assert loaded.hub_lan_host == "192.168.1.50"
     assert loaded.hub_port == 7825
 
 
