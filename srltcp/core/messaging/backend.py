@@ -53,6 +53,7 @@ class NodeConfig:
     hub_mode: bool = False
     hub_enabled: bool = False
     hub_host: str = ""
+    hub_lan_host: str = ""
     hub_port: int = 7825
     enable_tcp: bool = True
     enable_serial: bool = False

@@ -11,13 +11,6 @@ class SRLTCPBridge(private val activity: MainActivity) {
     }
 
     @JavascriptInterface
-    fun moveToBackground() {
-        activity.runOnUiThread {
-            activity.moveTaskToBack(true)
-        }
-    }
-
-    @JavascriptInterface
     fun isInBackground(): Boolean {
         return !activity.isActivityResumed
     }

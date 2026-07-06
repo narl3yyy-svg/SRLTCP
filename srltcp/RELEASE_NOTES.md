@@ -1,5 +1,15 @@
 # SRLTCP Release Notes
 
+## v0.1.55 (2026-07-06)
+
+### Hub
+- **LAN hub dial** — optional **Hub LAN address** (tried before public host); private IPs allowed for same-network clients
+- **Announce crash fix** — hub unreachable returns a clear 503 error instead of HTTP 500 / `RuntimeError`
+
+### Android
+- **Resume last chat** — `localStorage` restores the open peer after minimize; cold start still opens sidebar first
+- **Removed** edge-swipe sidebar/minimize gestures from v0.1.54
+
 ## v0.1.54 (2026-07-06)
 
 ### Android

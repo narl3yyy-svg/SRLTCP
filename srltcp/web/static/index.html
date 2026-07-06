@@ -200,7 +200,12 @@
 <label class="field">
 <span>Hub server host</span>
 <input type="text" id="set-hub-host" placeholder="hub.example.com or 203.0.113.10" />
-<small>Public address of Bob's headless hub — port-forward this on the hub host only</small>
+<small>Public address for remote clients — port-forward TCP on the hub host</small>
+</label>
+<label class="field">
+<span>Hub LAN address (optional)</span>
+<input type="text" id="set-hub-lan-host" placeholder="192.168.1.50" />
+<small>Hub machine local IP — use when you are on the same network as the hub (tried before public host)</small>
 </label>
 <label class="field">
 <span>Hub server port</span>
