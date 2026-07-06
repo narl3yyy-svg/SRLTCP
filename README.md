@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
 
-**Current version:** 0.1.56
+**Current version:** 0.1.57
 
 ---
 
@@ -24,6 +24,8 @@
 | **Web UI** | Localhost **HTTPS-only** chat UI (default port **9876**) |
 | **Settings** | First-run wizard + persistent config (folders, retention, LAN IP) |
 | **System stats** | CPU usage & temperature in the web UI status bar |
+| **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected (v0.1.57) |
+| **Noise XX handshake** | Optional experimental handshake protocol in Settings → Network |
 | **Trusted peers** | Trust-before-message security model |
 | **Ping / RTT** | Latency in ms; serial link quality % (RTT-based estimate, not RF RSSI) |
 | **Cross-platform** | Linux, macOS, Windows CLI + Android (Chaquopy APK) |
@@ -76,7 +78,7 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 
 ### End-to-end encryption
 
-1. **Handshake** — Ephemeral X25519 keys, signed by Ed25519 identity keys
+1. **Handshake** — Default: ephemeral X25519 keys signed by Ed25519 identity keys. Optional **Noise XX** (`Noise_XX_25519_ChaChaPoly_SHA256`) in Settings → Network — both peers must use the same protocol
 2. **Session keys** — HKDF-derived AES-256 keys (separate send/recv) via HKDF-SHA256 with labels `srltcp-v2-send` / `srltcp-v2-recv`
 3. **Payloads** — AES-256-GCM with 12-byte nonces; all chat text, file offers, and metadata are encrypted (`Flags.ENCRYPTED | Flags.E2EE`)
 4. **File chunks** — Each chunk is encrypted before it leaves your node; TCP may apply zstd compression **before** encryption (flag bit). Larger 1 MiB TCP chunks improve throughput only — they do **not** weaken encryption.
@@ -87,7 +89,7 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 |------|--------------------------|------------|
 | **TCP / WAN (port 7825)** | Framed binary protocol after handshake | Yes — payloads are opaque AES-GCM blobs |
 | **USB Serial** | Same framed protocol over serial | Yes — identical E2EE session |
-| **UDP discovery (7826)** | Peer announces (hash, name, endpoints) | No — discovery metadata is plaintext on LAN |
+| **UDP discovery (7826)** | Signed peer announces (hash, name, endpoints, Ed25519 signature) | Metadata is plaintext on LAN; signatures prevent spoofing |
 | **Web UI (9876)** | Browser ↔ local node over HTTPS | Localhost TLS only; chat/file APIs proxy local data |
 | **Hub (optional 7825)** | `RELAY_ENVELOPE` routing tokens + opaque blob | Hub sees hash routing tokens only, not content |
 
@@ -106,7 +108,7 @@ The hub **never receives session keys** and cannot decrypt message or file conte
 
 ### What is not encrypted
 
-- LAN/UDP discovery announces (names, IPs, ports)
+- LAN/UDP discovery announces (names, IPs, ports — signed but not encrypted)
 - Hub presence (who is online on a hub — names and hash IDs)
 - Hub routing metadata (identity hash tokens, timing, approximate sizes)
 - Connection metadata (who talks to whom, when)
@@ -218,7 +220,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.1.56.apk`
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.1.57.apk`
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -226,7 +228,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.1.56.apk`
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.1.56.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.1.57.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -494,7 +496,7 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 
 ## Roadmap
 
-**Done (v0.1.50–0.1.56)**
+**Done (v0.1.50–0.1.57)**
 
 - [x] Headless hub server (E2EE tunneling, no port-forward for clients)
 - [x] Android Gradle + Chaquopy rebuild (local `./gradlew` builds)
@@ -510,6 +512,8 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [x] Android background notifications + session restore (v0.1.54)
 - [x] Hub LAN address for same-network clients (v0.1.55)
 - [x] Android stack navigation — sidebar home, chat overlay, back gesture (v0.1.56)
+- [x] Signed LAN announces — Ed25519 signatures on UDP discovery; reject unsigned/spoofed peers (v0.1.57)
+- [x] Noise XX handshake option — Settings → Network (experimental; both peers must match) (v0.1.57)
 
 **Planned**
 
@@ -517,7 +521,7 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [ ] Android USB serial Chaquopy shim (full OTG support)
 - [ ] Folder sync (bidirectional, incremental)
 - [ ] Contact book with pinned peer hashes
-- [ ] Noise protocol framework option for handshake
+- [ ] Noise handshake — additional patterns beyond XX, auto-negotiation
 - [ ] QUIC transport backend
 - [ ] Bandwidth limiting and QoS per transfer
 - [ ] Signed APK releases (release keystore)

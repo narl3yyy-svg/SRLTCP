@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "srltcp"
-version = "0.1.56"
+version = "0.1.57"
 description = "Fast, secure peer-to-peer communication and file transfer over Serial (USB) and TCP/IP"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
@@ -28,6 +28,7 @@ dependencies = [
     "cryptography>=42.0",
     "pyserial>=3.5",
     "zstandard>=0.22",
+    "noiseprotocol>=0.3.1",
 ]
 
 [project.optional-dependencies]

@@ -63,6 +63,7 @@ class NodeConfig:
     lan_ip: str = ""
     incoming_dir: str = ""
     message_retention_hours: int = 168
+    handshake_protocol: str = "identity"
 
 
 class MessagingBackend(
@@ -415,6 +416,8 @@ class MessagingBackend(
                 await self._handle_handshake(peer.peer_id, body, initiator=False)
             elif msg_type == MessageType.HANDSHAKE_ACK:
                 await self._handle_handshake_ack(peer.peer_id, body)
+            elif msg_type == MessageType.HANDSHAKE_FINISH:
+                await self._handle_handshake_finish(peer.peer_id, body)
             elif msg_type == MessageType.PING:
                 await self._reply_pong_with_rtt(peer, body)
             elif msg_type == MessageType.PONG:

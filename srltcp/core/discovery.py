@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from srltcp.core.protocol.messages import decode_payload
+from srltcp.core.protocol.signed import verify_signed_payload
+from srltcp.utils.logging import get_logger
+
+log = get_logger(__name__)
 
 
 @dataclass
@@ -56,6 +60,10 @@ class DiscoveryRegistry:
         ann_type = data.get("type", "")
         if ann_type not in ("announce", "hub_presence", "hub_register"):
             return None, False
+        if ann_type == "announce":
+            if not verify_signed_payload(data):
+                log.debug("Rejected unsigned or invalid announce signature")
+                return None, False
         hash_id = data.get("hash_id", "")
         if not hash_id:
             return None, False

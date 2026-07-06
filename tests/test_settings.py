@@ -11,7 +11,7 @@ def test_settings_defaults(tmp_path: Path) -> None:
     store = SettingsStore(path=tmp_path / "settings.json")
     settings = store.load()
     assert settings.auto_announce is False
-    assert settings.version == "0.1.56"
+    assert settings.version == "0.1.57"
     assert settings.tcp_port == 7825
     assert settings.discovery_port == 7826
     assert settings.strict_ports is True
@@ -51,6 +51,15 @@ def test_hub_settings_persist(tmp_path: Path) -> None:
     assert loaded.hub_host == "hub.example.com"
     assert loaded.hub_lan_host == "192.168.1.50"
     assert loaded.hub_port == 7825
+
+
+def test_handshake_protocol_persist(tmp_path: Path) -> None:
+    store = SettingsStore(path=tmp_path / "settings.json")
+    settings = store.load()
+    settings.handshake_protocol = "noise_xx"
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.handshake_protocol == "noise_xx"
 
 
 def test_wan_expose_port_persist(tmp_path: Path) -> None:

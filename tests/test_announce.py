@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from srltcp.core.identity import Identity
 from srltcp.core.messaging.announce import AnnounceError, AnnounceMixin
 
 
@@ -22,12 +23,7 @@ class _AnnounceBackend(AnnounceMixin):
         self.serial_transport.peers = MagicMock(
             return_value=[MagicMock(peer_id="serial-peer-1")]
         )
-        identity = MagicMock()
-        identity.hash_id = "a" * 32
-        identity.name = "node-a"
-        identity.transport = "tcp"
-        identity.public_bytes.return_value = b"\x01" * 32
-        self.identities = {"tcp": identity}
+        self.identities = {"tcp": Identity.generate("node-a", "tcp")}
         self.config = MagicMock(tcp_port=7825, lan_ip="10.0.0.5")
         self.discovery = MagicMock()
         self._on_peer_discovered = None
@@ -45,12 +41,7 @@ async def test_announce_tcp_broadcasts() -> None:
 @pytest.mark.asyncio
 async def test_announce_serial_sends_framed_packet() -> None:
     backend = _AnnounceBackend()
-    serial_identity = MagicMock()
-    serial_identity.hash_id = "b" * 32
-    serial_identity.name = "node-b"
-    serial_identity.transport = "serial"
-    serial_identity.public_bytes.return_value = b"\x02" * 32
-    backend.identities["serial"] = serial_identity
+    backend.identities["serial"] = Identity.generate("node-b", "serial")
     announced = await backend.announce("serial")
     assert announced == ["serial"]
     assert backend.serial_transport.broadcast.await_count == 0
@@ -68,12 +59,7 @@ async def test_announce_tcp_requires_discovery_socket() -> None:
 @pytest.mark.asyncio
 async def test_announce_serial_requires_transport() -> None:
     backend = _AnnounceBackend()
-    serial_identity = MagicMock()
-    serial_identity.hash_id = "b" * 32
-    serial_identity.name = "node-b"
-    serial_identity.transport = "serial"
-    serial_identity.public_bytes.return_value = b"\x02" * 32
-    backend.identities["serial"] = serial_identity
+    backend.identities["serial"] = Identity.generate("node-b", "serial")
     backend.serial_transport = None
     backend.config.enable_serial = False
     with pytest.raises(AnnounceError, match="Serial is disabled"):

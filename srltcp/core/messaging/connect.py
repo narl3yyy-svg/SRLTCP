@@ -10,6 +10,10 @@ from srltcp.core.messaging.hub import hub_synthetic_peer_id
 from srltcp.core.messaging.links import PeerLink
 from srltcp.core.protocol.crypto import KeyExchange, load_public_key
 from srltcp.core.protocol.messages import MessageType, build_header, decode_payload, encode_payload
+from srltcp.core.protocol.noise_handshake import (
+    HANDSHAKE_PROTOCOL,
+    NoiseHandshakeSession,
+)
 from srltcp.core.trusted import TrustedPeer
 from srltcp.utils.logging import get_logger
 from srltcp.utils.wan import resolve_wan_endpoint, validate_wan_port
@@ -24,11 +28,31 @@ class ConnectMixin:
     """Establish encrypted sessions with peers."""
 
     _pending_handshakes: dict[str, KeyExchange]
+    _pending_noise_handshakes: dict[str, NoiseHandshakeSession]
 
     def _init_connect(self: MessagingBackend) -> None:
         self._pending_handshakes = {}
+        self._pending_noise_handshakes = {}
         self._connect_locks: dict[str, asyncio.Lock] = {}
         self._last_wan_dial: dict[str, float] = {}
+
+    def _handshake_protocol(self: MessagingBackend) -> str:
+        protocol = str(getattr(self.config, "handshake_protocol", "identity")).strip()
+        return protocol if protocol in ("identity", "noise_xx") else "identity"
+
+    def _handshake_protocol_from_body(self: MessagingBackend, data: dict[str, object]) -> str:
+        protocol = str(data.get("protocol", "identity")).strip()
+        return protocol if protocol in ("identity", "noise_xx") else "identity"
+
+    def _handshake_protocol_matches(self: MessagingBackend, remote_protocol: str) -> bool:
+        if self._handshake_protocol() != remote_protocol:
+            log.warning(
+                "Handshake protocol mismatch (local=%s, remote=%s)",
+                self._handshake_protocol(),
+                remote_protocol,
+            )
+            return False
+        return True
 
     def _resolve_tcp_endpoint(
         self: MessagingBackend,
@@ -112,6 +136,7 @@ class ConnectMixin:
         if not link:
             return
         self._pending_handshakes.pop(hash_id, None)
+        self._pending_noise_handshakes.pop(hash_id, None)
         peer_id = link.transport_peer_id
         transport = link.transport
         self.remove_link(hash_id)
@@ -338,11 +363,15 @@ class ConnectMixin:
         link = self.get_link(hash_id)
         if not link:
             return
+        if self._handshake_protocol() == HANDSHAKE_PROTOCOL:
+            await self._initiate_noise_handshake(hash_id)
+            return
         identity = self._identity_for_transport(link.transport)
         kx = KeyExchange(identity.private_key)
         self._pending_handshakes[hash_id] = kx
         body = encode_payload(
             {
+                "protocol": "identity",
                 "hash_id": identity.hash_id,
                 "name": identity.name,
                 "public_key": identity.public_bytes().hex(),
@@ -352,6 +381,51 @@ class ConnectMixin:
         )
         packet = build_header(MessageType.HANDSHAKE, body=body)
         await self._send_raw(link.transport_peer_id, link.transport, packet)
+
+    async def _initiate_noise_handshake(self: MessagingBackend, hash_id: str) -> None:
+        link = self.get_link(hash_id)
+        if not link:
+            return
+        identity = self._identity_for_transport(link.transport)
+        session = NoiseHandshakeSession.create(identity.private_key, initiator=True)
+        self._pending_noise_handshakes[hash_id] = session
+        noise_msg = session.write_message()
+        body = encode_payload(
+            {
+                "protocol": HANDSHAKE_PROTOCOL,
+                "step": 1,
+                "hash_id": identity.hash_id,
+                "name": identity.name,
+                "public_key": identity.public_bytes().hex(),
+                "noise": noise_msg.hex(),
+            }
+        )
+        packet = build_header(MessageType.HANDSHAKE, body=body)
+        await self._send_raw(link.transport_peer_id, link.transport, packet)
+
+    async def _send_noise_finish(
+        self: MessagingBackend, hash_id: str, session: NoiseHandshakeSession
+    ) -> None:
+        link = self.get_link(hash_id)
+        if not link:
+            return
+        identity = self._identity_for_transport(link.transport)
+        noise_msg = session.write_message()
+        body = encode_payload(
+            {
+                "protocol": HANDSHAKE_PROTOCOL,
+                "step": 3,
+                "hash_id": identity.hash_id,
+                "name": identity.name,
+                "public_key": identity.public_bytes().hex(),
+                "noise": noise_msg.hex(),
+            }
+        )
+        packet = build_header(MessageType.HANDSHAKE_FINISH, body=body)
+        await self._send_raw(link.transport_peer_id, link.transport, packet)
+        keys = session.session_keys(initiator=True)
+        self.set_link_keys(hash_id, keys)
+        await self._complete_handshake(hash_id, link.peer_name)
 
     async def _complete_handshake(
         self: MessagingBackend,
@@ -386,6 +460,14 @@ class ConnectMixin:
         self: MessagingBackend, peer_id: str, body: bytes, *, initiator: bool
     ) -> None:
         data = decode_payload(body)
+        protocol = self._handshake_protocol_from_body(data)
+        if protocol == HANDSHAKE_PROTOCOL:
+            if not self._handshake_protocol_matches(protocol):
+                return
+            await self._handle_noise_handshake(peer_id, data)
+            return
+        if not self._handshake_protocol_matches(protocol):
+            return
         remote_hash = data["hash_id"]
         remote_pub = bytes.fromhex(data["public_key"])
         remote_eph = bytes.fromhex(data["ephemeral"])
@@ -444,6 +526,7 @@ class ConnectMixin:
             )
             ack_body = encode_payload(
                 {
+                    "protocol": "identity",
                     "hash_id": identity.hash_id,
                     "name": identity.name,
                     "public_key": identity.public_bytes().hex(),
@@ -457,8 +540,80 @@ class ConnectMixin:
         self.set_link_keys(remote_hash, keys)
         await self._complete_handshake(remote_hash, remote_name)
 
+    async def _handle_noise_handshake(
+        self: MessagingBackend, peer_id: str, data: dict[str, object]
+    ) -> None:
+        remote_hash = str(data["hash_id"])
+        remote_pub = bytes.fromhex(str(data["public_key"]))
+        remote_name = str(data.get("name", ""))
+        noise_hex = str(data.get("noise", ""))
+        if not noise_hex:
+            log.warning("Noise handshake missing payload from %s", peer_id[:8])
+            return
+
+        link = self.get_link_by_peer_id(peer_id)
+        existing = self.get_link(remote_hash)
+        if existing and existing.handshake_complete and existing.transport_peer_id != peer_id:
+            if self.tcp_transport:
+                await self.tcp_transport.disconnect(peer_id)
+            return
+        if not link:
+            transport = existing.transport if existing else self._infer_transport(peer_id)
+            link = PeerLink(
+                hash_id=remote_hash,
+                transport_peer_id=peer_id,
+                transport=transport,
+                address=existing.address if existing else "",
+                public_key=remote_pub,
+                peer_name=remote_name,
+            )
+            self.register_link(link)
+        else:
+            link.hash_id = remote_hash
+            link.public_key = remote_pub
+            link.peer_name = remote_name
+            self._links[remote_hash] = link
+            self._peer_id_to_hash[peer_id] = remote_hash
+
+        identity = self._identity_for_transport(link.transport)
+        session = self._pending_noise_handshakes.get(remote_hash)
+        if not session:
+            session = NoiseHandshakeSession.create(identity.private_key, initiator=False)
+            self._pending_noise_handshakes[remote_hash] = session
+        session.read_message(bytes.fromhex(noise_hex))
+        if session.step == 1:
+            reply = session.write_message()
+            ack_body = encode_payload(
+                {
+                    "protocol": HANDSHAKE_PROTOCOL,
+                    "step": 2,
+                    "hash_id": identity.hash_id,
+                    "name": identity.name,
+                    "public_key": identity.public_bytes().hex(),
+                    "noise": reply.hex(),
+                }
+            )
+            ack = build_header(MessageType.HANDSHAKE_ACK, body=ack_body)
+            await self._send_raw(peer_id, link.transport, ack)
+
     async def _handle_handshake_ack(self: MessagingBackend, peer_id: str, body: bytes) -> None:
         data = decode_payload(body)
+        if self._handshake_protocol_from_body(data) == HANDSHAKE_PROTOCOL:
+            if not self._handshake_protocol_matches(HANDSHAKE_PROTOCOL):
+                return
+            remote_hash = str(data["hash_id"])
+            remote_name = str(data.get("name", ""))
+            noise_hex = str(data.get("noise", ""))
+            session = self._pending_noise_handshakes.get(remote_hash)
+            link = self.get_link(remote_hash) or self.get_link_by_peer_id(peer_id)
+            if not session or not link or not noise_hex:
+                log.warning("Unexpected noise handshake ack from %s", peer_id[:8])
+                return
+            session.read_message(bytes.fromhex(noise_hex))
+            link.peer_name = remote_name or link.peer_name
+            await self._send_noise_finish(remote_hash, session)
+            self._pending_noise_handshakes.pop(remote_hash, None)
+            return
         remote_hash = data["hash_id"]
         remote_pub = bytes.fromhex(data["public_key"])
         remote_eph = bytes.fromhex(data["ephemeral"])
@@ -486,4 +641,27 @@ class ConnectMixin:
         link = self.get_link(remote_hash)
         if link:
             link.peer_name = remote_name
+        await self._complete_handshake(remote_hash, remote_name, from_ack=True)
+
+    async def _handle_handshake_finish(self: MessagingBackend, peer_id: str, body: bytes) -> None:
+        data = decode_payload(body)
+        if self._handshake_protocol_from_body(data) != HANDSHAKE_PROTOCOL:
+            log.debug("Ignoring non-noise handshake finish from %s", peer_id[:8])
+            return
+        remote_hash = str(data["hash_id"])
+        remote_name = str(data.get("name", ""))
+        noise_hex = str(data.get("noise", ""))
+        session = self._pending_noise_handshakes.get(remote_hash)
+        link = self.get_link(remote_hash) or self.get_link_by_peer_id(peer_id)
+        if not session or not link or not noise_hex:
+            log.warning("Unexpected noise handshake finish from %s", peer_id[:8])
+            return
+        session.read_message(bytes.fromhex(noise_hex))
+        if not session.complete:
+            log.warning("Incomplete noise handshake from %s", peer_id[:8])
+            return
+        keys = session.session_keys(initiator=False)
+        self.set_link_keys(remote_hash, keys)
+        link.peer_name = remote_name or link.peer_name
+        self._pending_noise_handshakes.pop(remote_hash, None)
         await self._complete_handshake(remote_hash, remote_name, from_ack=True)

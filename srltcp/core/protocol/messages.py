@@ -14,6 +14,7 @@ HEADER_SIZE = 10
 class MessageType(IntEnum):
     HANDSHAKE = 0x01
     HANDSHAKE_ACK = 0x02
+    HANDSHAKE_FINISH = 0x05
     PING = 0x03
     PONG = 0x04
     ANNOUNCE = 0x10

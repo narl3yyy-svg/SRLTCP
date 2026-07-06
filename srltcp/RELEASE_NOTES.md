@@ -1,5 +1,14 @@
 # SRLTCP Release Notes
 
+## v0.1.57 (2026-07-06)
+
+### Security
+- **Signed LAN announces** — UDP discovery (7826) announces are Ed25519-signed; receivers verify signature + identity binding before trusting a peer; unsigned/spoofed announces are rejected
+- **Noise XX handshake (experimental)** — optional `Noise_XX_25519_ChaChaPoly_SHA256` in Settings → Network; both peers must use the same protocol
+
+### Docs
+- README and SECURITY.md updated for signed discovery and Noise handshake option
+
 ## v0.1.56 (2026-07-06)
 
 ### Android
