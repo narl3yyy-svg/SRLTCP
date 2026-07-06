@@ -41,6 +41,7 @@
     pageUnloading: false,
     loadingPeers: false,
     loadingTransfers: false,
+    androidView: "sidebar",
 
     wanModalTarget: null,
     shareMode: "browse",
@@ -1097,6 +1098,9 @@
       toast("Message failed — reconnecting…", "error");
       await connectPeer(state.selectedPeer, true);
     }
+    if (isAndroidApp() && input) {
+      requestAnimationFrame(() => input.focus());
+    }
   }
 
   async function sendFileToPeer(file, hashId, peerName) {
@@ -2036,7 +2040,11 @@
     const sendBtn = $("#send-btn");
     if (msgInput) msgInput.disabled = false;
     if (sendBtn) sendBtn.disabled = false;
-    msgInput?.focus();
+    if (isAndroidApp()) {
+      setAndroidView("chat");
+    } else {
+      msgInput?.focus();
+    }
 
     renderContacts();
     loadMessages();
@@ -2343,7 +2351,9 @@
     });
     el.querySelectorAll("[data-media-open]").forEach((btn) => {
       btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
         ev.stopPropagation();
+        blurComposer();
         openMediaLightbox(
           btn.dataset.mediaOpen,
           btn.dataset.mediaKind,
@@ -2428,6 +2438,7 @@
   }
 
   function openMediaLightbox(url, kind, filename) {
+    blurComposer();
     const modal = $("#media-lightbox");
     const body = $("#media-lightbox-body");
     const dl = $("#media-lightbox-download");
@@ -2691,9 +2702,102 @@
     });
   }
 
+  const MOBILE_SESSION_KEY = "srltcp_mobile_session";
+
+  function isMobileLayout() {
+    return document.documentElement.classList.contains("mobile-layout");
+  }
+
+  function isAndroidApp() {
+    return document.documentElement.classList.contains("android-app");
+  }
+
+  function blurComposer() {
+    const input = $("#msg-input");
+    if (input && typeof input.blur === "function") input.blur();
+    const active = document.activeElement;
+    if (active && active !== document.body && typeof active.blur === "function") {
+      active.blur();
+    }
+  }
+
+  function mobileSessionStorage() {
+    return isAndroidApp() ? localStorage : sessionStorage;
+  }
+
+  function setAndroidView(view, { skipHistory = false } = {}) {
+    if (!isAndroidApp()) return;
+    const prev = state.androidView;
+    state.androidView = view;
+    const sidebar = $("#sidebar");
+    const chat = $("#chat-panel");
+    if (view === "sidebar") {
+      sidebar?.classList.remove("android-nav-hidden");
+      chat?.classList.remove("android-nav-visible");
+    } else if (view === "chat") {
+      sidebar?.classList.add("android-nav-hidden");
+      chat?.classList.add("android-nav-visible");
+    }
+    if (!skipHistory && prev !== view && view !== "settings") {
+      try {
+        history.pushState({ srltcpAndroid: view }, "");
+      } catch (_) { /* ignore */ }
+    }
+    saveMobileSession();
+  }
+
+  function androidNavigateBack() {
+    if (!isAndroidApp()) return false;
+    if ($("#media-lightbox")?.classList.contains("open")) {
+      closeMediaLightbox();
+      return true;
+    }
+    if ($("#settings-window") && !$("#settings-window").classList.contains("hidden")) {
+      closeSettings();
+      return true;
+    }
+    if (state.androidView === "chat") {
+      setAndroidView("sidebar", { skipHistory: true });
+      return true;
+    }
+    return false;
+  }
+
+  window.androidNavigateBack = androidNavigateBack;
+
+  function saveMobileSession() {
+    if (!isAndroidApp()) return;
+    try {
+      mobileSessionStorage().setItem(
+        MOBILE_SESSION_KEY,
+        JSON.stringify({
+          selectedPeer: state.selectedPeer,
+          selectedName: state.selectedName,
+          androidView: state.androidView,
+        })
+      );
+    } catch (_) { /* ignore */ }
+  }
+
+  function peekMobileSession() {
+    if (!isAndroidApp()) return null;
+    try {
+      const raw = mobileSessionStorage().getItem(MOBILE_SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   function openSettings() {
     const panel = $("#settings-window");
     if (!panel) return;
+    if (isAndroidApp()) {
+      blurComposer();
+      try {
+        history.pushState({ srltcpAndroid: "settings" }, "");
+      } catch (_) { /* ignore */ }
+    }
     panel.classList.remove("hidden");
     panel.setAttribute("aria-hidden", "false");
     state.settingsFormDirty = true;
@@ -2708,40 +2812,8 @@
     panel.classList.add("hidden");
     panel.setAttribute("aria-hidden", "true");
     state.settingsFormDirty = false;
-  }
-
-  const MOBILE_SESSION_KEY = "srltcp_mobile_session";
-
-  function isMobileLayout() {
-    return document.documentElement.classList.contains("mobile-layout");
-  }
-
-  function mobileSessionStorage() {
-    return document.documentElement.classList.contains("android-app")
-      ? localStorage
-      : sessionStorage;
-  }
-
-  function saveMobileSession() {
-    if (!document.documentElement.classList.contains("android-app")) return;
-    try {
-      mobileSessionStorage().setItem(
-        MOBILE_SESSION_KEY,
-        JSON.stringify({
-          selectedPeer: state.selectedPeer,
-          selectedName: state.selectedName,
-        })
-      );
-    } catch (_) { /* ignore */ }
-  }
-
-  function peekMobileSession() {
-    if (!document.documentElement.classList.contains("android-app")) return null;
-    try {
-      const raw = mobileSessionStorage().getItem(MOBILE_SESSION_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch (_) {
-      return null;
+    if (isAndroidApp()) {
+      setAndroidView("sidebar", { skipHistory: true });
     }
   }
 
@@ -2753,7 +2825,11 @@
       || state.trusted.find((p) => p.hash_id === saved.selectedPeer);
     const name = saved.selectedName || peer?.name || saved.selectedPeer.slice(0, 8);
     selectPeer(saved.selectedPeer, name);
-    closeSidebarMobile();
+    if (isAndroidApp()) {
+      setAndroidView("chat", { skipHistory: true });
+    } else {
+      closeSidebarMobile();
+    }
   }
 
   function openSidebarMobile() {
@@ -2793,10 +2869,10 @@
     if (android) root.classList.add("android-app");
     if (android) {
       const saved = peekMobileSession();
-      if (saved?.selectedPeer) {
+      if (saved?.selectedPeer && saved.androidView === "chat") {
         state._restorePeer = saved;
-      } else if (!state.selectedPeer) {
-        openSidebarMobile();
+      } else {
+        setAndroidView("sidebar", { skipHistory: true });
       }
     }
   }
@@ -2812,11 +2888,15 @@
   $("#btn-announce-serial")?.addEventListener("click", () => announceTransport("serial"));
 
   function openSettingsFromMobile() {
+    if (isAndroidApp()) {
+      openSettings();
+      return;
+    }
     closeSidebarMobile();
     openSettings();
   }
 
-  $("#btn-settings")?.addEventListener("click", openSettings);
+  $("#btn-settings")?.addEventListener("click", openSettingsFromMobile);
   $("#btn-settings-top")?.addEventListener("click", openSettingsFromMobile);
   $("#btn-settings-chat")?.addEventListener("click", openSettingsFromMobile);
   $("#btn-close-settings")?.addEventListener("click", closeSettings);
@@ -2828,6 +2908,11 @@
   });
   $("#set-clock-source")?.addEventListener("change", toggleNtpField);
   $("#btn-back")?.addEventListener("click", () => {
+    if (isAndroidApp()) {
+      setAndroidView("sidebar");
+      saveMobileSession();
+      return;
+    }
     $("#chat-active")?.classList.add("hidden");
     $("#chat-empty")?.classList.remove("hidden");
     openSidebarMobile();
@@ -2842,7 +2927,16 @@
     renderContacts();
   }, 200));
 
-  $("#send-btn")?.addEventListener("click", sendMessage);
+  $("#send-btn")?.addEventListener("mousedown", (e) => {
+    if (isAndroidApp()) e.preventDefault();
+  });
+  $("#send-btn")?.addEventListener("touchstart", (e) => {
+    if (isAndroidApp()) e.preventDefault();
+  }, { passive: false });
+  $("#send-btn")?.addEventListener("click", (e) => {
+    if (isAndroidApp()) e.preventDefault();
+    sendMessage();
+  });
 
   $("#msg-input")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -3219,6 +3313,10 @@
   }
 
   window.applyMobileLayout = applyMobileLayout;
+
+  window.addEventListener("popstate", () => {
+    if (isAndroidApp()) androidNavigateBack();
+  });
 
   document.addEventListener("visibilitychange", () => {
     saveMobileSession();

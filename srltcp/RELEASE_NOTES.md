@@ -1,5 +1,16 @@
 # SRLTCP Release Notes
 
+## v0.1.56 (2026-07-06)
+
+### Android
+- **Stack navigation** — sidebar is the home screen; chat is a full-screen layer; settings only from sidebar
+- **Back gesture** — returns from settings or chat to the sidebar (peer stays selected)
+- **Media** — images/videos open fullscreen without raising the keyboard
+- **Send** — keyboard stays open after tapping Send
+
+### Docs
+- README: removed data flow diagram and wire protocol sections
+
 ## v0.1.55 (2026-07-06)
 
 ### Hub

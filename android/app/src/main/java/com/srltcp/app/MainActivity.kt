@@ -21,6 +21,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.widget.FrameLayout
 import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -191,6 +192,31 @@ class MainActivity : AppCompatActivity() {
                 statusView?.visibility = android.view.View.GONE
             }
         }
+
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    val wv = webView ?: run {
+                        isEnabled = false
+                        onBackPressedDispatcher.onBackPressed()
+                        isEnabled = true
+                        return
+                    }
+                    wv.evaluateJavascript(
+                        "(function(){return window.androidNavigateBack" +
+                            "?!!window.androidNavigateBack():false;})()"
+                    ) { result ->
+                        val handled = result == "true"
+                        if (!handled) {
+                            isEnabled = false
+                            onBackPressedDispatcher.onBackPressed()
+                            isEnabled = true
+                        }
+                    }
+                }
+            }
+        )
 
         requestNotificationIfNeeded()
         requestStorageAccessThenStart()

@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
 
-**Current version:** 0.1.55
+**Current version:** 0.1.56
 
 ---
 
@@ -65,69 +65,6 @@ tests/                      # pytest suite
 scripts/                    # Build helpers (check.sh, build-android.sh, sync-android-python.sh)
 
 ```
-
-### Data flow diagram
-
-```mermaid
-flowchart TB
-    subgraph Node["SRLTCP Node"]
-        UI[Web UI HTTPS :9876]
-        MB[MessagingBackend]
-        ID[Identity Store]
-        UI <-->|WebSocket| MB
-        MB --> ID
-    end
-
-    subgraph Transports
-        TCP[TCP :7825]
-        SER[Serial USB]
-        UDP[UDP Discovery :7826]
-    end
-
-    subgraph Crypto["E2EE Layer"]
-        HS[Ed25519 + X25519 Handshake]
-        AES[AES-GCM Payload Encryption]
-        HS --> AES
-    end
-
-    MB <--> TCP
-    MB <--> SER
-    TCP --> UDP
-
-    subgraph Hub["Optional Headless Hub :7825"]
-        PR[Presence Registry]
-        FWD[Opaque Envelope Forward]
-        PR --> FWD
-    end
-
-    MB -.->|outbound dial| Hub
-    MB -.->|RELAY_ENVELOPE| FWD
-    FWD -.->|cannot decrypt| MB
-```
-
-### Wire protocol
-
-Every transport uses the same framed binary protocol:
-
-```
-┌──────────┬──────────┬──────────┬─────────────────┐
-│ SRL\x01  │ length   │ CRC32    │ payload         │
-│ (magic)  │ (4 BE)   │ (4 BE)   │ (variable)      │
-└──────────┴──────────┴──────────┴─────────────────┘
-```
-
-Payload structure:
-
-```
-┌──────────┬───────┬───────────┬─────┬──────────────┐
-│ msg_type │ flags │ stream_id │ seq │ body         │
-│ (1 byte) │ (1)   │ (4 BE)    │ (4) │ (JSON/binary)│
-└──────────┴───────┴───────────┴─────┴──────────────┘
-```
-
-File chunks use a binary body: `transfer_id (16) + offset (8) + length (4) + data`.
-
----
 
 ## Security model
 
@@ -281,7 +218,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.1.55.apk`
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.1.56.apk`
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -289,7 +226,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.1.55.apk`
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.1.55.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.1.56.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -557,7 +494,7 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 
 ## Roadmap
 
-**Done (v0.1.50–0.1.55)**
+**Done (v0.1.50–0.1.56)**
 
 - [x] Headless hub server (E2EE tunneling, no port-forward for clients)
 - [x] Android Gradle + Chaquopy rebuild (local `./gradlew` builds)
@@ -572,6 +509,7 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [x] No connection-refused flash when swiping app closed (v0.1.53)
 - [x] Android background notifications + session restore (v0.1.54)
 - [x] Hub LAN address for same-network clients (v0.1.55)
+- [x] Android stack navigation — sidebar home, chat overlay, back gesture (v0.1.56)
 
 **Planned**
 
