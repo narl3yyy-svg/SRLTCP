@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
 
-**Current version:** 0.1.52
+**Current version:** 0.1.53
 
 ---
 
@@ -281,7 +281,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.1.52-debug.apk`
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.1.53.apk`
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -289,7 +289,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.1.52-debug.apk`
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.1.52-debug.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.1.53.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -557,17 +557,19 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 
 ## Roadmap
 
-**Done (v0.1.50–0.1.52)**
+**Done (v0.1.50–0.1.53)**
 
 - [x] Headless hub server (E2EE tunneling, no port-forward for clients)
 - [x] Android Gradle + Chaquopy rebuild (local `./gradlew` builds)
-- [x] Android mobile UI (slide-out sidebar, full-screen settings)
+- [x] Android mobile UI (slide-out sidebar, full-screen settings) (v0.1.51)
 - [x] Downloads folder defaults for incoming/shared files on Android
 - [x] Local APK releases (no GitHub Actions CI)
 - [x] Android file attach via WebView file picker (v0.1.52)
 - [x] Settings folder delete on Android (v0.1.52)
-- [x] Android status bar layout fix (chat no longer clipped) (v0.1.52)
+- [x] Android chat layout above status bar (v0.1.51; padding tuned v0.1.53)
 - [x] Android status bar shows temperature only (CPU hidden) (v0.1.52)
+- [x] APK named `SRLTCP-X.Y.Z.apk` (no `-debug` suffix) (v0.1.53)
+- [x] No connection-refused flash when swiping app closed (v0.1.53)
 
 **Planned**
 

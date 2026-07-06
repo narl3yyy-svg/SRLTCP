@@ -33,7 +33,7 @@ fi
 
 ./gradlew assembleDebug renameDebugApk
 
-APK="$ROOT/android/app/build/outputs/apk/debug/SRLTCP-"*"-debug.apk"
+APK="$ROOT/android/app/build/outputs/apk/debug/SRLTCP-"*.apk"
 echo ""
 echo "Build complete:"
 ls -lh $APK 2>/dev/null || ls -lh "$ROOT/android/app/build/outputs/apk/debug/"*.apk

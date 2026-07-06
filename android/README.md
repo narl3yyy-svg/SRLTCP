@@ -41,7 +41,7 @@ bash scripts/build-android.sh
 Output:
 
 ```
-android/app/build/outputs/apk/debug/SRLTCP-0.1.52-debug.apk
+android/app/build/outputs/apk/debug/SRLTCP-0.1.53.apk
 ```
 
 ### Manual steps
@@ -63,7 +63,7 @@ cd android
 Enable **USB debugging**, connect the device, then:
 
 ```bash
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-*-debug.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-*.apk
 ```
 
 ## Build with Android Studio
