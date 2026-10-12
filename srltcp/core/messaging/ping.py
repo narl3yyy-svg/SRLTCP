@@ -10,6 +10,8 @@ from srltcp.core.messaging.constants import PING_INTERVAL
 from srltcp.core.protocol.messages import MessageType, build_header, decode_payload, encode_payload
 from srltcp.utils.logging import get_logger
 
+LINK_DEAD_AFTER = 3.5 * PING_INTERVAL  # ~50 s without any frame or pong
+
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
 
@@ -46,6 +48,13 @@ class PingMixin:
                 # minutes, then every ~2 minutes.
                 if tick % (2 if tick < 20 else 8) == 0:
                     self.retry_outbox_connections()
+                if tick and tick % 3 == 0:
+                    try:
+                        await self.reap_dead_links(LINK_DEAD_AFTER)
+                    except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                        log.debug("Link reaper failed: %s", exc)
+                if tick and tick % 8 == 0:
+                    self.connect_known_contacts()  # contacts come back online by themselves
                 tick += 1
                 await asyncio.sleep(PING_INTERVAL)
 
@@ -82,6 +91,7 @@ class PingMixin:
         link = self.get_link_by_peer_id(peer_id)
         if not link:
             return
+        link.last_seen = time.monotonic()
         link.rtt_ms = rtt_ms
         self.discovery.update_metrics(link.hash_id, rtt_ms=rtt_ms)
         if link.transport == "serial" and self.serial_transport:

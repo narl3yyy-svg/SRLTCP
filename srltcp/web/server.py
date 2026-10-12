@@ -11,6 +11,7 @@ from srltcp.core.node import SRLTCPNode
 from srltcp.routes.api import register_api_routes
 from srltcp.routes.share import register_share_routes
 from srltcp.routes.ws import broadcast_event, register_ws_routes
+from srltcp.utils.android_notify import post_android_notification
 from srltcp.utils.logging import get_logger
 from srltcp.utils.ports import start_web_site
 from srltcp.utils.tls import create_ssl_context
@@ -57,8 +58,23 @@ def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application
     register_share_routes(app, node)
     register_ws_routes(app, node)
 
+    def notify_if_no_ui(title: str, body: str, tag: str) -> None:
+        # With a UI connected, the page itself notifies (and knows if it is visible).
+        if not node._ws_clients:
+            post_android_notification(title, body, tag)
+
+    def contact_name(hash_id: str) -> str:
+        peer = node.backend.trusted.get(hash_id)
+        return peer.name if peer else hash_id[:8]
+
     async def on_message(data: dict) -> None:
         await broadcast_event(node, "message", data)
+        own = {i.hash_id for i in node.backend.identities.values()}
+        sender = str(data.get("sender_hash", ""))
+        if sender and sender not in own and data.get("status") == "delivered":
+            kind = data.get("msg_type", "text")
+            text = str(data.get("text", ""))[:200] if kind == "text" else f"Sent a {kind}"
+            notify_if_no_ui(contact_name(sender), text, f"msg-{sender}")
 
     async def on_peer(data: dict) -> None:
         await broadcast_event(node, "peer_discovered", data)
@@ -100,6 +116,17 @@ def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application
 
     async def on_event(data: dict) -> None:
         kind = data.get("kind", "")
+        hid = str(data.get("hash_id", ""))
+        if kind == "call_signal" and (data.get("signal") or {}).get("type") == "offer":
+            video = bool((data.get("signal") or {}).get("video"))
+            notify_if_no_ui(
+                contact_name(hid),
+                "Incoming video call — open SRLTCP" if video else "Incoming call — open SRLTCP",
+                f"call-{hid}",
+            )
+        elif kind == "contact_request":
+            who = data.get("name") or hid[:8]
+            notify_if_no_ui("Contact request", f"{who} wants to chat", f"req-{hid}")
         if kind in (
             "share_offer",
             "share_listing",

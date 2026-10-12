@@ -183,6 +183,130 @@ async def desktop_flow() -> None:
         await browser.close()
 
 
+async def features_flow() -> None:
+    """Contacts, shared folders, folder send, cancel, block, settings, misc modals."""
+    shared = NODES["alice"].data / "shared"
+    (shared / "docs").mkdir(parents=True, exist_ok=True)
+    (shared / "hello.txt").write_text("hello from alice's shared folder\n")
+    (shared / "docs" / "notes.md").write_text("# notes\n")
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(**LAUNCH)
+        alice = await open_ui(browser, "alice")
+        bob = await open_ui(browser, "bob")
+        for pg in (alice, bob):
+            pg.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
+            await pg.click(".peer-tab[data-tab=trusted]")
+        await alice.click("#contacts .contact[data-name='Bob']")
+        await bob.click("#contacts .contact[data-name='Alice']")
+
+        # Edit contact from the chat header
+        await alice.click("#chat-peer-name")
+        await alice.wait_for_selector("#edit-contact-modal.open")
+        await alice.fill("#edit-contact-name", "Bobby")
+        await alice.click("#edit-contact-save")
+        await alice.wait_for_selector("#contacts .contact[data-name='Bobby']", timeout=5000)
+        assert await alice.text_content("#chat-peer-name") == "Bobby"
+        print("edit contact: renamed Bob -> Bobby")
+        # A LAN/VPN IP in the internet field gets a helpful error
+        await alice.click("#contacts .contact[data-name='Bobby'] .contact-more")
+        await alice.click("#contact-menu [data-action=edit]")
+        await alice.evaluate("document.querySelector('#edit-contact-modal details').open = true")
+        await alice.fill("#edit-contact-wan-host", "10.0.100.5")
+        await alice.click("#edit-contact-save")
+        await alice.wait_for_selector("text=put it in the Address field", timeout=5000)
+        await alice.fill("#edit-contact-wan-host", "")
+        await alice.click("#edit-contact-cancel")
+        print("edit contact: VPN IP in internet field explained")
+
+        # Shared folder: Alice offers, Bob browses and downloads
+        await alice.click("#btn-share-folder")
+        await alice.wait_for_selector("#share-offer-btn")
+        await alice.click("#share-offer-btn")
+        await alice.click("#share-close")
+        await bob.wait_for_selector("text=Shared folder offered", timeout=10000)
+        await bob.click("#btn-share-folder")
+        await bob.wait_for_selector(".share-grant-btn", timeout=5000)
+        await bob.click(".share-grant-btn")
+        await bob.wait_for_selector(".share-entry.file >> text=hello.txt", timeout=10000)
+        await bob.click(".share-entry.file >> text=hello.txt")
+        await bob.click("#share-close")
+        await bob.wait_for_selector(".file-bubble >> text=hello.txt", timeout=15000)
+        print("shared folder: offered, browsed, downloaded hello.txt")
+
+        # Cancel a transfer in flight (big file, throttled link not needed: cancel immediately)
+        big = OUT / "big.bin"
+        with open(big, "wb") as fh:  # large enough to still be in flight when we cancel
+            for _ in range(600):
+                fh.write(os.urandom(1024 * 1024))
+        await alice.set_input_files("#file-input", str(big))
+        await alice.wait_for_selector("[data-cancel-transfer]", timeout=30000)
+        await alice.click("[data-cancel-transfer]")
+        await alice.wait_for_function(
+            "[...document.querySelectorAll('.file-bubble')].some(b => /cancel/i.test(b.textContent))",
+            timeout=10000,
+        )
+        print("transfer: cancelled mid-flight")
+        big.unlink(missing_ok=True)
+
+        # Block / unblock
+        await bob.click("#contacts .contact[data-name='Alice'] .contact-more")
+        await bob.click("#contact-menu [data-action=block]")
+        await bob.wait_for_selector("#contacts .contact[data-name='Alice'] >> text=blocked", timeout=5000)
+        await bob.click("#contacts .contact[data-name='Alice'] .contact-more")
+        await bob.click("#contact-menu [data-action=block]")
+        await bob.wait_for_function(
+            "!document.querySelector(\"#contacts .contact[data-name='Alice']\").textContent.includes('blocked')",
+            timeout=5000,
+        )
+        print("block: blocked and unblocked")
+
+        # Clear chat
+        await alice.click("#contacts .contact[data-name='Bobby'] .contact-more")
+        await alice.click("#contact-menu [data-action=clear-chat]")
+        await alice.wait_for_selector("text=No messages yet", timeout=5000)
+        print("clear chat: history cleared")
+
+        # Settings persist across reload
+        await alice.click("#btn-settings")
+        await alice.fill("#set-name", "Alice Renamed")
+        await alice.click("#settings-form button[type=submit]")
+        await alice.wait_for_selector("text=Settings saved", timeout=5000)
+        await alice.reload()
+        await alice.wait_for_load_state("networkidle")
+        assert (await alice.text_content("#me-name")).strip() == "Alice Renamed"
+        print("settings: name saved and persisted")
+        await alice.click("#btn-settings")
+        await alice.fill("#set-name", "Alice")
+        await alice.click("#settings-form button[type=submit]")
+        await alice.wait_for_selector("text=Settings saved", timeout=5000)
+        await alice.click("#btn-close-settings")
+
+        # Misc modals and search
+        await alice.click("#stat-version")
+        await alice.wait_for_selector("#release-modal.open")
+        await alice.click("#release-close")
+        await alice.click("#btn-settings")
+        await alice.click(".settings-tab[data-tab=network]")
+        await alice.click("#btn-network-viz")
+        await alice.wait_for_selector("#network-modal.open")
+        await alice.click("#network-close")
+        await alice.click("#btn-close-settings")
+        await alice.click(".peer-tab[data-tab=trusted]")
+        await alice.fill("#peer-search", "zzz-nobody")
+        await alice.wait_for_selector("#contacts .contacts-empty")
+        await alice.fill("#peer-search", "bob")
+        await alice.wait_for_selector("#contacts .contact[data-name='Bobby']")
+        print("misc: release notes, network map, search")
+
+        # Delete contact from the edit screen
+        await alice.click("#contacts .contact[data-name='Bobby'] .contact-more")
+        await alice.click("#contact-menu [data-action=edit]")
+        await alice.click("#edit-contact-delete")
+        await alice.wait_for_selector("#contacts .contact[data-name='Bobby']", state="detached", timeout=5000)
+        print("delete contact: removed")
+        await browser.close()
+
+
 async def mobile_flow() -> None:
     async with async_playwright() as p:
         browser = await p.chromium.launch(**LAUNCH)
@@ -260,6 +384,7 @@ async def main() -> int:
         for n in NODES.values():
             await n.wait_ready()
         await desktop_flow()
+        await features_flow()
         await mobile_flow()
     finally:
         for n in NODES.values():
