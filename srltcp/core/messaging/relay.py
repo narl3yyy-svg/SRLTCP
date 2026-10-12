@@ -200,6 +200,18 @@ class RelayConnection:
                 self._writer.close()
 
 
+def _acceptable_peer_relay_host(host: str) -> bool:
+    """A relay code from a contact must not aim us at link-local, multicast or
+    unspecified addresses (LAN and loopback relays are legitimate setups)."""
+    import ipaddress
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # hostname
+    return not (ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved)
+
+
 def _is_ip(host: str) -> bool:
     import ipaddress
 
@@ -228,6 +240,7 @@ class RelayMixin:
         self._upgrade_attempts: dict[str, float] = {}
         self._upgrades: dict[str, tuple[str, Any, float]] = {}  # hash -> (tcp peer_id, kx, started)
         self._relay_sub_state: dict[str, tuple[int, bytes]] = {}
+        self._rendezvous_changed: dict[str, float] = {}
 
     # ── Configuration ──
 
@@ -585,10 +598,19 @@ class RelayMixin:
         relay_text = str(data.get("r", ""))[:512]
         if relay_text:
             try:
-                relay_text = RelayCode.parse(relay_text).encode()
+                code = RelayCode.parse(relay_text)
+                relay_text = code.encode() if _acceptable_peer_relay_host(code.host) else ""
             except RelayCodeError:
                 relay_text = ""
         changed = contrib != peer.pair_peer or relay_text != peer.relay_code_peer
+        if changed and peer.pair_peer:
+            # Pair details are stable; a contact flipping them rapidly only
+            # costs us disk writes and reconnects, so accept one change a minute.
+            now = time.monotonic()
+            last = self._rendezvous_changed.get(hash_id, 0.0)
+            if now - last < 60.0:
+                return
+            self._rendezvous_changed[hash_id] = now
         if changed:
             self.trusted.update(hash_id, pair_peer=contrib, relay_code_peer=relay_text)
             log.info("Relay details updated for %s", peer.name)
