@@ -142,7 +142,26 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             try:
                 validate_wan_host(str(wan_host))
             except ValueError as exc:
-                return web.json_response({"error": str(exc)}, status=400)
+                msg = str(exc)
+                if "private" in msg:
+                    msg = (
+                        "That is a LAN/VPN address — put it in the Address field; "
+                        "the internet address is for public hosts only"
+                    )
+                return web.json_response({"error": msg}, status=400)
+        if tcp_host is not None:
+            tcp_host = str(tcp_host).strip()
+            if len(tcp_host) > 253 or any(c.isspace() for c in tcp_host):
+                return web.json_response({"error": "invalid address"}, status=400)
+        if tcp_port is not None:
+            try:
+                tcp_port = int(tcp_port)
+                if not 1 <= tcp_port <= 65535:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return web.json_response({"error": "port must be 1-65535"}, status=400)
+        if name is not None and not str(name).strip():
+            return web.json_response({"error": "name cannot be empty"}, status=400)
         if wan_port is not None:
             from srltcp.utils.wan import validate_wan_port
 
@@ -152,7 +171,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                 return web.json_response({"error": str(exc)}, status=400)
         peer = node.backend.trusted.update(
             hash_id,
-            name=name if name is not None else None,
+            name=str(name)[:64] if name is not None else None,
             blocked=blocked,
             tcp_host=tcp_host,
             tcp_port=int(tcp_port) if tcp_port is not None else None,
@@ -263,8 +282,15 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         from srltcp.core.messaging.announce import ANNOUNCE_BURSTS, AnnounceError
 
         raw = (request.rel_url.query.get("transport") or "").strip().lower()
+        target = (request.rel_url.query.get("target") or "").strip()
         if raw and raw not in ("tcp", "serial"):
             return web.json_response({"error": f"invalid transport: {raw}"}, status=400)
+        if target:
+            try:
+                await node.backend.announce_to(target)
+            except AnnounceError as exc:
+                return web.json_response({"error": exc.reason}, status=400)
+            return web.json_response({"announced": True, "target": target})
         try:
             announced = await node.backend.announce(raw or None)
         except AnnounceError as exc:

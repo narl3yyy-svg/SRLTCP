@@ -353,3 +353,48 @@ async def test_protocol_mismatch_does_not_link(tmp_path: Path) -> None:
     finally:
         await a.stop()
         await b.stop()
+
+
+async def test_unicast_announce_gets_reply_both_discover(pair) -> None:  # type: ignore[no-untyped-def]
+    """VPN case: no broadcast. A unicast announce to B makes B reply, so both see each other."""
+    a, b = pair
+    ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+    a.trusted.remove(bh)
+    b.trusted.remove(ah)
+    b.config.announce = True  # B is discoverable
+    payload = a.build_announce_payload("tcp")
+    port = b.tcp_transport.discovery_port
+    await a.tcp_transport.unicast_discovery(payload, ["127.0.0.1"], {port})
+    assert await wait_for(lambda: b.discovery.get(ah) is not None)
+    assert await wait_for(lambda: a.discovery.get(bh) is not None)
+    # Replies are never answered: exactly one reply was recorded on each side.
+    await asyncio.sleep(0.3)
+    assert len(b._announce_replies) == 1
+    assert len(a._announce_replies) == 0
+
+
+async def test_announce_updates_trusted_contact_address(pair) -> None:  # type: ignore[no-untyped-def]
+    a, b = pair
+    ah = a.identities["tcp"].hash_id
+    b.trusted.update(ah, tcp_host="10.9.9.9", tcp_port=1234)
+    payload = a.build_announce_payload("tcp")
+    port = b.tcp_transport.discovery_port
+    await a.tcp_transport.unicast_discovery(payload, ["127.0.0.1"], {port})
+    # Loopback sources are not trusted as addresses; tcp_host comes from the payload.
+    assert await wait_for(lambda: b.trusted.get(ah).tcp_port == a.config.tcp_port)
+
+
+async def test_connect_falls_back_to_alternate_address(pair) -> None:  # type: ignore[no-untyped-def]
+    a, b = pair
+    bh = b.identities["tcp"].hash_id
+    # Primary address is dead (TEST-NET-1, never routable); the alternate works.
+    a.trusted.update(bh, tcp_host="192.0.2.123", alt_hosts=["127.0.0.1"])
+    orig = a.tcp_transport.connect
+
+    async def fast(host: str, port: int, *, timeout: float = 8.0) -> str:
+        return await orig(host, port, timeout=0.5)
+
+    a.tcp_transport.connect = fast  # type: ignore[method-assign]
+    assert await a.connect_to_peer(bh)
+    assert await a.wait_for_handshake(bh)
+    assert a.trusted.get(bh).tcp_host == "127.0.0.1"

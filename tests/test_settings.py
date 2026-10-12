@@ -10,7 +10,7 @@ from srltcp.core.settings import RETENTION_HOURS, AppSettings, SettingsStore
 def test_settings_defaults(tmp_path: Path) -> None:
     store = SettingsStore(path=tmp_path / "settings.json")
     settings = store.load()
-    assert settings.auto_announce is False
+    assert settings.auto_announce is True
     assert settings.version == "0.2.0"
     assert settings.tcp_port == 7825
     assert settings.discovery_port == 7826

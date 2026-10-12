@@ -726,6 +726,51 @@
     resetAddContactForm();
   }
 
+  async function findByIp() {
+    const input = $("#find-ip-input");
+    const target = (input?.value || "").trim();
+    if (!target) {
+      toast("Enter the other device's IP address", "error");
+      return;
+    }
+    const btn = $("#find-ip-btn");
+    if (btn) btn.disabled = true;
+    try {
+      const { ok, data } = await apiPost(
+        `/api/announce?target=${encodeURIComponent(target)}`, {}, { silent: true }
+      );
+      if (!ok) {
+        toast(data?.error || "Could not reach that address", "error");
+        return;
+      }
+      toast(`Sent a hello to ${target} — looking for a reply…`);
+      const found = await waitForDiscoveredAt(target, 6000);
+      if (found) {
+        closeAddContactModal();
+        state.peerTab = "discovered";
+        document.querySelectorAll(".peer-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === "discovered"));
+        renderContacts();
+        toast(`Found ${found.name} — tap Trust to add them`);
+      } else {
+        toast(`No reply from ${target}. Is SRLTCP open there, on the same VPN, with UDP 7826 allowed?`, "error");
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function waitForDiscoveredAt(ip, maxMs) {
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 700));
+      await loadPeers();
+      const all = [...state.peers, ...state.trusted];
+      const hit = all.find((p) => (p.tcp_host === ip) || (p.address || "").startsWith(`${ip}:`));
+      if (hit) return hit;
+    }
+    return null;
+  }
+
   async function saveManualContact() {
     const hashId = ($("#add-contact-hash")?.value || "").trim().toLowerCase();
     const name = ($("#add-contact-name")?.value || "").trim() || "Peer";
@@ -848,12 +893,11 @@
       !androidHas("scanQrCode") && !("BarcodeDetector" in window && navigator.mediaDevices)
     );
     const nfcOk = androidHas("isNfcAvailable") && androidBridge().isNfcAvailable();
-    $("#pair-nfc")?.classList.toggle("hidden", !nfcOk);
+    $("#pair-nfc")?.classList.add("hidden");
+    state.nfcPaired = false;
     openModal(modal);
     await refreshPairCode();
-    if (nfcOk) {
-      setNfcStatus("NFC ready — hold the other phone against this one, and press “Tap phones” on one of them.");
-    }
+    if (nfcOk) startNfcScan();
   }
 
   function closePairModal() {
@@ -953,24 +997,54 @@
 
   function startNfcScan() {
     if (!androidHas("startNfcScan")) return;
-    const started = androidBridge().startNfcScan();
-    if (started === false) {
-      setNfcStatus("Turn on NFC in Android settings first.", "error");
+    const btn = $("#pair-nfc");
+    const result = String(androidBridge().startNfcScan());
+    if (result === "off") {
+      setNfcStatus("NFC is turned off. Turn it on to pair by tapping phones.", "error");
+      if (btn) {
+        btn.textContent = "Open NFC settings";
+        btn.dataset.mode = "settings";
+        btn.classList.remove("hidden");
+      }
       return;
     }
-    setNfcStatus("Scanning… hold the phones back to back. Keep the other phone on its Pair screen.");
+    if (result !== "ok") return;
+    if (btn) {
+      btn.dataset.mode = "";
+      btn.classList.add("hidden");
+    }
+    setNfcStatus("NFC ready — open this Pair screen on the other phone too and hold the phones back to back.");
   }
+
+  function onNfcButton() {
+    const btn = $("#pair-nfc");
+    if (btn?.dataset.mode === "settings" && androidHas("openNfcSettings")) {
+      androidBridge().openNfcSettings();
+      return;
+    }
+    startNfcScan();
+  }
+
+  // Coming back from Android's NFC settings: try again automatically.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && $("#pair-modal")?.classList.contains("open")
+        && $("#pair-nfc")?.dataset.mode === "settings") {
+      startNfcScan();
+    }
+  });
 
   // Called by the Android app (MainActivity) — see SRLTCPBridge.kt.
   window.onAndroidQrResult = (text) => {
     if (text) importPairCode(text, { source: "qr" });
   };
   window.onAndroidNfcResult = (result) => {
-    const r = typeof result === "string" ? JSON.parse(result) : result || {};
+    let r = {};
+    try { r = typeof result === "string" ? JSON.parse(result) : result || {}; } catch (_) { r = {}; }
     if (r.error) {
-      setNfcStatus(`NFC: ${r.error}`, "error");
+      if (!state.nfcPaired) setNfcStatus(`NFC: ${r.error}`, "error");
       return;
     }
+    state.nfcPaired = true;
     setNfcStatus(`Paired with ${r.name || "contact"} via NFC.`, "ok");
     toast(`Paired with ${r.name || "contact"} via NFC`);
     loadPeers();
@@ -1014,6 +1088,83 @@
     }
     toast(`Cleared ${data?.cleared || 0} message(s)`);
     if (state.selectedPeer === hashId) loadMessages();
+  }
+
+  function formatSafetyNumber(hashId) {
+    return (hashId || "").replace(/(.{4})/g, "$1 ").trim();
+  }
+
+  function openEditContact(hashId) {
+    closeContactMenu();
+    const peer = state.trusted.find((p) => p.hash_id === hashId);
+    if (!peer) {
+      toast("Only trusted contacts can be edited — trust or pair first", "error");
+      return;
+    }
+    state.editContactTarget = hashId;
+    setInputValue("edit-contact-name", peer.name || "");
+    setInputValue("edit-contact-host", peer.tcp_host || "");
+    setInputValue("edit-contact-port", String(peer.tcp_port || 7825));
+    setInputValue("edit-contact-wan-host", peer.wan_host || "");
+    setInputValue("edit-contact-wan-port", String(peer.wan_port || 7825));
+    setCheckbox("edit-contact-wan-enabled", !!peer.wan_enabled);
+    setSelectValue("edit-contact-mode", peer.connection_mode || "auto");
+    const alts = (peer.alt_hosts || []).filter(Boolean);
+    const altEl = $("#edit-contact-alts");
+    if (altEl) {
+      altEl.textContent = alts.length ? `Also tried: ${alts.join(", ")}` : "";
+      altEl.classList.toggle("hidden", !alts.length);
+    }
+    const hashEl = $("#edit-contact-hash");
+    if (hashEl) hashEl.textContent = formatSafetyNumber(hashId);
+    const adv = $("#edit-contact-modal details");
+    if (adv) adv.open = !!(peer.wan_host || peer.connection_mode === "wan");
+    openModal($("#edit-contact-modal"));
+    setTimeout(() => $("#edit-contact-name")?.focus(), 50);
+  }
+
+  function closeEditContact() {
+    state.editContactTarget = null;
+    closeModal($("#edit-contact-modal"));
+  }
+
+  async function saveEditContact() {
+    const hashId = state.editContactTarget;
+    if (!hashId) return;
+    const name = ($("#edit-contact-name")?.value || "").trim();
+    const port = parseInt($("#edit-contact-port")?.value || "7825", 10);
+    const wanPort = parseInt($("#edit-contact-wan-port")?.value || "7825", 10);
+    if (!name) {
+      toast("Name cannot be empty", "error");
+      return;
+    }
+    if (!(port >= 1 && port <= 65535) || !(wanPort >= 1 && wanPort <= 65535)) {
+      toast("Ports must be between 1 and 65535", "error");
+      return;
+    }
+    const body = {
+      name,
+      tcp_host: ($("#edit-contact-host")?.value || "").trim(),
+      tcp_port: port,
+      wan_host: ($("#edit-contact-wan-host")?.value || "").trim(),
+      wan_port: wanPort,
+      wan_enabled: !!$("#edit-contact-wan-enabled")?.checked,
+      connection_mode: $("#edit-contact-mode")?.value || "auto",
+    };
+    const { ok, data } = await apiPatch(`/api/trusted/${encodeURIComponent(hashId)}`, body, { silent: true });
+    if (!ok) {
+      toast(data?.error || "Could not save contact", "error");
+      return;
+    }
+    toast("Contact saved");
+    closeEditContact();
+    if (state.selectedPeer === hashId) {
+      state.selectedName = name;
+      const nameEl = $("#chat-peer-name");
+      if (nameEl) nameEl.textContent = name;
+      setAvatar($("#peer-avatar"), name, hashId);
+    }
+    await loadPeers();
   }
 
   async function renameContact(hashId, currentName) {
@@ -2217,10 +2368,10 @@
             ${initials(p.name)}
           </div>
           <div class="contact-info">
-            <div class="contact-name">${escapeHtml(p.name)}${p.metadata?.contact_request ? '<span class="contact-request-tag">wants to chat</span>' : ""}</div>
+            <div class="contact-name">${escapeHtml(p.name)}${p.metadata?.contact_request ? '<span class="contact-request-tag">wants to chat</span>' : ""}${p.blocked ? '<span class="contact-request-tag">blocked</span>' : ""}</div>
             <div class="contact-preview">${meta}</div>
           </div>
-          <div class="contact-meta">${trustBtn}${linked ? '<span class="contact-online" title="Connected">●</span>' : ""}${unreadCount(p.hash_id) ? `<span class="unread-badge">${unreadCount(p.hash_id) > 99 ? "99+" : unreadCount(p.hash_id)}</span>` : ""}</div>
+          <div class="contact-meta">${state.peerTab === "trusted" ? `<button type="button" class="contact-more" data-more="${p.hash_id}" aria-label="Contact options" title="Edit, block, delete…">⋮</button>` : ""}${trustBtn}${linked ? '<span class="contact-online" title="Connected">●</span>' : ""}${unreadCount(p.hash_id) ? `<span class="unread-badge">${unreadCount(p.hash_id) > 99 ? "99+" : unreadCount(p.hash_id)}</span>` : ""}</div>
         </div>`;
       })
       .join("");
@@ -2228,6 +2379,12 @@
     el.querySelectorAll(".contact").forEach((btn) => {
       btn.addEventListener("click", (ev) => {
         if (ev.target.closest(".contact-trust")) return;
+        const more = ev.target.closest(".contact-more");
+        if (more) {
+          ev.stopPropagation();
+          openContactMenu(btn.dataset.hash, btn.dataset.name, more);
+          return;
+        }
         selectPeer(btn.dataset.hash, btn.dataset.name);
         closeSidebarMobile();
       });
@@ -3121,14 +3278,38 @@
   };
 
   $("#btn-add-contact")?.addEventListener("click", openAddContactModal);
+  $("#find-ip-btn")?.addEventListener("click", findByIp);
+  $("#find-ip-input")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") findByIp();
+  });
   $("#btn-pair")?.addEventListener("click", () => { closeSidebarMobile(); openPairModal(); });
+  $("#edit-contact-save")?.addEventListener("click", saveEditContact);
+  $("#edit-contact-cancel")?.addEventListener("click", closeEditContact);
+  $("#edit-contact-delete")?.addEventListener("click", async () => {
+    const hashId = state.editContactTarget;
+    const peer = state.trusted.find((p) => p.hash_id === hashId);
+    if (!hashId) return;
+    closeEditContact();
+    await deleteTrusted(hashId, peer?.name || hashId.slice(0, 8));
+  });
+  $("#edit-contact-modal")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.tagName === "INPUT") saveEditContact();
+  });
+  setupModalClose($("#edit-contact-modal"), closeEditContact);
+  for (const id of ["#chat-peer-name", "#peer-avatar"]) {
+    $(id)?.addEventListener("click", () => {
+      if (state.selectedPeer && state.trusted.some((p) => p.hash_id === state.selectedPeer)) {
+        openEditContact(state.selectedPeer);
+      }
+    });
+  }
   $("#pair-close")?.addEventListener("click", closePairModal);
   $("#pair-copy")?.addEventListener("click", copyPairLink);
   $("#pair-share")?.addEventListener("click", sharePairLink);
   $("#pair-refresh")?.addEventListener("click", refreshPairCode);
   $("#pair-import")?.addEventListener("click", () => importPairCode($("#pair-code-input")?.value));
   $("#pair-scan")?.addEventListener("click", scanPairQr);
-  $("#pair-nfc")?.addEventListener("click", startNfcScan);
+  $("#pair-nfc")?.addEventListener("click", onNfcButton);
   setupModalClose($("#pair-modal"), closePairModal);
   $("#add-contact-cancel")?.addEventListener("click", closeAddContactModal);
   $("#add-contact-save")?.addEventListener("click", saveManualContact);
@@ -3371,8 +3552,9 @@
       case "clear-chat":
         await clearChatHistory(hashId);
         break;
+      case "edit":
       case "rename":
-        await renameContact(hashId, name);
+        openEditContact(hashId);
         break;
       case "block":
         if (peer?.blocked) {
@@ -3394,7 +3576,7 @@
         await deleteTrusted(hashId, name);
         break;
       case "wan":
-        openWanModal(hashId);
+        openEditContact(hashId);
         break;
       case "share":
         closeContactMenu();

@@ -920,7 +920,8 @@ class MessagingBackend(
 
         result = []
         seen: set[str] = set()
-        for p in self.trusted.list_peers():
+        # Include blocked contacts so they can still be unblocked from the UI.
+        for p in self.trusted.list_peers(include_blocked=True):
             if not is_valid_hash_id(p.hash_id) or p.hash_id in seen:
                 continue
             seen.add(p.hash_id)

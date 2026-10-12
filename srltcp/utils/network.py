@@ -43,12 +43,138 @@ def primary_ipv4() -> str:
     return "127.0.0.1"
 
 
+VPN_IFACE_PREFIXES = ("tun", "wg", "ppp", "utun", "tailscale", "zt", "ipsec", "nordlynx")
+MAX_SWEEP_HOSTS = 1022  # never unicast-sweep more than a /22
+
+
+def is_vpn_interface(iface: dict[str, Any]) -> bool:
+    """WireGuard/OpenVPN/Tailscale-style tunnels: routed, no broadcast."""
+    name = str(iface.get("interface", "")).lower()
+    if name.startswith(VPN_IFACE_PREFIXES):
+        return True
+    return int(iface.get("prefix_len", 24) or 24) >= 31
+
+
+def sweep_targets(own_ips: set[str] | None = None) -> list[str]:
+    """Unicast addresses to announce to on VPN interfaces.
+
+    VPNs do not carry broadcast packets, so discovery over WireGuard needs a
+    direct packet to every address in the tunnel subnet. Tunnels configured
+    with a /32 address get the surrounding /24 swept (the common setup).
+    """
+    targets: list[str] = []
+    seen: set[str] = set(own_ips or ())
+    for iface in list_interfaces():
+        if not is_vpn_interface(iface):
+            continue
+        ip = str(iface.get("ip", ""))
+        if not ip or ip.startswith("127."):
+            continue
+        plen = int(iface.get("prefix_len", 24) or 24)
+        if plen >= 31 or plen < 22:
+            plen = 24
+        try:
+            net = ipaddress.ip_network(f"{ip}/{plen}", strict=False)
+        except ValueError:
+            continue
+        seen.add(ip)
+        for host in net.hosts():
+            h = str(host)
+            if h not in seen:
+                seen.add(h)
+                targets.append(h)
+            if len(targets) >= MAX_SWEEP_HOSTS:
+                return targets
+    return targets
+
+
+def in_vpn_subnet(addr: str) -> bool:
+    """True when addr lies inside one of our VPN tunnels' subnets."""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    for iface in list_interfaces():
+        if not is_vpn_interface(iface):
+            continue
+        plen = int(iface.get("prefix_len", 24) or 24)
+        if plen >= 31 or plen < 16:
+            plen = 24
+        try:
+            if ip in ipaddress.ip_network(f"{iface.get('ip')}/{plen}", strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _android_interfaces() -> list[dict[str, Any]]:
+    """Enumerate interfaces through Java on Android (sees tun0 / wlan0 / rmnet)."""
+    from java.net import NetworkInterface
+
+    results: list[dict[str, Any]] = []
+    ifaces = NetworkInterface.getNetworkInterfaces()
+    while ifaces is not None and ifaces.hasMoreElements():
+        ni = ifaces.nextElement()
+        try:
+            if not ni.isUp() or ni.isLoopback():
+                continue
+            name = str(ni.getName())
+            for ia in ni.getInterfaceAddresses():
+                addr = ia.getAddress()
+                if addr is None:
+                    continue
+                ip = str(addr.getHostAddress())
+                if ":" in ip or ip.startswith("127."):
+                    continue
+                plen = int(ia.getNetworkPrefixLength())
+                results.append(
+                    {
+                        "interface": name,
+                        "ip": ip,
+                        "prefix_len": plen,
+                        "label": f"{name} ({ip})",
+                    }
+                )
+        except Exception:  # noqa: BLE001 - keep enumerating other interfaces
+            continue
+    # VPN first: on a phone that is the address peers can actually reach.
+    results.sort(key=lambda i: (0 if is_vpn_interface(i) else 1, i["interface"]))
+    return results
+
+
+_IFACE_CACHE: dict[str, Any] = {"at": 0.0, "value": []}
+_IFACE_TTL = 5.0
+
+
 def list_interfaces() -> list[dict[str, Any]]:
+    """Interfaces, cached briefly (consulted on every incoming announce)."""
+    import time
+
+    now = time.monotonic()
+    if _IFACE_CACHE["value"] and now - _IFACE_CACHE["at"] < _IFACE_TTL:
+        return [dict(i) for i in _IFACE_CACHE["value"]]
+    value = _list_interfaces_uncached()
+    _IFACE_CACHE["at"] = now
+    _IFACE_CACHE["value"] = value
+    return [dict(i) for i in value]
+
+
+def _list_interfaces_uncached() -> list[dict[str, Any]]:
     """Return IPv4 addresses with netmasks when available.
 
-    Safe on Android (falls back gracefully when /sys/class/net is not readable).
+    Android: Java NetworkInterface (Python cannot read /sys/class/net there).
     Desktop (Arch/Ubuntu) keeps the fast ioctl method.
     """
+    from srltcp.utils.platform import is_android
+
+    if is_android():
+        try:
+            android = _android_interfaces()
+            if android:
+                return android
+        except Exception:  # noqa: BLE001 - fall back to socket tricks
+            pass
     if os.name == "posix":
         try:
             if os.path.isdir("/sys/class/net"):
