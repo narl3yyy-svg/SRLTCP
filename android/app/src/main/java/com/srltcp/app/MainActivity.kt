@@ -166,6 +166,13 @@ class MainActivity : AppCompatActivity() {
             wv.settings.useWideViewPort = true
             wv.settings.loadWithOverviewMode = true
             wv.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            // Remote call audio/video starts from code, not from a tap on the
+            // <video>; without this the WebView shows a play button and stays silent.
+            wv.settings.mediaPlaybackRequiresUserGesture = false
+            // The app scales to the screen; only the image viewer zooms (in JS).
+            wv.settings.setSupportZoom(false)
+            wv.settings.builtInZoomControls = false
+            wv.settings.displayZoomControls = false
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             wv.addJavascriptInterface(SRLTCPBridge(this@MainActivity), "SRLTCPAndroid")
             wv.webChromeClient = object : WebChromeClient() {
@@ -544,6 +551,54 @@ class MainActivity : AppCompatActivity() {
         return ""
     }
 
+    // ── Call audio: route like a phone call (earpiece / speaker) ──
+
+    private var callAudioActive = false
+
+    fun setCallAudio(active: Boolean, speaker: Boolean) {
+        val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+        try {
+            if (!active) {
+                if (!callAudioActive) return
+                callAudioActive = false
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    am.clearCommunicationDevice()
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn = false
+                }
+                am.mode = android.media.AudioManager.MODE_NORMAL
+                volumeControlStream = android.media.AudioManager.USE_DEFAULT_STREAM_TYPE
+                window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                return
+            }
+            callAudioActive = true
+            am.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+            volumeControlStream = android.media.AudioManager.STREAM_VOICE_CALL
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val devices = am.availableCommunicationDevices
+                val headset = devices.firstOrNull {
+                    it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                        it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                        it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                        it.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET ||
+                        it.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET
+                }
+                val wanted = if (speaker) android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                else android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+                val target = if (!speaker && headset != null) headset
+                else devices.firstOrNull { it.type == wanted }
+                if (target != null) am.setCommunicationDevice(target)
+            } else {
+                @Suppress("DEPRECATION")
+                am.isSpeakerphoneOn = speaker
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Call audio routing failed", e)
+        }
+    }
+
     fun shareText(title: String, text: String) {
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
@@ -738,6 +793,7 @@ class MainActivity : AppCompatActivity() {
         isActivityResumed = true
         if (isClosing) return
         webView?.onResume()
+        webView?.evaluateJavascript("window.srltcpOnResume && window.srltcpOnResume();", null)
         startPythonServer()  // no-op while the node is running
         if (webView?.url.isNullOrBlank() &&
             statusView?.visibility == android.view.View.VISIBLE &&
@@ -780,6 +836,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        setCallAudio(false, false)
         NfcPairing.listener = null
         NfcPairing.card = null
         if (isFinishing) {

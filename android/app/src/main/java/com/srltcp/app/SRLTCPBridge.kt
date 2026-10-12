@@ -44,6 +44,12 @@ class SRLTCPBridge(private val activity: MainActivity) {
         activity.runOnUiThread { activity.launchQrScanner() }
     }
 
+    /** Route call audio like a phone call; speaker=false uses the earpiece/headset. */
+    @JavascriptInterface
+    fun setCallAudio(active: Boolean, speaker: Boolean) {
+        activity.runOnUiThread { activity.setCallAudio(active, speaker) }
+    }
+
     /** Open the system "Save as" picker for a received/sent file. */
     @JavascriptInterface
     fun saveTransferFile(transferId: String): String = activity.saveTransferFile(transferId)
