@@ -1704,3 +1704,6 @@ label.field > span {
   .find-ip .field-row { flex-direction: column; align-items: stretch; }
   .find-ip .field-row .action-btn { width: 100%; }
 }
+
+#request-modal p { margin: 0 0 10px; }
+#request-modal #request-hash { font-family: var(--mono); font-size: 11px; word-break: break-all; }

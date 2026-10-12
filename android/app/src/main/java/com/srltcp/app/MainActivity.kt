@@ -68,6 +68,30 @@ class MainActivity : AppCompatActivity() {
         deliverToWeb("onAndroidQrResult", JSONObject.quote(text))
     }
 
+    /** File waiting for the user to pick a save location (Save as… for received files). */
+    private var pendingSavePath: String? = null
+
+    private val saveFileLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val source = pendingSavePath
+        pendingSavePath = null
+        val target = result.data?.data
+        if (source == null || result.resultCode != RESULT_OK || target == null) return@registerForActivityResult
+        Thread {
+            val ok = try {
+                contentResolver.openOutputStream(target)?.use { out ->
+                    java.io.File(source).inputStream().use { it.copyTo(out) }
+                    true
+                } ?: false
+            } catch (e: Exception) {
+                Log.e(TAG, "Save file failed", e)
+                false
+            }
+            deliverToWeb("onAndroidFileSaved", if (ok) "true" else "false")
+        }.start()
+    }
+
     private var pendingWebPermission: PermissionRequest? = null
 
     private val requestMediaPermissions = registerForActivityResult(
@@ -272,20 +296,18 @@ class MainActivity : AppCompatActivity() {
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
                     val wv = webView ?: run {
-                        isEnabled = false
-                        onBackPressedDispatcher.onBackPressed()
-                        isEnabled = true
+                        moveTaskToBack(true)
                         return
                     }
                     wv.evaluateJavascript(
                         "(function(){return window.androidNavigateBack" +
                             "?!!window.androidNavigateBack():false;})()"
                     ) { result ->
-                        val handled = result == "true"
-                        if (!handled) {
-                            isEnabled = false
-                            onBackPressedDispatcher.onBackPressed()
-                            isEnabled = true
+                        if (result != "true") {
+                            // On the main screen: go to the background like other
+                            // messengers instead of closing the app (the node keeps
+                            // running and reopening is instant).
+                            moveTaskToBack(true)
                         }
                     }
                 }
@@ -490,6 +512,36 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "QR scanner failed", e)
         }
+    }
+
+    /** Ask where to save a transfer's file, then copy it there. Returns "" or an error. */
+    fun saveTransferFile(transferId: String): String {
+        val info = try {
+            JSONObject(
+                Python.getInstance().getModule("srltcp.app")
+                    .callAttr("android_transfer_file", transferId).toString()
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Transfer lookup failed", e)
+            return "Could not open that file"
+        }
+        if (info.has("error")) return info.getString("error")
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = info.optString("mime", "application/octet-stream")
+            putExtra(Intent.EXTRA_TITLE, info.optString("filename", "file"))
+        }
+        runOnUiThread {
+            pendingSavePath = info.getString("path")
+            try {
+                saveFileLauncher.launch(intent)
+            } catch (e: Exception) {
+                pendingSavePath = null
+                Log.e(TAG, "No document picker", e)
+                deliverToWeb("onAndroidFileSaved", "false")
+            }
+        }
+        return ""
     }
 
     fun shareText(title: String, text: String) {

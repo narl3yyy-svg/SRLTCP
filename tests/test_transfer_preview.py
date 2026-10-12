@@ -9,6 +9,7 @@ import pytest
 from aiohttp import web
 
 from srltcp.core.messaging.models import FileTransfer, TransferState
+from srltcp.core.messaging.transfer import TransferMixin
 from srltcp.routes.api import register_api_routes
 
 
@@ -70,6 +71,7 @@ async def test_transfer_file_prefers_incoming_path(tmp_path: Path) -> None:
     )
     node.backend._transfers = {tid: transfer}
     node.backend._incoming_paths = {tid: incoming}
+    node.backend.transfer_file_path = lambda t: TransferMixin.transfer_file_path(node.backend, t)
     app = web.Application()
     register_api_routes(app, node)
 

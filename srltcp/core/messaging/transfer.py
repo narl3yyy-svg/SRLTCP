@@ -68,6 +68,18 @@ class TransferMixin:
         self._transfer_cooldown_until: dict[str, float] = {}
         self._transfer_progress_emit: dict[str, float] = {}
 
+    def transfer_file_path(self: MessagingBackend, transfer_id: str) -> Path | None:
+        """Where a transfer's bytes live on disk (received copy or the sent original)."""
+        transfer = self._transfers.get(transfer_id)
+        if not transfer:
+            return None
+        incoming = self._incoming_paths.get(transfer_id)
+        if incoming and incoming.is_file():
+            return incoming
+        if transfer.path.is_file():
+            return transfer.path
+        return None
+
     def _mark_transfer_cooldown(self: MessagingBackend, *hash_ids: str) -> None:
         deadline = time.monotonic() + TRANSFER_COOLDOWN
         for hash_id in hash_ids:

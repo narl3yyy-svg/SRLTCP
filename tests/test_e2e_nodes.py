@@ -193,6 +193,38 @@ async def test_untrusted_peer_messages_not_shown(tmp_path: Path) -> None:
         await b.stop()
 
 
+async def test_adding_a_peer_prompts_them_to_add_back(tmp_path: Path) -> None:
+    """Trusting someone (no message sent) asks them to add us back; declining sticks."""
+    a = make_node(tmp_path, "alice")
+    b = make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    events: list[dict] = []
+
+    async def on_event(evt: dict) -> None:
+        events.append(evt)
+
+    b.set_callbacks(on_event=on_event)
+    try:
+        ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+        trust(a, b)
+        await a.connect_to_peer(bh)  # link-up tells bob "alice added you"
+        assert await wait_for(
+            lambda: any(e.get("kind") == "contact_request" and e["hash_id"] == ah for e in events)
+        )
+        assert b.discovery.get(ah) is not None
+        b.decline_contact_request(ah)
+        assert b.discovery.get(ah) is None
+        events.clear()
+        b._contact_requests.clear()
+        await a.notify_contact_accepted(bh)
+        await asyncio.sleep(0.5)
+        assert not any(e.get("kind") == "contact_request" for e in events)
+    finally:
+        await a.stop()
+        await b.stop()
+
+
 async def test_file_transfer_end_to_end(pair, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     a, b = pair
     bh = b.identities["tcp"].hash_id

@@ -408,12 +408,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         transfer = node.backend._transfers.get(transfer_id)
         if not transfer:
             return web.json_response({"error": "transfer not found"}, status=404)
-        incoming = node.backend._incoming_paths.get(transfer_id)
-        if incoming and incoming.is_file():
-            path = incoming
-        elif transfer.path.is_file():
-            path = transfer.path
-        else:
+        path = node.backend.transfer_file_path(transfer_id)
+        if path is None:
             return web.json_response({"error": "file not ready"}, status=404)
         from urllib.parse import quote
 
@@ -544,6 +540,13 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response(node.backend.create_pairing_card(one_time=one_time))
         except PairingError as exc:
             return web.json_response({"error": str(exc)}, status=400)
+
+    async def contact_request_decline(request: web.Request) -> web.Response:
+        hash_id = request.match_info.get("hash_id", "").lower()
+        if not is_valid_hash_id(hash_id):
+            return web.json_response({"error": "invalid hash_id"}, status=400)
+        node.backend.decline_contact_request(hash_id)
+        return web.json_response({"ok": True})
 
     async def pairing_import(request: web.Request) -> web.Response:
         from srltcp.core.messaging.pairing import PairingError
@@ -909,6 +912,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_get("/api/version", version_info)
     app.router.add_get("/api/pairing/card", pairing_card)
     app.router.add_post("/api/pairing/import", pairing_import)
+    app.router.add_post("/api/contact-requests/{hash_id}/decline", contact_request_decline)
     app.router.add_post("/api/call/signal", call_signal)
     app.router.add_get("/api/call/ice", call_ice)
     app.router.add_post("/api/share/create", create_share)
