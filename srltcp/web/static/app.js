@@ -502,6 +502,9 @@
         state.wsReconnectTimer = null;
       }
       setConnectionStatus("Connected", true);
+      // Catch up on anything that arrived while the socket was down.
+      if (state.selectedPeer) loadMessages().catch(() => {});
+      loadPeers().catch(() => {});
     };
 
     state.ws.onerror = () => {
@@ -631,7 +634,7 @@
           break;
         case "contact_request":
           loadPeers();
-          showContactRequest(data);
+          showContactRequest({ ...data, _event: true });
           notifyUser(
             "Contact request",
             `${data.name || data.hash_id?.slice(0, 8)} wants to add you as a contact`,
@@ -787,6 +790,7 @@
     state.selectedGroup = gid;
     state.selectedName = g.name;
     state.stickBottom = true;
+    state.selectedPeerShown = gid;
     clearUnread(gid);
     $("#chat-empty")?.classList.add("hidden");
     $("#chat-active")?.classList.remove("hidden");
@@ -923,6 +927,9 @@
     if (!hashId || state.trusted.some((t) => t.hash_id === hashId)) return;
     state.requestQueue = state.requestQueue || [];
     if (state.requestCurrent === hashId || state.requestQueue.some((r) => r.hash_id === hashId)) return;
+    // Dismissed with Back: re-ask on the next real request event, not every poll.
+    if (state.requestDismissed?.has(hashId) && !data._event) return;
+    state.requestDismissed?.delete(hashId);
     state.requestQueue.push(data);
     if (!state.requestCurrent) nextContactRequest();
   }
@@ -939,6 +946,15 @@
     $("#request-text").textContent = `${name} added you as a contact. Add them back?`;
     $("#request-hash").textContent = `ID ${next.hash_id}`;
     openModal(modal);
+  }
+
+  // Back gesture: close the prompt without declining; it comes back later.
+  function dismissContactRequest() {
+    const hashId = state.requestCurrent;
+    closeModal($("#request-modal"));
+    state.requestCurrent = null;
+    state.requestQueue = [];
+    if (hashId) (state.requestDismissed = state.requestDismissed || new Set()).add(hashId);
   }
 
   async function answerContactRequest(accept) {
@@ -1333,8 +1349,12 @@
     delete state.linkMetrics[hashId];
     if (state.selectedPeer === hashId) {
       state.selectedPeer = null;
+      state.selectedName = null;
+      state.messageCache = [];
       $("#chat-active")?.classList.add("hidden");
       $("#chat-empty")?.classList.remove("hidden");
+      if (isAndroidApp()) setAndroidView("sidebar", { skipHistory: true });
+      saveMobileSession();
     }
     renderContacts();
     const { ok } = await apiDelete(`/api/trusted/${encodeURIComponent(hashId)}`);
@@ -1545,11 +1565,26 @@
 
   async function loadMessages() {
     if (!state.selectedPeer) return;
-    const { ok, data } = await apiGet("/api/messages?limit=500", { fallback: [] });
-    if (!ok) return;
+    // Only the newest request may render: an older, slower response must not
+    // replace messages that arrived since (or another chat's messages).
+    const seq = (state.loadSeq = (state.loadSeq || 0) + 1);
+    const startedAt = Date.now();
+    const filter = state.selectedGroup
+      ? `group=${encodeURIComponent(state.selectedGroup)}`
+      : `peer=${encodeURIComponent(state.selectedPeer)}`;
+    const { ok, data } = await apiGet(`/api/messages?limit=1000&${filter}`, { fallback: [] });
+    if (!ok || seq !== state.loadSeq) return;
     const msgs = data || [];
     const filtered = msgs.filter((m) => messageForSelectedPeer(m));
+    const have = new Set(filtered.map((m) => m.id));
+    // Keep messages pushed over the WebSocket while this request was in flight.
+    for (const m of state.messageCache) {
+      const arrived = state.wsArrivals?.get(m.id) || 0;
+      if (!have.has(m.id) && arrived >= startedAt && messageForSelectedPeer(m)) filtered.push(m);
+    }
     filtered.forEach((m) => syncTransferStateFromMessage(m));
+    state.seenMsgIds = state.seenMsgIds || new Set();
+    filtered.forEach((m) => state.seenMsgIds.add(m.id));
     if (!messagesEqual(filtered, state.messageCache)) {
       renderMessages(filtered);
     }
@@ -1740,7 +1775,7 @@
       if (sendBtn) sendBtn.disabled = false;
       if (!res.ok) {
         toast(res.data?.error || "Message not sent", "error");
-        input.value = text;
+        if (!input.value) input.value = text;
       }
       if (isAndroidApp()) requestAnimationFrame(() => input.focus());
       return;
@@ -1753,6 +1788,7 @@
     if (sendBtn) sendBtn.disabled = false;
     if (!ok) {
       toast("Message failed — reconnecting…", "error");
+      if (!input.value) input.value = text;
       await connectPeer(state.selectedPeer, true);
     }
     if (isAndroidApp() && input) {
@@ -2649,6 +2685,8 @@
       return;
     }
 
+    // The list is rebuilt every few seconds; keep keyboard focus on the same row.
+    const focusedHash = document.activeElement?.closest?.("#contacts .contact")?.dataset.hash;
     el.innerHTML = filtered
       .map((p) => {
         const active = state.selectedPeer === p.hash_id ? " active" : "";
@@ -2670,7 +2708,7 @@
         // nested buttons are invalid HTML (the browser hoists them out of the row).
         return `<div class="contact${active}" role="button" tabindex="0" data-hash="${p.hash_id}" data-name="${escapeHtml(p.name)}">
           <div class="avatar" style="background:${hashColor(p.hash_id)}22;color:${hashColor(p.hash_id)};border-color:${hashColor(p.hash_id)}44">
-            ${initials(p.name)}
+            ${escapeHtml(initials(p.name))}
           </div>
           <div class="contact-info">
             <div class="contact-name">${escapeHtml(p.name)}${p.metadata?.contact_request ? '<span class="contact-request-tag">wants to chat</span>' : ""}${p.blocked ? '<span class="contact-request-tag">blocked</span>' : ""}</div>
@@ -2712,16 +2750,26 @@
         trustPeer(btn.dataset.trust);
       });
     });
+    if (focusedHash) el.querySelector(`.contact[data-hash="${CSS.escape(focusedHash)}"]`)?.focus();
   }
 
   function selectPeer(hashId, name) {
     if (!hashId) return;
     state.selectedPeer = hashId;
     state.selectedName = name;
+    const switching = state.selectedGroup || state.selectedPeerShown !== hashId;
     state.selectedGroup = null;
     $("#chat-active")?.classList.remove("group-chat");
     state.stickBottom = true;
     clearUnread(hashId);
+    if (switching) {
+      // Never show the previous chat's messages under the new name.
+      state.messageCache = [];
+      renderMessages([]);
+    }
+    state.selectedPeerShown = hashId;
+    const input = $("#msg-input");
+    if (input) input.placeholder = "Message…";
 
     $("#chat-empty")?.classList.add("hidden");
     $("#chat-active")?.classList.remove("hidden");
@@ -3342,7 +3390,34 @@
     syncTransferStateFromMessage(m);
   }
 
+  // Alert once per message: file messages are re-sent as their transfer
+  // progresses, and receipts re-send the same message with a new status.
+  function firstSighting(m) {
+    state.seenMsgIds = state.seenMsgIds || new Set();
+    if (state.seenMsgIds.has(m.id)) return false;
+    state.seenMsgIds.add(m.id);
+    if (state.seenMsgIds.size > 5000) state.seenMsgIds = new Set([...state.seenMsgIds].slice(-2500));
+    return true;
+  }
+
+  function chatHiddenFromUser() {
+    const bridge = window.SRLTCPAndroid;
+    const androidBg = typeof bridge?.isInBackground === "function" && bridge.isInBackground();
+    return document.hidden || androidBg || (isAndroidApp() && state.androidView !== "chat");
+  }
+
   function onNewMessage(m) {
+    const fresh = m.metadata?.group_id ? !!m._new : firstSighting(m);
+    if (messageForSelectedPeer(m) && fresh && !isOutgoing(m.sender_hash) && chatHiddenFromUser()) {
+      // The open chat is not on screen (app in background / on the list).
+      const gid = m.metadata?.group_id;
+      const title = gid ? groupById(gid)?.name || "Group" : peerByHash(m.sender_hash)?.name || "New message";
+      const text = m.msg_type === "text" || m.msg_type === "group_text"
+        ? (m.text || "").slice(0, 120) : `Sent a ${m.msg_type}`;
+      notifyUser(title, gid ? `${memberName(gid, m.sender_hash)}: ${text}` : text,
+        { tag: gid ? `group-${gid}` : `msg-${m.sender_hash}`, silent: !document.hidden && !isAndroidApp() });
+      if (isAndroidApp() && state.androidView !== "chat") bumpUnread(gid || m.sender_hash);
+    }
     if (!messageForSelectedPeer(m)) {
       const gid = m.metadata?.group_id;
       if (gid) {
@@ -3354,7 +3429,7 @@
         }
         return;
       }
-      if (!isOutgoing(m.sender_hash)) {
+      if (!isOutgoing(m.sender_hash) && fresh) {
         bumpUnread(m.sender_hash);
         const sender = peerByHash(m.sender_hash);
         notifyUser(
@@ -3369,7 +3444,25 @@
     const msgMedia = mediaMsgType(m);
     const tid = m.metadata?.transfer_id;
     const prev = state.messageCache.find((x) => x.id === m.id);
+    const prevStatus = prev?.status;
+    state.wsArrivals = state.wsArrivals || new Map();
+    state.wsArrivals.set(m.id, Date.now());
+    if (state.wsArrivals.size > 500) state.wsArrivals = new Map([...state.wsArrivals].slice(-200));
     upsertChatMessage(m);
+    if (prev && msgMedia === "text" && prev.text === m.text) {
+      // Only the tick changed: patch it instead of redrawing the whole chat
+      // (a redraw stops playing videos and loses text selection).
+      if (prevStatus !== m.status) {
+        const tick = document.querySelector(`[data-msg-id="${CSS.escape(m.id)}"] .bubble-status`);
+        if (tick) {
+          tick.className = `bubble-status ${m.status}`;
+          if (isOutgoing(m.sender_hash)) tick.title = STATUS_HINTS[m.status] || "";
+          return;
+        }
+      } else {
+        return;
+      }
+    }
 
     if (msgMedia === "file" || msgMedia === "image" || msgMedia === "video") {
       const merged = tid ? mergeTransferMeta(tid, m.metadata || {}) : m.metadata || {};
@@ -3586,7 +3679,7 @@
     ["wan-modal", () => closeWanModal()],
     ["network-modal", () => $("#network-close")?.click()],
     ["release-modal", () => closeModal($("#release-modal"))],
-    ["request-modal", () => answerContactRequest(false)],
+    ["request-modal", () => dismissContactRequest()],
     ["group-modal", () => closeModal($("#group-modal"))],
   ];
 
@@ -3844,7 +3937,8 @@
   $("#send-btn")?.addEventListener("click", () => sendMessage());
 
   $("#msg-input")?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Not while an IME is composing (CJK / some Android keyboards).
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       sendMessage();
     }
@@ -4098,11 +4192,6 @@
   $("#media-zoom-in")?.addEventListener("click", () => setMediaZoom(0.25));
   $("#media-zoom-out")?.addEventListener("click", () => setMediaZoom(-0.25));
   $("#media-zoom-reset")?.addEventListener("click", resetMediaZoom);
-  $("#media-lightbox-body")?.addEventListener("wheel", (e) => {
-    if (!$("#media-lightbox")?.classList.contains("open")) return;
-    e.preventDefault();
-    setMediaZoom(e.deltaY < 0 ? 0.15 : -0.15);
-  }, { passive: false });
 
   loadUnreadState();
 

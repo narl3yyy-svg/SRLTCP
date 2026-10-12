@@ -43,6 +43,17 @@
 
   const app = () => window.srltcpApp || {};
 
+  // ICE candidates can overtake the offer (separate requests). Keep them per
+  // call id for a short while and hand them over when the offer arrives.
+  const earlyIce = new Map();
+  function stashEarlyIce(from, sig) {
+    const key = `${from}:${sig.call_id}`;
+    const list = earlyIce.get(key) || [];
+    if (list.length < 64) list.push(sig.candidate);
+    earlyIce.set(key, list);
+    setTimeout(() => earlyIce.delete(key), 30000);
+  }
+
   // ICE config for one call. Normally our node's local relay: media then
   // travels inside the encrypted SRLTCP session, so calls work wherever text
   // does (LAN, VPN, hub) without depending on WebRTC finding a direct path.
@@ -285,6 +296,9 @@
       id: sig.call_id, peer: from, peerName: peer?.name || from.slice(0, 8),
       video: !!sig.video, role: "callee", state: "incoming", pendingOffer: sig.sdp,
     });
+    const key = `${from}:${sig.call_id}`;
+    call.pendingIce.push(...(earlyIce.get(key) || []));
+    earlyIce.delete(key);
     showOverlay("incoming");
     setStatus(call.video ? "Incoming video call" : "Incoming voice call");
     app().notifyUser?.(
@@ -338,7 +352,10 @@
       onOffer(from, sig);
       return;
     }
-    if (from !== call.peer || sig.call_id !== call.id) return;
+    if (from !== call.peer || sig.call_id !== call.id) {
+      if (sig.type === "ice" && sig.candidate && sig.call_id) stashEarlyIce(from, sig);
+      return;
+    }
     switch (sig.type) {
       case "answer":
         if (call.role !== "caller" || !call.pc) return;

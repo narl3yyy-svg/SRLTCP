@@ -202,8 +202,18 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         return web.json_response({"removed": ok, "hash_id": hash_id})
 
     async def messages(request: web.Request) -> web.Response:
-        limit = min(int(request.rel_url.query.get("limit", "200")), 1000)
-        return web.json_response(node.backend.get_messages(limit=limit))
+        query = request.rel_url.query
+        try:
+            limit = max(1, min(int(query.get("limit", "200")), 2000))
+        except ValueError:
+            return web.json_response({"error": "invalid limit"}, status=400)
+        peer = query.get("peer", "").lower()
+        group = query.get("group", "").lower()
+        if peer and not is_valid_hash_id(peer):
+            return web.json_response({"error": "invalid peer"}, status=400)
+        if group and not is_valid_group_id(group):
+            return web.json_response({"error": "invalid group"}, status=400)
+        return web.json_response(node.backend.get_messages(limit=limit, peer=peer, group=group))
 
     async def delete_message(request: web.Request) -> web.Response:
         message_id = request.match_info.get("message_id", "")

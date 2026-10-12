@@ -299,6 +299,26 @@ class TransferMixin:
         self._transfer_tasks[transfer_id] = task
 
     async def _handle_file_resume(self: MessagingBackend, hash_id: str, body: bytes) -> None:
+        """FILE_RESUME after a reconnect.
+
+        To the sender it means "continue from my offset" (same as an accept).
+        To the receiver it means "the sender is back": answer with our own
+        on-disk offset, which is authoritative, and the sender restarts.
+        """
+        data = decode_payload(body)
+        try:
+            tid = normalize_transfer_id(str(data.get("transfer_id", "")))
+        except ValueError:
+            return
+        transfer = self._transfers.get(tid)
+        own = self._own_hash_ids()
+        if transfer and transfer.sender_hash == hash_id and transfer.recipient_hash in own:
+            if transfer.state not in (
+                TransferState.COMPLETE, TransferState.CANCELLED,
+                TransferState.FAILED, TransferState.REJECTED,
+            ):
+                await self.resume_transfer(tid)
+            return
         await self._handle_file_accept(hash_id, body)
 
     async def _send_file_chunks(
@@ -533,8 +553,10 @@ class TransferMixin:
             if transfer.state in (
                 TransferState.TRANSFERRING,
                 TransferState.ACCEPTED,
-                TransferState.OFFERED,
             ):
+                # PAUSED so it resumes on the next link-up (either side may dial).
+                transfer.state = TransferState.PAUSED
+                await self._emit_transfer_progress(transfer, force=True)
                 log.info(
                     "Incoming transfer paused after disconnect: %s (%d/%d bytes)",
                     transfer.filename,
@@ -589,9 +611,8 @@ class TransferMixin:
         body = encode_payload({"transfer_id": tid, "offset": transfer.offset})
         packet = await self._encrypt_for_link(link, MessageType.FILE_RESUME, body)
         await self._send_raw(link.transport_peer_id, link.transport, packet)
-        if transfer.sender_hash in self._own_hash_ids():
-            transfer.state = TransferState.TRANSFERRING
-            await self._emit_transfer_progress(transfer, force=True)
+        # The sender restarts its chunk loop when the receiver answers with its
+        # offset (_handle_file_accept), so no state change here.
         return True
 
     def list_transfers(self: MessagingBackend, *, active_only: bool = False) -> list[dict]:
@@ -682,11 +703,12 @@ class TransferMixin:
 
     def has_active_transfer_for(self: MessagingBackend, hash_id: str) -> bool:
         for transfer in self._transfers.values():
+            # PAUSED is not "active": a paused transfer needs the link back, so it
+            # must not suppress reconnects or dead-link detection.
             if transfer.state not in (
                 TransferState.TRANSFERRING,
                 TransferState.ACCEPTED,
                 TransferState.OFFERED,
-                TransferState.PAUSED,
             ):
                 continue
             if transfer.recipient_hash == hash_id or transfer.sender_hash == hash_id:

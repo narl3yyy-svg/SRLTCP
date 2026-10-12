@@ -410,11 +410,16 @@ class ConnectMixin:
         if not self.has_active_transfer_for(remote_hash):
             await self.ping_peer(remote_hash)
         await self._resume_paused_transfers_for_peer(remote_hash)
-        if self._on_link_up:
-            await self._on_link_up(remote_hash, link.peer_name)
-        if self._on_peer_metrics:
-            metrics = self.get_peer_metrics(remote_hash)
-            await self._on_peer_metrics(remote_hash, metrics)
+        # A failing UI callback must not stop queued messages from going out:
+        # link_up_announced is already set, so this block never runs again.
+        try:
+            if self._on_link_up:
+                await self._on_link_up(remote_hash, link.peer_name)
+            if self._on_peer_metrics:
+                metrics = self.get_peer_metrics(remote_hash)
+                await self._on_peer_metrics(remote_hash, metrics)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Link-up UI callback failed for %s: %s", remote_hash[:8], exc)
         await self._send_pending_pair(remote_hash)
         await self.sync_groups_with(remote_hash)
         if self.is_trusted(remote_hash):

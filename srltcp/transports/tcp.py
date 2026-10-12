@@ -14,6 +14,10 @@ from srltcp.utils.ports import bind_udp_port, start_tcp_server
 
 log = get_logger(__name__)
 
+# Hard cap on open TCP connections (a phone has a handful of contacts; a hub
+# a few hundred members).
+MAX_CONNECTIONS = 512
+
 
 class TCPTransport(Transport):
     name = "tcp"
@@ -50,6 +54,10 @@ class TCPTransport(Transport):
         async def _handle(
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
+            if len(self._connections) >= MAX_CONNECTIONS:
+                log.warning("Too many TCP connections; refusing a new one")
+                writer.close()
+                return
             peer_addr = writer.get_extra_info("peername")
             address = f"{peer_addr[0]}:{peer_addr[1]}" if peer_addr else "unknown"
             peer_id = str(uuid.uuid4())

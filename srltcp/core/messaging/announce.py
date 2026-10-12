@@ -310,10 +310,18 @@ class AnnounceMixin:
             )
         # Keep trusted contacts reachable when their IP changes (DHCP, VPN, roaming).
         trusted = self.trusted.get(peer.hash_id)
-        fresh = abs(time.time() - float(peer.metadata.get("ts") or 0)) < 300
+        ann_ts = float(peer.metadata.get("ts") or 0)
+        fresh = abs(time.time() - ann_ts) < 300
+        # Only an announce newer than any we have seen from this identity may
+        # move it: a captured copy re-sent from another IP is never newer.
+        seen_ts = self.__dict__.setdefault("_announce_seen_ts", {})
+        newer = ann_ts > seen_ts.get(peer.hash_id, 0.0)
+        if fresh and newer:
+            seen_ts[peer.hash_id] = ann_ts
         if (
             trusted
             and fresh  # a replayed old announce must not redirect a contact
+            and newer
             and peer.transport == "tcp"
             and peer.tcp_host
             and (trusted.tcp_host != peer.tcp_host or trusted.tcp_port != peer.tcp_port)
