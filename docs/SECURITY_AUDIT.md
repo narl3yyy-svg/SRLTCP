@@ -68,7 +68,30 @@ handshake v4 names the recipient).
 
 ## Results — internet relay (`pentest_relay.py`)
 
-RELAY_RESULTS_PLACEHOLDER
+**36 PASS, 0 FAIL** (plus tests/test_relay.py and the namespace simulation).
+
+| Attacker | Attacks | Result |
+|---|---|---|
+| Internet stranger at the relay port | no/wrong access key, wrong protocol version (same answer as a wrong key: no oracle), commands before HELLO, slow TLS/HELLO (15 s deadline), TLS 1.2 downgrade, non-TLS junk, oversized frames, frame-length lies, 1000+ mailbox subscriptions, subscription storms, send floods, slow-reading receiver, total and per-IP connection caps | defended |
+| Relay operator (has the certificate and access key) | read traffic, find names/identity hashes/public keys/message types/plaintext in relayed bytes, inject junk/huge/unknown-mailbox packets, replay genuine packets, reflect a client's own packets back, deliver one contact's packets on another's mailbox, impersonate a contact on its mailbox | defended — sees only padded opaque blobs (256 B buckets observed), rotating tokens |
+| Network attacker between phone and relay | impersonate the relay | refused: certificate pin checked before the access key is sent (0 HELLO frames reached the fake relay) |
+| Malicious trusted contact | bogus/oversized/host-injection relay codes in RENDEZVOUS, rapid contribution churn, pointing the pair at its own relay, a different identity answering a direct-upgrade attempt | defended / bounded (see below) |
+| Untrusted peer | RENDEZVOUS | dropped (trust gate) |
+| Another node | replay a handshake captured for someone else | refused (v4 recipient binding) |
+| Local API | read pair secrets or relay keys via /api/trusted, /api/status, settings | not exposed (only your own relay code, token-protected) |
+
+Hardening applied from the INFO notes:
+
+- A contact's relay code may no longer point at link-local, multicast, reserved or
+  unspecified addresses (LAN and loopback stay allowed — self-hosted relays live
+  there). Even before, the certificate pin stopped any data from reaching a wrong
+  endpoint; this removes the "make the phone probe an internal address" angle.
+- A contact can change its relay details at most once a minute, so a malicious
+  contact can't turn RENDEZVOUS floods into constant contact-file rewrites.
+
+Remaining INFO (by design): the relay answers "nobody listening" for a mailbox
+(only computable by the two contacts, so it reveals presence only to the contact),
+and it sees IPs, timing and volume.
 
 ## What remains (by design)
 
