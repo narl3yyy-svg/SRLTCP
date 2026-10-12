@@ -83,10 +83,8 @@ class SRLTCPNode:
         self.config.enable_serial = settings.enable_serial
         self.config.serial_port = settings.serial_port
         self.config.serial_baud = settings.serial_baud
-        self.config.hub_enabled = settings.hub_enabled
-        self.config.hub_host = settings.hub_host
-        self.config.hub_lan_host = settings.hub_lan_host
-        self.config.hub_port = settings.hub_port
+        self.config.relay_enabled = settings.relay_enabled
+        self.config.relay_code = settings.relay_code
         self.config.handshake_protocol = settings.handshake_protocol
         incoming = str(settings.resolved_incoming_dir())
         self.config.incoming_dir = incoming
@@ -99,7 +97,7 @@ class SRLTCPNode:
         if settings.auto_announce != old_announce:
             await self.backend.set_auto_announce(settings.auto_announce)
         await self.backend.apply_serial_transport()
-        await self.backend.apply_hub_settings()
+        await self.backend.apply_relay_settings()
         if settings.message_retention_hours == 0:
             self.backend.clear_messages()
 
@@ -119,7 +117,7 @@ class SRLTCPNode:
             tcp_host=peer.tcp_host,
             tcp_port=peer.tcp_port,
         )
-        result = self.backend.trusted.add(trusted).to_dict()
+        result = self.backend.trusted.add(trusted).public_dict()
         self.backend.discovery.remove(hash_id)
         return result
 
@@ -159,8 +157,7 @@ class SRLTCPNode:
     def status(self) -> dict[str, Any]:
         return {
             "name": self.config.name,
-            "hub_mode": self.config.hub_mode,
-            "hub": self.backend.hub_status(),
+            "relay": self.backend.relay_status(),
             "identities": self.backend.get_identities(),
             "links": self.backend.list_links(),
             "peers": self.backend.get_discovered_peers(),

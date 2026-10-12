@@ -11,6 +11,7 @@ from srltcp.core.protocol.messages import MessageType, build_header, decode_payl
 from srltcp.utils.logging import get_logger
 
 LINK_DEAD_AFTER = 3.5 * PING_INTERVAL  # ~50 s without any frame or pong
+NETWORK_CHECK_EVERY = 3.0
 
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
@@ -71,6 +72,33 @@ class PingMixin:
                 await asyncio.sleep(PING_INTERVAL)
 
         self._ping_tasks.append(asyncio.create_task(_loop()))
+        self._ping_tasks.append(asyncio.create_task(self._watch_network()))
+
+    async def _watch_network(self: MessagingBackend) -> None:
+        """Notice right away when an interface goes away (VPN switched off,
+        Wi-Fi lost): drop direct sessions that used it so they move to the
+        relay within seconds instead of waiting ~50 s for pings to fail."""
+        last: set[str] = set()
+        while self._running:
+            await asyncio.sleep(NETWORK_CHECK_EVERY)
+            try:
+                ips = await asyncio.to_thread(self._own_ips)
+            except Exception:  # noqa: BLE001 - best effort
+                continue
+            if last and ips != last and self.tcp_transport:
+                for hash_id, link in list(self._links.items()):
+                    if link.transport != "tcp":
+                        continue
+                    local = self.tcp_transport.local_ip(link.transport_peer_id)
+                    if local and local not in ips and local not in ("127.0.0.1", "::1"):
+                        log.info("Interface %s went away — moving %s off it", local, hash_id[:8])
+                        name = link.peer_name
+                        await self._teardown_link(hash_id)
+                        if self._on_link_down:
+                            await self._on_link_down(hash_id, name)
+                        self._kick_connect(hash_id)
+                await self.relay_network_changed(ips)
+            last = ips
 
     async def stop_ping_loop(self: MessagingBackend) -> None:
         tasks = list(self._ping_tasks)

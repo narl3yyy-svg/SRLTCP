@@ -15,6 +15,7 @@ from srltcp import __version__
 from srltcp.core.messaging.groups import GroupError, is_valid_group_id
 from srltcp.core.messaging.share_peer import SHARE_DOWNLOAD_LIMITS, SHARE_TTL_SECONDS
 from srltcp.core.protocol.messages import is_valid_transfer_id
+from srltcp.core.relay_proto import RelayCode, RelayCodeError
 from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.core.trusted import TrustedPeer, is_valid_hash_id
 from srltcp.utils.folders import list_directory
@@ -107,7 +108,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                         wan_enabled=bool(data.get("wan_enabled")),
                         connection_mode=connection_mode,
                     )
-                ).to_dict()
+                ).public_dict()
             except ValueError as exc:
                 return web.json_response({"error": str(exc)}, status=400)
         return web.json_response(peer)
@@ -185,7 +186,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response({"error": "peer not found"}, status=404)
         if blocked is True:
             await node.backend.disconnect_peer(hash_id)
-        return web.json_response(peer.to_dict())
+        return web.json_response(peer.public_dict())
 
     async def trusted_clear_chat(request: web.Request) -> web.Response:
         hash_id = request.match_info.get("hash_id", "")
@@ -227,6 +228,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         recipient = data.get("recipient_hash", "")
         text = str(data.get("text", ""))[:65536]
         transport = data.get("transport", "tcp")
+        if transport not in ("tcp", "serial", "relay"):
+            transport = "tcp"
         if not recipient or not text.strip():
             return web.json_response({"error": "recipient_hash and text required"}, status=400)
         if not node.backend.is_trusted(recipient):
@@ -710,26 +713,14 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         updated.web_port = max(1024, min(updated.web_port, 65535))
         updated.tcp_port = max(1024, min(updated.tcp_port, 65535))
         updated.discovery_port = max(1024, min(updated.discovery_port, 65535))
-        updated.hub_port = max(1024, min(updated.hub_port or 7825, 65535))
-        if updated.hub_enabled:
-            if not updated.hub_host.strip() and not updated.hub_lan_host.strip():
-                return web.json_response(
-                    {"error": "hub server host or hub LAN address required"},
-                    status=400,
-                )
-            from srltcp.utils.wan import validate_hub_host
-
-            for field_name in ("hub_host", "hub_lan_host"):
-                val = str(getattr(updated, field_name, "")).strip()
-                if not val:
-                    continue
-                try:
-                    validate_hub_host(val)
-                except ValueError as exc:
-                    return web.json_response(
-                        {"error": f"{field_name}: {exc}"},
-                        status=400,
-                    )
+        updated.relay_enabled = bool(updated.relay_enabled)
+        relay_text = str(updated.relay_code or "").strip()
+        if relay_text:
+            try:
+                relay_text = RelayCode.parse(relay_text).encode()
+            except RelayCodeError as exc:
+                return web.json_response({"error": f"Internet relay: {exc}"}, status=400)
+        updated.relay_code = relay_text
         if updated.clock_source not in ("system", "ntp"):
             updated.clock_source = "system"
         if updated.handshake_protocol not in ("identity", "noise_xx"):

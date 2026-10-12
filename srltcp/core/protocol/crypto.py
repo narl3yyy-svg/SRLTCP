@@ -46,15 +46,28 @@ class SessionKeys:
     salt: bytes
 
 
-HANDSHAKE_SIG_CONTEXT = b"srltcp-hs-v3"
+HANDSHAKE_SIG_CONTEXT = b"srltcp-hs-v4"
 HANDSHAKE_MAX_SKEW = 600.0  # seconds; rejects replayed handshakes older than this
 _SEND_INFO_LOW = b"srltcp-v3-low-to-high"
 _SEND_INFO_HIGH = b"srltcp-v3-high-to-low"
 
 
-def handshake_signed_bytes(ephemeral: bytes, timestamp: int) -> bytes:
-    """Bytes covered by the identity signature in the default handshake."""
-    return HANDSHAKE_SIG_CONTEXT + ephemeral + struct.pack(">Q", max(0, int(timestamp)))
+def handshake_signed_bytes(
+    ephemeral: bytes, timestamp: int, sender_hash: str, recipient_hash: str
+) -> bytes:
+    """Bytes covered by the identity signature in the default handshake.
+
+    Naming both the sender and the intended recipient means a handshake seen
+    by one node (or on the network) can't be replayed to a different node.
+    """
+    return (
+        HANDSHAKE_SIG_CONTEXT
+        + ephemeral
+        + struct.pack(">Q", max(0, int(timestamp)))
+        + sender_hash.encode("ascii")
+        + b"|"
+        + recipient_hash.encode("ascii")
+    )
 
 
 class KeyExchange:
@@ -78,9 +91,9 @@ class KeyExchange:
             format=serialization.PublicFormat.Raw,
         )
 
-    def sign_ephemeral(self) -> bytes:
+    def sign_ephemeral(self, own_hash: str, peer_hash: str) -> bytes:
         return self._ed_private.sign(
-            handshake_signed_bytes(self.ephemeral_public, self.timestamp)
+            handshake_signed_bytes(self.ephemeral_public, self.timestamp, own_hash, peer_hash)
         )
 
     def complete(
@@ -90,6 +103,8 @@ class KeyExchange:
         peer_ed_public: Ed25519PublicKey,
         *,
         peer_timestamp: int,
+        own_hash: str,
+        peer_hash: str,
         initiator: bool | None = None,
         now: float | None = None,
     ) -> SessionKeys:
@@ -108,7 +123,8 @@ class KeyExchange:
         if peer_ephemeral == own:
             raise ValueError("reflected handshake")
         peer_ed_public.verify(
-            peer_signature, handshake_signed_bytes(peer_ephemeral, peer_timestamp)
+            peer_signature,
+            handshake_signed_bytes(peer_ephemeral, peer_timestamp, peer_hash, own_hash),
         )
         peer_x = X25519PublicKey.from_public_bytes(peer_ephemeral)
         shared = self._x_private.exchange(peer_x)
@@ -188,40 +204,6 @@ class CryptoBox:
             if len(self._recv_seen) > REPLAY_WINDOW * 2:
                 self._recv_seen = {c for c in self._recv_seen if c > floor}
         return plaintext
-
-
-def _hash_to_token(hash_id: str) -> bytes:
-    cleaned = hash_id.strip().lower()
-    if len(cleaned) != 32 or any(c not in "0123456789abcdef" for c in cleaned):
-        raise ValueError("hash_id must be 32 lowercase hex chars")
-    return bytes.fromhex(cleaned)
-
-
-def relay_wrap(
-    inner_payload: bytes,
-    dest_hash: str,
-    *,
-    src_hash: str | None = None,
-) -> bytes:
-    """
-    Wrap an E2EE payload for hub forwarding.
-    Hub sees only routing tokens (16-byte hash prefixes) + opaque blob.
-    """
-    dest = _hash_to_token(dest_hash)
-    if src_hash:
-        src = _hash_to_token(src_hash)
-        return dest + src + inner_payload
-    return dest + inner_payload
-
-
-def relay_unwrap(wrapped: bytes) -> tuple[str, str | None, bytes]:
-    if len(wrapped) < 16:
-        raise ValueError("relay envelope too short")
-    dest_hash = wrapped[:16].hex()
-    if len(wrapped) >= 32:
-        src_hash = wrapped[16:32].hex()
-        return dest_hash, src_hash, wrapped[32:]
-    return dest_hash, None, wrapped[16:]
 
 
 def sign_bytes(private_key: Ed25519PrivateKey, data: bytes) -> bytes:

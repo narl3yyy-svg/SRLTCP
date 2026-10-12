@@ -18,18 +18,18 @@ cd SRLTCP
 
 Open the URL printed in the terminal (`https://127.0.0.1:9876/?token=…`; `srltcp url` prints it again).
 
-### Test hub mode locally
+### Test the internet relay locally
 
 ```bash
-# Terminal 1 — hub
-./run.sh hub --port 7825
+# Terminal 1 — relay (prints a srltcp-relay:// code)
+./run.sh relay --public-host 127.0.0.1
 
-# Terminal 2 & 3 — clients (different names)
+# Terminal 2 & 3 — clients (different names / ports, see ./run.sh web --help)
 ./run.sh web --name alice
-./run.sh web --name bob
+./run.sh web --name bob --port 9877 --tcp-port 7835 --discovery-port 7836
 ```
 
-In each client: **Settings → Network** → enable hub → `127.0.0.1:7825` → Save (clients register automatically) → trust each other under *Discovered*, or use **Pair** → chat.
+Pair the clients, paste the relay code in one client (*Settings → Network → Internet relay*). Automated: `pytest tests/test_relay.py`, `sudo bash scripts/simulate_internet.sh` (real WireGuard + relay in network namespaces), `python scripts/pentest/pentest_relay.py` and `scripts/pentest/pentest_local.py`.
 
 ## Development Setup
 
@@ -80,8 +80,8 @@ pre-commit run --all-files
 
 | Path | Purpose |
 |------|---------|
-| `srltcp/core/` | Messaging, handshake, transfers, discovery, hub |
-| `srltcp/core/messaging/hub.py` | Hub client + server forwarding |
+| `srltcp/core/` | Messaging, handshake, transfers, discovery, relay protocol and server |
+| `srltcp/core/messaging/relay.py` | Internet relay client + direct/relay switching |
 | `srltcp/core/messaging/pairing.py` | Contact cards (QR / link / NFC) |
 | `srltcp/web/static/calls.js` | WebRTC voice/video calls |
 | `srltcp/transports/` | TCP and serial transports |

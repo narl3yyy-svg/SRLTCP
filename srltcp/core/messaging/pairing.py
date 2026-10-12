@@ -245,7 +245,7 @@ class PairingMixin:
                 await self._send_pending_pair(card.hash_id)
             else:
                 self._kick_connect(card.hash_id)
-        return peer.to_dict()
+        return peer.public_dict()
 
     async def _send_pending_pair(self: MessagingBackend, hash_id: str) -> None:
         token = self._outgoing_pair_tokens.get(hash_id)

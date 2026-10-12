@@ -71,8 +71,6 @@ class AnnounceMixin:
 
     def is_discoverable(self: MessagingBackend) -> bool:
         """Answer other devices' announces only while we are announcing ourselves."""
-        if self.config.hub_mode:
-            return False
         if self.config.announce:
             return True
         return time.monotonic() - self._last_manual_announce < DISCOVERABLE_AFTER_MANUAL
@@ -115,7 +113,7 @@ class AnnounceMixin:
 
     async def sweep_vpn(self: MessagingBackend) -> int:
         """Unicast our announce across VPN subnets (WireGuard carries no broadcast)."""
-        if not self.tcp_transport or (hasattr(self, "_hub_enabled") and self._hub_enabled()):
+        if not self.tcp_transport:
             return 0
         hosts = await asyncio.to_thread(sweep_targets, self._own_ips())
         if not hosts:
@@ -187,9 +185,7 @@ class AnnounceMixin:
 
         payload = self.build_announce_payload(transport_name)
         if transport_name == "tcp":
-            if hasattr(self, "_hub_enabled") and self._hub_enabled():
-                await self._send_hub_register()
-            elif not self.tcp_transport:
+            if not self.tcp_transport:
                 raise AnnounceError(transport_name, "TCP transport is not enabled")
             else:
                 self.tcp_transport.set_announce_payload(payload)
@@ -318,6 +314,10 @@ class AnnounceMixin:
         newer = ann_ts > seen_ts.get(peer.hash_id, 0.0)
         if fresh and newer:
             seen_ts[peer.hash_id] = ann_ts
+            if len(seen_ts) > 4096:  # bounded against floods of fresh identities
+                for key in sorted(seen_ts, key=seen_ts.__getitem__)[:2048]:
+                    if not self.trusted.get(key):
+                        del seen_ts[key]
         if (
             trusted
             and fresh  # a replayed old announce must not redirect a contact
@@ -345,7 +345,7 @@ class AnnounceMixin:
         src_ip = address.rsplit(":", 1)[0] if ":" in address else ""
         if (
             peer.transport == "tcp"
-            and address != "hub"
+            and address != "relay"
             and not peer.metadata.get("reply")
             and (self.is_discoverable() or (src_ip and in_vpn_subnet(src_ip)))
         ):

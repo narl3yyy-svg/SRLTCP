@@ -11,7 +11,9 @@ FRAME_MAGIC = b"SRL\x01"
 HEADER_FMT = ">4sI"  # magic + payload length (uint32 BE)
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
 CRC_SIZE = 4
-MAX_FRAME_SIZE = 64 * 1024 * 1024  # 64 MiB per frame
+# Largest frame anyone may send us. File chunks are 1 MiB, so 4 MiB is plenty;
+# kept small because unauthenticated connections can also make us buffer it.
+MAX_FRAME_SIZE = 4 * 1024 * 1024
 
 
 def crc32(data: bytes) -> int:

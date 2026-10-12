@@ -424,7 +424,7 @@
 
   function transportBadge(transport) {
     const t = (transport || "tcp").toLowerCase();
-    const label = t === "serial" ? "SERIAL" : t === "hub" ? "HUB" : "TCP";
+    const label = t === "serial" ? "SERIAL" : t === "relay" ? "RELAY" : "TCP";
     return `<span class="transport-badge ${t}">${label}</span>`;
   }
 
@@ -710,6 +710,27 @@
     } finally {
       state.loadingPeers = false;
     }
+  }
+
+  /* Settings → Network: what the internet relay is doing right now. */
+  function renderRelayStatus(relay) {
+    const el = $("#relay-status");
+    if (!el || !relay) return;
+    if (!relay.enabled) {
+      el.textContent = "Off — contacts are only reached over LAN / VPN.";
+      el.className = "relay-status";
+      return;
+    }
+    const rows = (relay.relays || []).map((r) => {
+      const who = r.own ? "your relay" : "a contact's relay";
+      const state = r.connected ? "connected" : r.error ? `not connected: ${r.error}` : "connecting…";
+      const n = r.contacts ? ` · ${r.contacts} contact${r.contacts === 1 ? "" : "s"}` : "";
+      return `${r.address} (${who}) — ${state}${n}`;
+    });
+    el.textContent = rows.length
+      ? rows.join("\n")
+      : "No relay yet: paste a code here, or a contact with one shares it automatically.";
+    el.className = `relay-status ${(relay.relays || []).some((r) => r.connected) ? "ok" : ""}`;
   }
 
   /* ── Group chats ── */
@@ -1593,17 +1614,10 @@
   async function announceTransport(transport) {
     const btn = transport === "tcp" ? $("#btn-announce-tcp") : $("#btn-announce-serial");
     const status = state.transportStatus?.[transport];
-    if (transport === "tcp" && state.settings?.hub_enabled) {
-      if (!state.transportStatus?.hub?.connected) {
-        toast("Hub not connected — check hub host in Settings → Network", "error");
-        return;
-      }
-    } else if (btn?.disabled || status && !status.active) {
+    if (btn?.disabled || status && !status.active) {
       const hint = transport === "serial"
         ? "Serial port not open — enable serial in settings and check /dev permissions"
-        : state.settings?.hub_enabled
-          ? "Hub not connected — check hub host in Settings → Network"
-          : "TCP transport unavailable — restart the node";
+        : "TCP transport unavailable — restart the node";
       toast(hint);
       return;
     }
@@ -1617,10 +1631,7 @@
       return;
     }
     const bursts = data.bursts || 3;
-    const hubMsg = state.settings?.hub_enabled && transport === "tcp";
-    toast(hubMsg
-      ? `Registered on hub (${bursts}× burst)`
-      : `Announced on ${transport.toUpperCase()} (${bursts}× burst)`);
+    toast(`Announced on ${transport.toUpperCase()} (${bursts}× burst)`);
     logActivity(`Announced on ${transport}`);
     setTimeout(loadPeers, 800);
     setTimeout(loadPeers, 2000);
@@ -1644,7 +1655,7 @@
       return;
     }
     const transport = activeLinkTransport(hashId);
-    const label = transport === "serial" ? "SERIAL" : transport === "hub" ? "HUB" : "TCP";
+    const label = transport === "serial" ? "SERIAL" : transport === "relay" ? "RELAY" : "TCP";
     badge.textContent = label;
     badge.className = `transport-badge header-badge ${transport}`;
     badge.removeAttribute("aria-hidden");
@@ -2267,10 +2278,8 @@
     setInputValue("set-incoming", settings.incoming_files_dir || "");
     setInputValue("set-shared", settings.shared_folder || "");
     setCheckbox("set-auto-announce", !!settings.auto_announce);
-    setCheckbox("set-hub-enabled", !!settings.hub_enabled);
-    setInputValue("set-hub-host", settings.hub_host || "");
-    setInputValue("set-hub-lan-host", settings.hub_lan_host || "");
-    setInputValue("set-hub-port", String(settings.hub_port || 7825));
+    setCheckbox("set-relay-enabled", settings.relay_enabled !== false);
+    setInputValue("set-relay-code", settings.relay_code || "");
     setCheckbox("set-wan-expose", !!settings.wan_expose_port);
     setSelectValue("set-handshake-protocol", settings.handshake_protocol || "identity");
     setCheckbox("set-enable-serial", !!settings.enable_serial);
@@ -2298,7 +2307,7 @@
       setup_complete: complete,
     });
     if (!ok) {
-      toast("Failed to save settings", "error");
+      toast(data?.error || "Failed to save settings", "error");
       return false;
     }
     state.settings = data || state.settings;
@@ -2596,18 +2605,13 @@
 
     const tcpBtn = $("#btn-announce-tcp");
     if (tcpBtn) {
-      const hubOn = !!state.settings?.hub_enabled;
-      const hubConnected = !!transportStatus.hub?.connected;
       const tcpActive = !!transportStatus.tcp?.active;
-      tcpBtn.disabled = hubOn ? !hubConnected : !tcpActive;
-      tcpBtn.title = hubOn
-        ? (hubConnected
-          ? "Announce on hub — discover other hub users"
-          : "Hub not connected — check Settings → Network")
-        : (tcpActive
-          ? "Announce on TCP/LAN"
-          : "TCP transport unavailable — restart the node");
+      tcpBtn.disabled = !tcpActive;
+      tcpBtn.title = tcpActive
+        ? "Announce on TCP/LAN"
+        : "TCP transport unavailable — restart the node";
     }
+    renderRelayStatus(transportStatus.relay);
 
     const serialBtn = $("#btn-announce-serial");
     if (serialBtn) {
@@ -2700,7 +2704,7 @@
         if (linked && !metrics.length) metrics.push("online");
         const endpoint = peerEndpoint(p);
         const metricsStr = metrics.length ? ` · ${metrics.join(" · ")}` : "";
-        const meta = `${transportBadge(p.transport)}<span class="contact-endpoint">${escapeHtml(endpoint)}${escapeHtml(metricsStr)}</span>`;
+        const meta = `${transportBadge(linked ? activeLinkTransport(p.hash_id) : p.transport)}<span class="contact-endpoint">${escapeHtml(endpoint)}${escapeHtml(metricsStr)}</span>`;
         const isRequest = !!p.metadata?.contact_request;
         const trustBtn = state.peerTab === "discovered" && !trustedIds.has(p.hash_id)
           ? `<button type="button" class="contact-trust" data-trust="${p.hash_id}">${isRequest ? "Accept" : "Trust"}</button>` : "";
@@ -3057,7 +3061,7 @@
   }
 
   const STATUS_HINTS = {
-    pending: "Waiting to send — goes out automatically when they are reachable (same Wi-Fi, VPN or hub)",
+    pending: "Waiting to send — goes out automatically when they are reachable (same Wi-Fi, VPN or internet relay)",
     sent: "Sent — not confirmed yet; resent automatically until they receive it",
     delivered: "Delivered",
     not_trusted: "They have not accepted you yet",
@@ -3993,10 +3997,8 @@
       shared_folder: $(`#${prefix}-shared`)?.value.trim() || "",
       lan_ip: $(`#${prefix}-lan-ip`)?.value || "",
       auto_announce: $(`#${prefix}-auto-announce`)?.checked || false,
-      hub_enabled: $("#set-hub-enabled")?.checked || false,
-      hub_host: ($("#set-hub-host")?.value || "").trim(),
-      hub_lan_host: ($("#set-hub-lan-host")?.value || "").trim(),
-      hub_port: parseInt($("#set-hub-port")?.value || "7825", 10),
+      relay_enabled: $("#set-relay-enabled")?.checked ?? true,
+      relay_code: ($("#set-relay-code")?.value || "").trim(),
       wan_expose_port: $("#set-wan-expose")?.checked || false,
       handshake_protocol: $("#set-handshake-protocol")?.value || "identity",
       enable_serial: $("#set-enable-serial")?.checked || false,

@@ -101,15 +101,15 @@ class AppSettings:
     clock_source: str = "system"
     ntp_server: str = "pool.ntp.org"
     wan_expose_port: bool = False
-    hub_enabled: bool = False
-    hub_host: str = ""
-    hub_lan_host: str = ""
-    hub_port: int = DEFAULT_TCP_PORT
+    # Internet relay (srltcp relay): code pasted by the user; contacts get it
+    # inside the encrypted session. Direct LAN/VPN paths are always preferred.
+    relay_enabled: bool = True
+    relay_code: str = ""
     handshake_protocol: str = "identity"
     call_stun_server: str = ""  # stun:/turn:/turns: URL (empty = direct only)
     call_turn_username: str = ""
     call_turn_password: str = ""
-    version: str = "0.4.1"
+    version: str = "0.5.0"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

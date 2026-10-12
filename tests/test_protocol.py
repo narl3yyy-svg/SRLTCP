@@ -81,16 +81,20 @@ def test_key_exchange_e2ee() -> None:
 
     alice_keys = alice_kx.complete(
         bob_kx.ephemeral_public,
-        bob_kx.sign_ephemeral(),
+        bob_kx.sign_ephemeral(bob.hash_id, alice.hash_id),
         bob.public_key,
         peer_timestamp=bob_kx.timestamp,
+        own_hash=alice.hash_id,
+        peer_hash=bob.hash_id,
         initiator=True,
     )
     bob_keys = bob_kx.complete(
         alice_kx.ephemeral_public,
-        alice_kx.sign_ephemeral(),
+        alice_kx.sign_ephemeral(alice.hash_id, bob.hash_id),
         alice.public_key,
         peer_timestamp=alice_kx.timestamp,
+        own_hash=bob.hash_id,
+        peer_hash=alice.hash_id,
         initiator=False,
     )
 
@@ -101,3 +105,24 @@ def test_key_exchange_e2ee() -> None:
     ciphertext = alice_box.encrypt(plaintext)
     decrypted = bob_box.decrypt(ciphertext)
     assert decrypted == plaintext
+
+def test_handshake_signature_is_bound_to_its_recipient() -> None:
+    """A handshake made for Bob can't be replayed to Carol (protocol v4)."""
+    import pytest
+    from cryptography.exceptions import InvalidSignature
+
+    alice = Identity.generate("alice", "tcp")
+    bob = Identity.generate("bob", "tcp")
+    carol = Identity.generate("carol", "tcp")
+    alice_kx = KeyExchange(alice.private_key)
+    sig_for_bob = alice_kx.sign_ephemeral(alice.hash_id, bob.hash_id)
+    carol_kx = KeyExchange(carol.private_key)
+    with pytest.raises(InvalidSignature):
+        carol_kx.complete(
+            alice_kx.ephemeral_public,
+            sig_for_bob,
+            alice.public_key,
+            peer_timestamp=alice_kx.timestamp,
+            own_hash=carol.hash_id,
+            peer_hash=alice.hash_id,
+        )

@@ -34,16 +34,20 @@ def test_key_exchange_initiator_responder_swap() -> None:
 
     alice_keys = alice_kx.complete(
         bob_kx.ephemeral_public,
-        bob_kx.sign_ephemeral(),
+        bob_kx.sign_ephemeral(bob.hash_id, alice.hash_id),
         bob.public_key,
         peer_timestamp=bob_kx.timestamp,
+        own_hash=alice.hash_id,
+        peer_hash=bob.hash_id,
         initiator=True,
     )
     bob_keys = bob_kx.complete(
         alice_kx.ephemeral_public,
-        alice_kx.sign_ephemeral(),
+        alice_kx.sign_ephemeral(alice.hash_id, bob.hash_id),
         alice.public_key,
         peer_timestamp=alice_kx.timestamp,
+        own_hash=bob.hash_id,
+        peer_hash=alice.hash_id,
         initiator=False,
     )
 

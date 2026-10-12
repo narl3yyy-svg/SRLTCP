@@ -30,15 +30,12 @@ class MessageType(IntEnum):
     SHARE_REQUEST = 0x41
     RECEIPT = 0x21
     PAIR = 0x22
+    RENDEZVOUS = 0x23  # pair-secret contribution + relay code (internet relay)
     CALL_SIGNAL = 0x60
     CALL_MEDIA = 0x61
     GROUP_UPDATE = 0x70
     GROUP_TEXT = 0x71
     GROUP_LEAVE = 0x72
-    RELAY_ENVELOPE = 0x50
-    HUB_REGISTER = 0x52
-    HUB_PRESENCE = 0x53
-    HUB_DEPART = 0x54
     ERROR = 0xFF
 
 
@@ -56,6 +53,7 @@ SESSION_MESSAGE_TYPES = frozenset(
         MessageType.TEXT,
         MessageType.RECEIPT,
         MessageType.PAIR,
+        MessageType.RENDEZVOUS,
         MessageType.FILE_OFFER,
         MessageType.FILE_ACCEPT,
         MessageType.FILE_REJECT,

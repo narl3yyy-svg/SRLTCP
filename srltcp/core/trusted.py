@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
 import time
 from dataclasses import asdict, dataclass, field
@@ -52,9 +54,22 @@ class TrustedPeer:
     added_at: float = field(default_factory=time.time)
     # Other addresses from the contact card (e.g. Wi-Fi + WireGuard), tried in order.
     alt_hosts: list[str] = field(default_factory=list)
+    # Internet relay (relay.py): our and their random contribution to the pair
+    # secret, and their relay code. Secret material — never sent to the UI.
+    pair_own: str = ""
+    pair_peer: str = ""
+    relay_code_peer: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def public_dict(self) -> dict[str, Any]:
+        """What the local UI/API may see: no pair secrets or relay keys."""
+        data = asdict(self)
+        for key in ("pair_own", "pair_peer", "relay_code_peer"):
+            data.pop(key, None)
+        data["relay_ready"] = bool(self.pair_own and self.pair_peer)
+        return data
 
 
 class TrustedStore:
@@ -87,9 +102,21 @@ class TrustedStore:
             self.save()
 
     def save(self) -> None:
+        # Owner-only and atomic: the file holds the relay pair secrets.
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {"peers": [p.to_dict() for p in self._peers.values()]}
-        self.path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp = self.path.with_suffix(".json.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, self.path)
+        except OSError:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+            raise
+        with contextlib.suppress(OSError):
+            os.chmod(self.path, 0o600)
 
     def is_trusted(self, hash_id: str) -> bool:
         peer = self._peers.get(hash_id)
@@ -148,6 +175,9 @@ class TrustedStore:
         wan_enabled: bool | None = None,
         connection_mode: str | None = None,
         alt_hosts: list[str] | None = None,
+        pair_own: str | None = None,
+        pair_peer: str | None = None,
+        relay_code_peer: str | None = None,
     ) -> TrustedPeer | None:
         peer = self._peers.get(hash_id)
         if not peer:
@@ -170,5 +200,11 @@ class TrustedStore:
             peer.connection_mode = connection_mode
         if alt_hosts is not None:
             peer.alt_hosts = [h.strip() for h in alt_hosts if h.strip()][:4]
+        if pair_own is not None:
+            peer.pair_own = pair_own
+        if pair_peer is not None:
+            peer.pair_peer = pair_peer
+        if relay_code_peer is not None:
+            peer.relay_code_peer = relay_code_peer
         self.save()
         return peer

@@ -149,6 +149,14 @@ class TCPTransport(Transport):
     def has_peer(self, peer_id: str) -> bool:
         return peer_id in self._connections
 
+    def local_ip(self, peer_id: str) -> str:
+        """Our address on this connection (which interface it uses)."""
+        conn = self._connections.get(peer_id)
+        if not conn:
+            return ""
+        sockname = conn.writer.get_extra_info("sockname")
+        return str(sockname[0]) if sockname else ""
+
     def update_peer_id(self, old_id: str, new_id: str, metadata: dict[str, Any]) -> None:
         conn = self._connections.pop(old_id, None)
         if not conn:

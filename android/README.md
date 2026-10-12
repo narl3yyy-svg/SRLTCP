@@ -41,7 +41,7 @@ bash scripts/build-android.sh
 Output:
 
 ```
-android/app/build/outputs/apk/debug/SRLTCP-0.4.1.apk
+android/app/build/outputs/apk/debug/SRLTCP-0.5.0.apk
 ```
 
 ### Manual steps
@@ -106,11 +106,11 @@ Incoming and shared files default to `Downloads/SRLTCP/` when storage access is 
 - Network interfaces (including the WireGuard `tun0`) are read through Java `NetworkInterface`, because Android does not let apps read `/sys/class/net`.
 - The node keeps running after the UI is closed (foreground service, notifications posted from Python when no UI is open). **Quit** on the notification stops it.
 
-## Hub / network on Android
+## Internet / network on Android
 
-- Configure **Settings → Network → Connect via hub server** like the desktop app.
+- **Internet relay:** paste the relay code into **Settings → Network → Internet relay** on one phone; contacts learn it automatically. The app then switches by itself between direct (Wi-Fi / VPN) and the relay. See `docs/INTERNET_RELAY.md`.
+- The foreground service keeps the relay connection (a small ping every 25 s) so messages arrive with the app closed. Swipe the notification away (Android 14+) or tap **Quit** to stop everything.
 - Serial transport is disabled on Android (`srltcp/app.py` sets `enable_serial=False`).
-- TCP and hub connectivity work over Wi‑Fi / mobile data.
 
 ## Troubleshooting
 
