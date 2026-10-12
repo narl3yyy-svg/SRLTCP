@@ -16,18 +16,20 @@
 | **Dual transports** | TCP/IP networking + USB Serial (pyserial) |
 | **P2P mode** | Direct encrypted links between peers on LAN or serial cable |
 | **Hub server** | Optional headless hub — clients dial out, discover each other, E2EE via hub |
-| **Secure messaging** | Ed25519 identity + X25519 key exchange + AES-GCM |
+| **Secure messaging** | Ed25519 identity + authenticated X25519 key exchange + AES-256-GCM with replay protection |
 | **Fast file transfer** | Chunked streaming (1 MiB TCP / 8 KiB serial), zstd on TCP, resume support |
 | **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
 | **Drag-and-drop send** | Drop files onto a contact in the Web UI |
 | **WAN / manual peers** | Host + port per trusted contact; encrypted TCP 7825 |
-| **Web UI** | Localhost **HTTPS-only** chat UI (default port **9876**) |
+| **Web UI** | Localhost **HTTPS-only** chat UI (default port **9876**), protected by a private access token |
 | **Settings** | First-run wizard + persistent config (folders, retention, LAN IP) |
 | **System stats** | CPU usage & temperature in the web UI status bar |
 | **Pairing** | QR code, shareable link, or **NFC tap** (Android) — one scan pairs both sides |
 | **Voice & video calls** | WebRTC, E2EE, signalled over the encrypted session; no third-party servers by default |
 | **Offline delivery** | Messages queue while a contact is offline and deliver on reconnect, with ✓/✓✓ receipts |
-| **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected (v0.1.57) |
+| **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected |
+| **Contact requests** | Unknown peers can't message you; they appear as "wants to chat" until you accept |
+| **Chat history** | Saved locally (owner-only file permissions), pruned by your retention setting |
 | **Noise XX handshake** | Optional experimental handshake protocol in Settings → Network |
 | **Trusted peers** | Trust-before-message security model |
 | **Ping / RTT** | Latency in ms; serial link quality % (RTT-based estimate, not RF RSSI) |
@@ -49,7 +51,9 @@ srltcp/
     protocol/
       framing.py            # Length + CRC32 frames
       messages.py           # Binary message types
-      crypto.py             # E2EE: Ed25519, X25519, AES-GCM
+      crypto.py             # E2EE: Ed25519, X25519, AES-GCM, replay window
+      noise_handshake.py    # Optional Noise XX handshake
+      signed.py             # Signed payload helpers
     messaging/              # Mixin-composed backend
       backend.py            # Orchestrator
       links.py              # Peer link map
@@ -63,12 +67,12 @@ srltcp/
   transports/
     tcp.py                  # TCP listener + UDP discovery
     serial.py               # USB serial (pyserial)
-  web/                      # Local UI (aiohttp + WebSocket)
+  web/                      # Local UI (aiohttp + WebSocket, access token, calls.js)
   routes/                   # REST + share + WS routes
   utils/                    # Logging, files, platform helpers
 android/                    # Gradle + Chaquopy Android app (see android/README.md)
 tests/                      # pytest suite
-scripts/                    # Build helpers (check.sh, build-android.sh, sync-android-python.sh)
+scripts/                    # check.sh, build-android.sh, sync-android-python.sh, simulate.py
 
 ```
 
@@ -82,10 +86,11 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 
 ### End-to-end encryption
 
-1. **Handshake** — Default: ephemeral X25519 keys signed by Ed25519 identity keys. Optional **Noise XX** (`Noise_XX_25519_ChaChaPoly_SHA256`) in Settings → Network — both peers must use the same protocol
-2. **Session keys** — HKDF-derived AES-256 keys (separate send/recv) via HKDF-SHA256 with labels `srltcp-v2-send` / `srltcp-v2-recv`
-3. **Payloads** — AES-256-GCM with 12-byte nonces; all chat text, file offers, and metadata are encrypted (`Flags.ENCRYPTED | Flags.E2EE`)
-4. **File chunks** — Each chunk is encrypted before it leaves your node; TCP may apply zstd compression **before** encryption (flag bit). Larger 1 MiB TCP chunks improve throughput only — they do **not** weaken encryption.
+1. **Handshake** — Default: fresh ephemeral X25519 keys, signed (with a timestamp) by the Ed25519 identity key. Each side checks that the peer's hash ID is derived from the key it presents and that it matches the pinned contact key, so contacts cannot be impersonated; replayed handshakes are rejected. Optional **Noise XX** (`Noise_XX_25519_ChaChaPoly_SHA256`) in Settings → Network binds the Ed25519 identity to the Noise session — both peers must use the same protocol
+2. **Session keys** — HKDF-SHA256 from the X25519 shared secret (salted with both ephemeral keys), separate keys per direction; new keys every session (forward secrecy)
+3. **Payloads** — AES-256-GCM with 64-bit counter nonces and a sliding replay window; the message type and flags are authenticated. All chat text, receipts, file offers, call signalling and metadata are encrypted, and unencrypted application messages are rejected
+4. **Trust** — only trusted contacts' messages, files and share requests are accepted; anyone else becomes a contact request
+5. **File chunks** — Each chunk is encrypted before it leaves your node; TCP may apply zstd compression **before** encryption (flag bit). Larger 1 MiB TCP chunks improve throughput only — they do **not** weaken encryption.
 
 ### How data is transferred
 
@@ -94,7 +99,9 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 | **TCP / WAN (port 7825)** | Framed binary protocol after handshake | Yes — payloads are opaque AES-GCM blobs |
 | **USB Serial** | Same framed protocol over serial | Yes — identical E2EE session |
 | **UDP discovery (7826)** | Signed peer announces (hash, name, endpoints, Ed25519 signature) | Metadata is plaintext on LAN; signatures prevent spoofing |
-| **Web UI (9876)** | Browser ↔ local node over HTTPS | Localhost TLS only; chat/file APIs proxy local data |
+| **Web UI (9876)** | Browser ↔ local node over HTTPS | Localhost TLS + access token; other local apps can't use the API |
+| **Calls** | WebRTC media directly between devices | Yes — DTLS-SRTP; keys authenticated through the E2EE session |
+| **NFC pairing** | Contact cards (public key, name, LAN address) | Public data; requires phones a few cm apart |
 | **Hub (optional 7825)** | `RELAY_ENVELOPE` routing tokens + opaque blob | Hub sees hash routing tokens only, not content |
 
 **File transfer flow:** upload to local staging → `FILE_OFFER` (encrypted JSON) → `FILE_ACCEPT` → encrypted `FILE_CHUNK` stream → `FILE_COMPLETE` with SHA-256 verify. The receiver writes to your configured incoming folder; the Web UI serves completed files from disk for preview/download.
@@ -116,17 +123,18 @@ The hub **never receives session keys** and cannot decrypt message or file conte
 - Hub presence (who is online on a hub — names and hash IDs)
 - Hub routing metadata (identity hash tokens, timing, approximate sizes)
 - Connection metadata (who talks to whom, when)
-- Local settings, trusted-peer list, and chat history on disk
-- Self-signed localhost HTTPS certificate (browser trust is manual)
+- Local settings, trusted-peer list, and chat history on disk (owner-only permissions, not encrypted at rest)
+- Self-signed localhost HTTPS certificate (browser trust is manual; the Android app pins it)
 
 See [SECURITY.md](SECURITY.md) for vulnerability reporting, hub operator guidance, and hardening.
 
-### Web UI hardening (v0.1.1+)
+### Web UI hardening
 
+- **Access token** — every page/API/WebSocket request needs the per-install token (`~/.srltcp/web_token`); open the link printed at startup or run `srltcp url`
 - **HTTPS only** on `127.0.0.1` — auto-generated 4096-bit localhost certificate
 - **TLS 1.2+** with modern cipher suites; no cleartext HTTP
 - **Localhost-only binding** — refuses non-loopback Host headers
-- **Security headers** — CSP, HSTS, `X-Frame-Options: DENY`, `no-referrer`
+- **Security headers** — strict CSP (no inline scripts, no third-party requests), HSTS, `X-Frame-Options: DENY`, `no-referrer`
 - **Origin validation** on POST requests and WebSocket connections
 - **Path traversal protection** on file/share APIs
 - **Constant-time** token comparison for share sessions
@@ -149,6 +157,8 @@ On first launch, the web UI shows a setup wizard. Settings persist in `~/.srltcp
 | WAN port-forward | Advanced: acknowledge you will forward TCP **7825** for direct WAN peers |
 | Timezone | Region for the status clock (time shown at top of sidebar) |
 | Show clock | Toggle live clock in the UI |
+| Handshake protocol | Identity (default) or Noise XX — both peers must match |
+| Call STUN server | Optional `stun:host:port` for internet calls behind NAT (empty = direct/LAN only, no third party) |
 
 Change port from CLI: `./run.sh web --port 9999`
 
@@ -345,16 +355,24 @@ Connect two machines via USB-serial cable (or USB-OTG):
 srltcp send --recipient <hash_id> --text "Hello" --host 10.0.0.5
 ```
 
+### Local REST API
+
+Every API call needs the access token. On Linux/macOS:
+
+```bash
+export SRLTCP_TOKEN=$(cat ~/.srltcp/web_token)   # Windows: %APPDATA%\SRLTCP\web_token
+```
+
 ### File transfer (API)
 
 ```bash
 # Send a file to a connected peer
-curl -k -X POST https://127.0.0.1:9876/api/transfer \
+curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" -X POST https://127.0.0.1:9876/api/transfer \
   -H 'Content-Type: application/json' \
   -d '{"recipient_hash":"<hash>","path":"/path/to/large.iso"}'
 
 # List transfers
-curl -k https://127.0.0.1:9876/api/transfers
+curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" https://127.0.0.1:9876/api/transfers
 ```
 
 Transfers are **resumable** — if interrupted, the receiver's partial file offset is used on resume via `FILE_RESUME`.
@@ -390,17 +408,17 @@ Share a folder with a **trusted, connected** peer over the encrypted link — no
 
 ```bash
 # Offer folder to trusted peer (must be connected)
-curl -k -X POST https://127.0.0.1:9876/api/share/peer/offer \
+curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" -X POST https://127.0.0.1:9876/api/share/peer/offer \
   -H 'Content-Type: application/json' \
   -d '{"recipient_hash":"<peer_hash>","path":"/home/user/shared"}'
 
 # List remote folder (async — results via WebSocket share_listing)
-curl -k -X POST https://127.0.0.1:9876/api/share/peer/list \
+curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" -X POST https://127.0.0.1:9876/api/share/peer/list \
   -H 'Content-Type: application/json' \
   -d '{"owner_hash":"<owner_hash>","grant_id":"<grant_id>"}'
 
 # Request file download
-curl -k -X POST https://127.0.0.1:9876/api/share/peer/fetch \
+curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" -X POST https://127.0.0.1:9876/api/share/peer/fetch \
   -H 'Content-Type: application/json' \
   -d '{"owner_hash":"<owner_hash>","grant_id":"<grant_id>","path":"docs/readme.txt"}'
 ```
@@ -410,11 +428,11 @@ curl -k -X POST https://127.0.0.1:9876/api/share/peer/fetch \
 For local tooling, token-based HTTP browse remains available on the **localhost HTTPS** UI only:
 
 ```bash
-curl -k -X POST https://127.0.0.1:9876/api/share/create \
+curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" -X POST https://127.0.0.1:9876/api/share/create \
   -H 'Content-Type: application/json' \
   -d '{"path":"/home/user/shared"}'
 
-curl -k "https://127.0.0.1:9876/api/share/<session_id>/list?token=<token>"
+curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" "https://127.0.0.1:9876/api/share/<session_id>/list?token=<token>"
 ```
 
 ### WAN / manual peer connections (internet)
@@ -489,7 +507,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 # Tests use SRLTCP_DATA_DIR automatically — do not run pytest against ~/.srltcp
 
-./run.sh web                    # HTTPS web UI + P2P node (https://127.0.0.1:9876)
+./run.sh web                    # HTTPS web UI + P2P node (open the ?token= link it prints)
 ./run.sh hub                    # headless hub on TCP 7825
 bash scripts/check.sh           # ruff + mypy + pytest (run before tagging)
 pytest tests/ -v
@@ -564,7 +582,7 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 
 ## License
 
-GPL v3 — see [LICENSE](LICENSE).
+GPL v3 — see [LICENSE](LICENSE). Bundled third-party components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Acknowledgments
 

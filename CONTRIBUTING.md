@@ -6,7 +6,7 @@ Thank you for helping improve SRLTCP. This document covers local development, qu
 
 - Python **3.12+**
 - Linux, macOS, or Windows (WSL recommended on Windows)
-- Optional: **JDK 17**, Android SDK API 34, Python 3.12 for [local APK builds](android/README.md)
+- Optional: **JDK 17+**, Android SDK API 34, Python 3.12 for [local APK builds](android/README.md)
 
 ## Quick Start
 
@@ -16,7 +16,7 @@ cd SRLTCP
 ./run.sh web --debug
 ```
 
-Open the URL printed in the terminal (typically `https://127.0.0.1:9876`).
+Open the URL printed in the terminal (`https://127.0.0.1:9876/?token=…`; `srltcp url` prints it again).
 
 ### Test hub mode locally
 
@@ -29,7 +29,7 @@ Open the URL printed in the terminal (typically `https://127.0.0.1:9876`).
 ./run.sh web --name bob
 ```
 
-In each client: **Settings → Network** → enable hub → `127.0.0.1:7825` → Save → **Announce** → trust and chat.
+In each client: **Settings → Network** → enable hub → `127.0.0.1:7825` → Save (clients register automatically) → trust each other under *Discovered*, or use **Pair** → chat.
 
 ## Development Setup
 
@@ -53,6 +53,13 @@ mypy srltcp
 pytest tests/ -v
 ```
 
+End-to-end UI simulation (three local nodes driven in Chromium — pairing, chat, files, calls, phone layout, discovery, offline delivery):
+
+```bash
+pip install playwright && playwright install chromium
+python scripts/simulate.py --out /tmp/srltcp-shots
+```
+
 ## Pre-commit (recommended)
 
 ```bash
@@ -67,13 +74,14 @@ pre-commit run --all-files
 |------|---------|
 | `srltcp/core/` | Messaging, handshake, transfers, discovery, hub |
 | `srltcp/core/messaging/hub.py` | Hub client + server forwarding |
+| `srltcp/core/messaging/pairing.py` | Contact cards (QR / link / NFC) |
+| `srltcp/web/static/calls.js` | WebRTC voice/video calls |
 | `srltcp/transports/` | TCP and serial transports |
 | `srltcp/web/` | HTTPS web UI and static assets |
 | `srltcp/routes/` | REST API handlers |
 | `android/` | Gradle + Chaquopy Android app |
-| `scripts/` | `check.sh`, `build-android.sh`, `sync-android-python.sh` |
-
-| `tests/` | Pytest suite |
+| `scripts/` | `check.sh`, `build-android.sh`, `sync-android-python.sh`, `simulate.py` |
+| `tests/` | Pytest suite (`test_e2e_nodes.py` runs real nodes over loopback) |
 
 ## Coding Standards
 
