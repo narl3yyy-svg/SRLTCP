@@ -52,6 +52,7 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 | Data | Visibility |
 |------|------------|
 | LAN UDP discovery (7826) | Plaintext names, IPs, ports on the local network — **signed** (Ed25519) since v0.1.57; spoofing without the private key is rejected |
+| Direct internet connections | Your contacts learn your public IP address (shared inside the encrypted session, only with trusted contacts, only while the setting is on). Turn it off for relay-only |
 | Internet relay | The relay operator sees your IP address, when you're connected, and roughly how much you send and when; it can delay or drop traffic. It can't see names, identities, who you talk to (beyond guessing from timing), content or message types |
 | WAN / relay TCP | Observers see connection endpoints, timing, and volume — not decrypted payloads |
 | Relay code | Contains the access key: anyone with it can use your relay's bandwidth (but can't read or join anyone's conversations). Rotate by deleting `access.key` |
@@ -66,6 +67,7 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 | Mode | When it's used | Port-forward? |
 |------|----------------|---------------|
 | **LAN / VPN direct** | Whenever it works (always tried first) | No |
+| **Direct across networks (hole punching)** | Two networks whose routers allow it, with *Try direct internet connections* on; addresses exchanged only inside the E2EE session, connection authenticated by the signed handshake | No (dials out only) |
 | **Internet relay** | Automatically when there's no direct path | Only on the relay server (TCP 7827) |
 | **Direct WAN** | Advanced: you forward TCP 7825 | Yes, on the reachable peer |
 

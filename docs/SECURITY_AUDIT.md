@@ -1,8 +1,9 @@
-# Security audit and penetration test (v0.5.0)
+# Security audit and penetration test (v0.6.0)
 
 Scope: the whole app — local web UI/API, peer protocol, file transfers and shared
 folders, discovery, pairing, group chats, the local call relay, the Android
-wrapper — and the new internet relay (server, clients, rendezvous, privacy).
+wrapper, the internet relay (server, clients, rendezvous, privacy) — and, new in
+0.6.0, direct connections across networks (address exchange, hole punching).
 
 How: automated, repeatable attack harnesses that start their own nodes and
 relays and actually perform each attack, plus code review by separate
@@ -13,6 +14,7 @@ on real WireGuard in network namespaces.
 .venv/bin/python scripts/pentest/pentest_local.py   # app surfaces
 .venv/bin/python scripts/pentest/pentest_relay.py   # internet relay
 sudo bash scripts/simulate_internet.sh              # VPN off/on, relay, calls
+sudo bash scripts/simulate_nat.sh                   # two NATs, punching, VPN + LAN
 .venv/bin/python -m pytest -q                        # includes relay attack tests
 ```
 
@@ -28,7 +30,7 @@ non-zero on any FAIL.
 | A network attacker between phone and relay | observe, block, MITM attempts | impersonate the relay (pinned cert), read anything |
 | Someone on the same LAN/VPN | send UDP/TCP to the phone | impersonate a contact, read sessions, crash or exhaust the app |
 | A stranger with a valid identity | handshake, send any message type | have anything stored or acted on beyond one contact request |
-| A trusted but malicious contact | send messages/files, misuse rendezvous | escape the download folder, read other folders, forge group messages, hijack the pair's relay path |
+| A trusted but malicious contact | send messages/files, misuse rendezvous and punch messages | escape the download folder, read other folders, forge group messages, hijack the pair's relay path, use our phone to knock on devices in our LAN or flood a third party |
 | Another app on the phone / page in a browser | reach 127.0.0.1 | use the local API without the token, CSRF, DNS rebinding, the JS bridge |
 
 ## Results — app surfaces (`pentest_local.py`)
@@ -66,9 +68,10 @@ the background, user-installed CAs bypassing the Android certificate pin, the
 JS bridge answering any page, and handshake replay to a third device (now
 handshake v4 names the recipient).
 
-## Results — internet relay (`pentest_relay.py`)
+## Results — internet relay and direct connections (`pentest_relay.py`)
 
-**36 PASS, 0 FAIL** (plus tests/test_relay.py and the namespace simulation).
+**44 PASS, 0 FAIL** (plus tests/test_relay.py, tests/test_punch.py and the namespace
+simulations).
 
 | Attacker | Attacks | Result |
 |---|---|---|
@@ -79,6 +82,10 @@ handshake v4 names the recipient).
 | Untrusted peer | RENDEZVOUS | dropped (trust gate) |
 | Another node | replay a handshake captured for someone else | refused (v4 recipient binding) |
 | Local API | read pair secrets or relay keys via /api/trusted, /api/status, settings | not exposed (only your own relay code, token-protected) |
+| Malicious trusted contact (0.6.0) | PUNCH offers aimed at LAN / loopback / cloud-metadata / carrier-NAT addresses or hostnames, offer floods, 200-candidate lists, hostnames and junk in RENDEZVOUS addresses | nothing dialed for private targets; one answered round per contact per 30 s; at most 6 targets; IP literals only |
+| Untrusted peer (0.6.0) | PUNCH | ignored (trust gate; session message only) |
+| Malicious relay (0.6.0) | report a LAN address as our "public" address | never advertised to contacts |
+| Anyone (0.6.0) | take over a punched connection | must pass the signed v4 handshake with the contact's pinned key before it replaces the relay session |
 
 Hardening applied from the INFO notes:
 
@@ -88,6 +95,30 @@ Hardening applied from the INFO notes:
   endpoint; this removes the "make the phone probe an internal address" angle.
 - A contact can change its relay details at most once a minute, so a malicious
   contact can't turn RENDEZVOUS floods into constant contact-file rewrites.
+
+### Direct connections (0.6.0): findings and fixes
+
+Review of the new code (address exchange, hole punching, IPv6) found and fixed:
+
+1. **A contact could make the phone dial arbitrary addresses (medium, fixed).** Punch
+   targets came from the contact; private ranges were allowed, so a malicious contact
+   could make the phone knock on LAN devices (router admin page, NAS) from port 7828.
+   Now punch targets must be public: 10/8, 172.16/12, 192.168/16, 100.64/10,
+   loopback, link-local, multicast, ULA and IPv4-mapped addresses are refused.
+2. **Unbounded punch rounds (low, fixed).** The answering side started a dialing round
+   for every offer. Now at most one round per contact per 30 s, at most 6 targets.
+3. **IPv6 addresses could reveal the device's MAC address (low, fixed).** EUI-64
+   addresses (…ff:fe…) and deprecated ones are never shared; temporary (privacy)
+   addresses are preferred.
+4. **Contacts deleted on restart (data loss, fixed; found by the NAT simulation).** A
+   startup filter for leaked test fixtures removed real contacts whose name was still
+   the generic "peer" and had no saved address. Contacts with a pinned key or pair
+   secrets are never treated as fixtures (regression test added).
+
+Privacy of the new feature: your public IP address goes only to trusted contacts,
+inside the end-to-end encrypted session, and only while *Try direct internet
+connections* is on (default on; off = relay only). The relay already sees it. No
+port is opened for listening: hole punching only dials out.
 
 Remaining INFO (by design): the relay answers "nobody listening" for a mailbox
 (only computable by the two contacts, so it reveals presence only to the contact),
@@ -103,3 +134,5 @@ and it sees IPs, timing and volume.
   permissions, not encrypted at rest; a rooted/compromised phone exposes it.
 - On the LAN, discovery announces (name, addresses) are visible to others on
   that network (signed, not encrypted).
+- With *Try direct internet connections* on, contacts learn your public IP address
+  (that's how a direct connection works). Turn it off to use the relay only.

@@ -49,7 +49,16 @@ it up).
   waiting for timeouts.
 - **Back to direct.** While on the relay, one of the two phones tries the direct path
   every ~45 s (not during calls or file transfers) and moves the session back when it
-  works (18 s after the VPN came back in our test).
+  works (18 s after the VPN came back in our test). It dials every LAN/VPN address the
+  contact has told it about at once, so one phone on the VPN and the other on the home
+  Wi-Fi connect directly.
+- **Through home routers (hole punching).** The phones connect to the relay from port
+  7828 (peer port + 3); the relay tells each one its public address, and they swap
+  those inside the encrypted session (only if *Try direct internet connections* is on).
+  Then both dial each other at the same moment: each router lets the other phone's
+  packets in as replies, and the connection must pass the normal signed handshake
+  before it replaces the relay. Strict carrier NAT defeats it; the relay keeps working.
+  Details: [NETWORKING.md](NETWORKING.md).
 - **Which relay:** if both contacts have a relay, the one of the contact with the lower
   identity hash is used, so both sides agree. Only one of you needs one.
 
@@ -98,5 +107,8 @@ namespaces (WireGuard between the phones, relay on the server's public address) 
 checks: pairing over the VPN, relay details exchanged automatically, both directions
 over the relay within seconds of switching the VPN off, a video call over the relay,
 moving back to direct when the VPN returns, and reconnecting over the relay after an
-app restart with no VPN. `scripts/pentest/pentest_relay.py` attacks the relay and the
+app restart with no VPN. `sudo bash scripts/simulate_nat.sh` puts two phones behind two
+NAT routers with no port forwarding (`ROUTERS=reset` for routers that answer with
+resets) and checks the relay, the punched direct path, fallback with a strict NAT, and
+one phone on the VPN with the other on the home LAN. `scripts/pentest/pentest_relay.py` attacks the relay and the
 clients (see [SECURITY_AUDIT.md](SECURITY_AUDIT.md)).
