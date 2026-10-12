@@ -416,6 +416,7 @@ class ConnectMixin:
             metrics = self.get_peer_metrics(remote_hash)
             await self._on_peer_metrics(remote_hash, metrics)
         await self._send_pending_pair(remote_hash)
+        await self.sync_groups_with(remote_hash)
         if self.is_trusted(remote_hash):
             await self.notify_contact_accepted(remote_hash)
             await self.flush_outbox(remote_hash)

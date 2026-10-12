@@ -73,6 +73,17 @@ def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application
         sender = str(data.get("sender_hash", ""))
         if sender and sender not in own and data.get("status") == "delivered":
             kind = data.get("msg_type", "text")
+            gid = str((data.get("metadata") or {}).get("group_id", ""))
+            if gid:
+                if data.get("_new"):
+                    group = node.backend.groups.get(gid) or {}
+                    who = node.backend.member_name(gid, sender)
+                    notify_if_no_ui(
+                        str(group.get("name", "Group")),
+                        f"{who}: {str(data.get('text', ''))[:200]}",
+                        f"group-{gid}",
+                    )
+                return
             text = str(data.get("text", ""))[:200] if kind == "text" else f"Sent a {kind}"
             notify_if_no_ui(contact_name(sender), text, f"msg-{sender}")
 
@@ -134,6 +145,7 @@ def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application
             "contact_request",
             "paired",
             "call_signal",
+            "group_update",
         ):
             await broadcast_event(node, kind, data)
         else:

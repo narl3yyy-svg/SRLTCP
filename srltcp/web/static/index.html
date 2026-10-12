@@ -59,6 +59,7 @@
 <div class="sidebar-tabs">
 <button type="button" class="peer-tab active" data-tab="discovered">Discovered</button>
 <button type="button" class="peer-tab" data-tab="trusted">Trusted</button>
+<button type="button" class="peer-tab" data-tab="groups">Groups</button>
 </div>
 <div class="contacts-label" id="contacts-label">Discovered Peers</div>
 <nav class="contacts drop-zone" id="contacts" aria-label="Contacts"></nav>
@@ -476,6 +477,22 @@
 <div id="share-entries" class="share-entries"></div>
 <div class="modal-actions">
 <button type="button" class="action-btn secondary" id="share-close">Close</button>
+</div>
+</div>
+</div>
+<div class="modal-overlay" id="group-modal" aria-hidden="true">
+<div class="modal-card">
+<h3 id="group-modal-title">New group</h3>
+<label class="field"><span>Group name</span>
+<input type="text" id="group-name" maxlength="64" placeholder="e.g. Family" autocomplete="off" />
+</label>
+<div class="group-members-label" id="group-members-label">Members</div>
+<div class="group-member-list" id="group-member-list"></div>
+<p class="hint" id="group-hint">Pick trusted contacts. Messages are end-to-end encrypted to each member; members who aren't each other's contacts still see every message (you pass them on).</p>
+<div class="modal-actions">
+<button type="button" class="action-btn secondary danger-text hidden" id="group-leave">Leave group</button>
+<button type="button" class="action-btn secondary" id="group-cancel">Cancel</button>
+<button type="button" class="action-btn" id="group-save">Create</button>
 </div>
 </div>
 </div>

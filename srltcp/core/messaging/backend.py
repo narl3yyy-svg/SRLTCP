@@ -18,6 +18,7 @@ from srltcp.core.identity import Identity, IdentityStore
 from srltcp.core.messaging.announce import AnnounceMixin
 from srltcp.core.messaging.connect import ConnectMixin
 from srltcp.core.messaging.constants import COMPRESS_THRESHOLD, DISCOVERY_PORT
+from srltcp.core.messaging.groups import GroupMixin
 from srltcp.core.messaging.hub import HubMixin
 from srltcp.core.messaging.links import PeerLink, PeerLinkMixin
 from srltcp.core.messaging.models import ChatMessage
@@ -27,6 +28,7 @@ from srltcp.core.messaging.share_peer import SharePeerMixin
 from srltcp.core.messaging.store import MessageStore
 from srltcp.core.messaging.transfer import TransferMixin
 from srltcp.core.protocol.messages import (
+    GROUP_MESSAGE_TYPES,
     SESSION_MESSAGE_TYPES,
     Flags,
     MessageType,
@@ -82,6 +84,7 @@ class MessagingBackend(
     SharePeerMixin,
     HubMixin,
     PairingMixin,
+    GroupMixin,
 ):
     """Central messaging orchestrator."""
 
@@ -123,6 +126,7 @@ class MessagingBackend(
         self._init_share_peer()
         self._init_hub()
         self._init_pairing()
+        self._init_groups()
 
     def set_callbacks(
         self,
@@ -487,6 +491,9 @@ class MessagingBackend(
         if msg_type == MessageType.PAIR:
             await self._handle_pair(link, body)
             return
+        if msg_type in GROUP_MESSAGE_TYPES:
+            await self._handle_group_packet(link, msg_type, body)
+            return
         if not self.is_trusted(hash_id):
             await self._handle_untrusted_message(link, msg_type, body)
             return
@@ -659,6 +666,8 @@ class MessagingBackend(
             return
         if status not in ("delivered", "not_trusted"):
             return
+        if status == "delivered" and await self._group_receipt(hash_id, msg_id):
+            return
         for msg in reversed(self._messages):
             if msg.id == msg_id and msg.recipient_hash == hash_id:
                 if msg.status == status:
@@ -755,7 +764,7 @@ class MessagingBackend(
 
     def retry_outbox_connections(self) -> None:
         """Dial contacts we still owe messages to (no-op when already linked)."""
-        for hash_id in self.peers_with_undelivered():
+        for hash_id in self.peers_with_undelivered() | self.peers_owed_group_messages():
             if not self.is_trusted(hash_id):
                 continue
             link = self.get_link(hash_id)

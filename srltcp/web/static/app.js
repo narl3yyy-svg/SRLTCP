@@ -10,6 +10,8 @@
     myName: "You",
     peers: [],
     trusted: [],
+    groups: [],
+    selectedGroup: null,
     peerTab: "discovered",
     links: {},
     linkMetrics: {},
@@ -66,6 +68,7 @@
   function mediaMsgType(msg) {
     const t = msg?.msg_type;
     if (t === "image" || t === "video") return t;
+    if (t === "text" || t === "group_text") return "text";  // "see photo.png" is still text
     const name = String(msg?.metadata?.filename || msg?.text || "").toLowerCase();
     if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(name)) return "image";
     if (/\.(mp4|webm|mov|mkv|avi|m4v|ogv)$/.test(name)) return "video";
@@ -398,6 +401,9 @@
   /** True when message belongs to the currently open peer conversation. */
   function messageForSelectedPeer(m) {
     if (!state.selectedPeer || !m) return false;
+    const gid = m.metadata?.group_id;
+    if (state.selectedGroup) return gid === state.selectedGroup;
+    if (gid) return false;  // group messages never show in a one-to-one chat
     const peer = normalizeHash(state.selectedPeer);
     const sender = normalizeHash(m.sender_hash);
     const recipient = normalizeHash(m.recipient_hash);
@@ -620,6 +626,9 @@
             renderShareEntries();
           }
           break;
+        case "group_update":
+          onGroupUpdate(data.group);
+          break;
         case "contact_request":
           loadPeers();
           showContactRequest(data);
@@ -676,11 +685,16 @@
     if (state.loadingPeers) return;
     state.loadingPeers = true;
     try {
-      const [pRes, tRes] = await Promise.all([
+      const [pRes, tRes, gRes] = await Promise.all([
         safeFetch("/api/peers", {}, { silent: true, fallback: [] }),
         safeFetch("/api/trusted", {}, { silent: true, fallback: [] }),
+        safeFetch("/api/groups", {}, { silent: true, fallback: [] }),
       ]);
       if (pRes.ok) state.peers = pRes.data || [];
+      if (gRes.ok) {
+        state.groups = gRes.data || [];
+        if (state.selectedGroup) updateGroupHeader();
+      }
       if (tRes.ok) state.trusted = tRes.data || [];
       if (tRes.ok && !state.peerTabChosen) {
         // First load: open on Trusted once there is someone to talk to.
@@ -693,6 +707,214 @@
     } finally {
       state.loadingPeers = false;
     }
+  }
+
+  /* ── Group chats ── */
+  const GROUP_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+
+  function groupById(gid) {
+    return (state.groups || []).find((g) => g.id === gid) || null;
+  }
+
+  function memberName(gid, hashId) {
+    if (isOutgoing(hashId)) return "You";
+    const contact = state.trusted.find((p) => p.hash_id === hashId);
+    if (contact) return contact.name;
+    const m = groupById(gid)?.members?.find((x) => x.hash_id === hashId);
+    return m?.name || hashId.slice(0, 8);
+  }
+
+  function renderGroups() {
+    const el = $("#contacts");
+    const label = $("#contacts-label");
+    if (!el) return;
+    if (label) label.textContent = "Groups";
+    const q = state.search.toLowerCase();
+    const groups = (state.groups || []).filter((g) => !q || g.name.toLowerCase().includes(q));
+    const newBtn = `<button type="button" class="action-btn group-new-btn" id="group-new">${GROUP_ICON} New group</button>`;
+    if (!groups.length) {
+      el.innerHTML = newBtn + `<div class="contacts-empty">No groups yet.<br>Create one with your trusted contacts.</div>`;
+    } else {
+      el.innerHTML = newBtn + groups.map((g) => {
+        const active = state.selectedGroup === g.id ? " active" : "";
+        const names = g.members.filter((m) => m.name !== "You").map((m) => m.name).join(", ");
+        const unread = unreadCount(g.id);
+        return `<div class="contact${active}" role="button" tabindex="0" data-group="${escapeHtml(g.id)}">
+          <div class="avatar group-avatar" style="background:${hashColor(g.id)}22;color:${hashColor(g.id)};border-color:${hashColor(g.id)}44">${GROUP_ICON}</div>
+          <div class="contact-info">
+            <div class="contact-name">${escapeHtml(g.name)}${g.left ? '<span class="contact-request-tag">left</span>' : ""}</div>
+            <div class="contact-preview"><span class="contact-endpoint">${g.members.length} members · ${escapeHtml(names)}</span></div>
+          </div>
+          <div class="contact-meta">${unread ? `<span class="unread-badge">${unread > 99 ? "99+" : unread}</span>` : ""}</div>
+        </div>`;
+      }).join("");
+    }
+    $("#group-new")?.addEventListener("click", () => openGroupModal(null));
+    el.querySelectorAll("[data-group]").forEach((row) => {
+      const open = () => { selectGroup(row.dataset.group); closeSidebarMobile(); };
+      row.addEventListener("click", open);
+      row.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); }
+      });
+      row.addEventListener("contextmenu", (ev) => { ev.preventDefault(); openGroupModal(row.dataset.group); });
+    });
+  }
+
+  function updateGroupHeader() {
+    const g = groupById(state.selectedGroup);
+    if (!g) return;
+    const nameEl = $("#chat-peer-name");
+    if (nameEl) nameEl.textContent = g.name;
+    const online = g.members.filter((m) => m.online).length;
+    updatePeerStatus(g.left
+      ? "You are no longer in this group"
+      : `${g.members.length} members${online ? ` · ${online} online` : ""} · end-to-end encrypted`);
+    const badge = $("#chat-peer-transport");
+    badge?.classList.add("hidden");
+    const input = $("#msg-input");
+    const sendBtn = $("#send-btn");
+    if (input) {
+      input.disabled = !!g.left;
+      input.placeholder = g.left ? "You left this group" : "Message the group…";
+    }
+    if (sendBtn) sendBtn.disabled = !!g.left;
+  }
+
+  function selectGroup(gid) {
+    const g = groupById(gid);
+    if (!g) return;
+    state.selectedPeer = gid;
+    state.selectedGroup = gid;
+    state.selectedName = g.name;
+    state.stickBottom = true;
+    clearUnread(gid);
+    $("#chat-empty")?.classList.add("hidden");
+    $("#chat-active")?.classList.remove("hidden");
+    $("#chat-active")?.classList.add("group-chat");
+    setAvatar($("#peer-avatar"), g.name, gid);
+    updateGroupHeader();
+    if (isAndroidApp()) setAndroidView("chat");
+    else $("#msg-input")?.focus();
+    renderContacts();
+    state.messageCache = [];
+    loadMessages();
+    saveMobileSession();
+  }
+
+  function onGroupUpdate(group) {
+    if (!group?.id) return;
+    const known = groupById(group.id);
+    state.groups = [...(state.groups || []).filter((g) => g.id !== group.id), group]
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (!known && !group.is_owner) {
+      notifyUser(group.name, `You were added to the group “${group.name}”`, { tag: `group-${group.id}` });
+    } else if (known && !known.left && group.left && !group.is_owner) {
+      toast(`You are no longer in “${group.name}”`);
+    }
+    if (state.selectedGroup === group.id) updateGroupHeader();
+    renderContacts();
+  }
+
+  function openGroupModal(gid) {
+    const modal = $("#group-modal");
+    if (!modal) return;
+    const g = gid ? groupById(gid) : null;
+    state.groupEditing = gid || null;
+    const owner = !g || g.is_owner;
+    $("#group-modal-title").textContent = !g ? "New group" : owner && !g.left ? "Edit group" : g.name;
+    const nameInput = $("#group-name");
+    nameInput.value = g ? g.name : "";
+    nameInput.disabled = !owner || !!g?.left;
+    const inGroup = new Set((g?.members || []).map((m) => m.hash_id));
+    const list = $("#group-member-list");
+    let rows;
+    if (owner && !g?.left) {
+      const contacts = state.trusted.filter((p) => !p.blocked);
+      rows = contacts.map((p) => `<label class="group-member">
+          <input type="checkbox" value="${escapeHtml(p.hash_id)}" ${inGroup.has(p.hash_id) ? "checked" : ""} />
+          <span>${escapeHtml(p.name)}</span>
+        </label>`).join("") || '<div class="contacts-empty">Trust someone first, then add them here.</div>';
+    } else {
+      rows = (g?.members || []).map((m) => `<div class="group-member">
+          <span>${escapeHtml(m.name)}</span>
+          <span class="member-note">${m.hash_id === g.owner ? "creator" : m.is_contact ? "contact" : ""}</span>
+        </div>`).join("");
+    }
+    list.innerHTML = rows;
+    $("#group-members-label").textContent = owner && !g?.left ? "Members" : `${g?.members?.length || 0} members`;
+    $("#group-hint")?.classList.toggle("hidden", !(owner && !g?.left));
+    const save = $("#group-save");
+    save.textContent = !g ? "Create" : "Save";
+    save.classList.toggle("hidden", !(owner && !g?.left));
+    const leave = $("#group-leave");
+    leave.classList.toggle("hidden", !g);
+    leave.textContent = !g ? "" : g.left ? "Delete chat" : owner ? "Close group" : "Leave group";
+    openModal(modal);
+    if (!g) nameInput.focus();
+  }
+
+  async function saveGroupModal() {
+    const gid = state.groupEditing;
+    const name = $("#group-name").value.trim();
+    const picked = [...$("#group-member-list").querySelectorAll("input[type=checkbox]:checked")].map((i) => i.value);
+    if (!name) {
+      toast("Give the group a name", "error");
+      return;
+    }
+    let res;
+    if (!gid) {
+      if (!picked.length) {
+        toast("Pick at least one contact", "error");
+        return;
+      }
+      res = await apiPost("/api/groups", { name, members: picked });
+    } else {
+      const g = groupById(gid);
+      const current = new Set(g.members.map((m) => m.hash_id));
+      const add = picked.filter((h) => !current.has(h));
+      const remove = g.members.map((m) => m.hash_id)
+        .filter((h) => !picked.includes(h) && h !== g.owner);
+      res = await apiPost(`/api/groups/${encodeURIComponent(gid)}`, { name, add, remove });
+    }
+    if (!res.ok) {
+      toast(res.data?.error || "Could not save the group", "error");
+      return;
+    }
+    closeModal($("#group-modal"));
+    onGroupUpdate(res.data);
+    setPeerTab("groups");
+    renderContacts();
+    selectGroup(res.data.id);
+  }
+
+  async function leaveGroupFromModal() {
+    const g = groupById(state.groupEditing);
+    if (!g) return;
+    if (g.left) {
+      if (!confirm(`Delete the chat “${g.name}” from this device?`)) return;
+      const res = await safeFetch(`/api/groups/${encodeURIComponent(g.id)}`, { method: "DELETE" });
+      if (!res.ok) return;
+      state.groups = state.groups.filter((x) => x.id !== g.id);
+      if (state.selectedGroup === g.id) {
+        state.selectedGroup = null;
+        state.selectedPeer = null;
+        $("#chat-active")?.classList.add("hidden");
+        $("#chat-active")?.classList.remove("group-chat");
+        $("#chat-empty")?.classList.remove("hidden");
+        if (isAndroidApp()) setAndroidView("sidebar");
+      }
+    } else {
+      const what = g.is_owner ? "Close this group for everyone" : "Leave this group";
+      if (!confirm(`${what}?`)) return;
+      const res = await apiPost(`/api/groups/${encodeURIComponent(g.id)}/leave`, {});
+      if (!res.ok) {
+        toast(res.data?.error || "Could not leave", "error");
+        return;
+      }
+      onGroupUpdate(res.data);
+    }
+    closeModal($("#group-modal"));
+    renderContacts();
   }
 
   /* Incoming contact request: ask once, so pairing ends up mutual. */
@@ -1394,6 +1616,10 @@
   }
 
   function refreshPeerStatus(hashId) {
+    if (state.selectedGroup && hashId === state.selectedGroup) {
+      updateGroupHeader();
+      return;
+    }
     const linked = isPeerLinked(hashId) || inTransferCooldown(hashId);
     const latency = formatLatency(hashId);
     updateChatTransportBadge(hashId, linked);
@@ -1509,6 +1735,16 @@
 
     const sendBtn = $("#send-btn");
     if (sendBtn) sendBtn.disabled = true;
+    if (state.selectedGroup) {
+      const res = await apiPost(`/api/groups/${encodeURIComponent(state.selectedGroup)}/messages`, { text });
+      if (sendBtn) sendBtn.disabled = false;
+      if (!res.ok) {
+        toast(res.data?.error || "Message not sent", "error");
+        input.value = text;
+      }
+      if (isAndroidApp()) requestAnimationFrame(() => input.focus());
+      return;
+    }
     const { ok } = await apiPost("/api/messages", {
       recipient_hash: state.selectedPeer,
       text,
@@ -1564,6 +1800,10 @@
 
   async function sendFile(file) {
     if (!state.selectedPeer || !file) return;
+    if (state.selectedGroup) {
+      toast("Files can't be sent to groups yet");
+      return;
+    }
     await sendFileToPeer(file, state.selectedPeer, state.selectedName);
   }
 
@@ -2378,6 +2618,10 @@
   }
 
   function renderContacts() {
+    if (state.peerTab === "groups") {
+      renderGroups();
+      return;
+    }
     const q = state.search.toLowerCase();
     state.trusted = dedupePeers(state.trusted);
     const trustedIds = new Set(state.trusted.map((p) => p.hash_id.toLowerCase()));
@@ -2474,6 +2718,8 @@
     if (!hashId) return;
     state.selectedPeer = hashId;
     state.selectedName = name;
+    state.selectedGroup = null;
+    $("#chat-active")?.classList.remove("group-chat");
     state.stickBottom = true;
     clearUnread(hashId);
 
@@ -2789,7 +3035,10 @@
       const out = isOutgoing(m.sender_hash);
       const mediaType = mediaMsgType(m);
       const isFile = mediaType === "file" || mediaType === "image" || mediaType === "video";
-      const body = isFile ? renderFileBubble(m, out) : escapeHtml(m.text);
+      const senderLabel = !out && m.metadata?.group_id
+        ? `<div class="bubble-sender" style="color:${hashColor(m.sender_hash)}">${escapeHtml(memberName(m.metadata.group_id, m.sender_hash))}</div>`
+        : "";
+      const body = senderLabel + (isFile ? renderFileBubble(m, out) : escapeHtml(m.text));
       const actions = isFile
         ? ""
         : `<div class="bubble-actions">
@@ -3095,6 +3344,16 @@
 
   function onNewMessage(m) {
     if (!messageForSelectedPeer(m)) {
+      const gid = m.metadata?.group_id;
+      if (gid) {
+        if (m._new && !isOutgoing(m.sender_hash)) {
+          bumpUnread(gid);
+          const g = groupById(gid);
+          notifyUser(g?.name || "Group", `${memberName(gid, m.sender_hash)}: ${(m.text || "").slice(0, 120)}`,
+            { tag: `group-${gid}` });
+        }
+        return;
+      }
       if (!isOutgoing(m.sender_hash)) {
         bumpUnread(m.sender_hash);
         const sender = peerByHash(m.sender_hash);
@@ -3328,6 +3587,7 @@
     ["network-modal", () => $("#network-close")?.click()],
     ["release-modal", () => closeModal($("#release-modal"))],
     ["request-modal", () => answerContactRequest(false)],
+    ["group-modal", () => closeModal($("#group-modal"))],
   ];
 
   function androidNavigateBack() {
@@ -3414,6 +3674,11 @@
     const saved = state._restorePeer;
     if (!saved?.selectedPeer) return;
     delete state._restorePeer;
+    if (groupById(saved.selectedPeer)) {
+      selectGroup(saved.selectedPeer);
+      if (isAndroidApp()) setAndroidView("chat", { skipHistory: true });
+      return;
+    }
     const peer = state.peers.find((p) => p.hash_id === saved.selectedPeer)
       || state.trusted.find((p) => p.hash_id === saved.selectedPeer);
     const name = saved.selectedName || peer?.name || saved.selectedPeer.slice(0, 8);
@@ -3505,7 +3770,9 @@
   setupModalClose($("#edit-contact-modal"), closeEditContact);
   for (const id of ["#chat-peer-name", "#peer-avatar"]) {
     $(id)?.addEventListener("click", () => {
-      if (state.selectedPeer && state.trusted.some((p) => p.hash_id === state.selectedPeer)) {
+      if (state.selectedGroup) {
+        openGroupModal(state.selectedGroup);
+      } else if (state.selectedPeer && state.trusted.some((p) => p.hash_id === state.selectedPeer)) {
         openEditContact(state.selectedPeer);
       }
     });
@@ -3700,6 +3967,10 @@
     }
   });
 
+  $("#group-save")?.addEventListener("click", saveGroupModal);
+  $("#group-cancel")?.addEventListener("click", () => closeModal($("#group-modal")));
+  $("#group-leave")?.addEventListener("click", leaveGroupFromModal);
+  setupModalClose($("#group-modal"));
   $("#request-accept")?.addEventListener("click", () => answerContactRequest(true));
   $("#request-decline")?.addEventListener("click", () => answerContactRequest(false));
 
