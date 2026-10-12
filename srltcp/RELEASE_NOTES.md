@@ -1,5 +1,60 @@
 # SRLTCP Release Notes
 
+## v0.4.0 (2026-10-12)
+
+Update every phone (and your hub, if you run one).
+
+### New: group chats
+- *Groups → New group*: name it, tick contacts, done. Everyone you add gets it
+  automatically
+- End-to-end encrypted over the normal one-to-one connections, no group server.
+  Each message is signed by its author; the group's creator passes messages on
+  to members who aren't each other's contacts, and can't fake anyone's message
+- Missed messages and member changes arrive when someone comes back online.
+  Rename / add / remove members (creator), leave, close. Text only for now
+
+### Calls
+- **You can hear and see each other.** Calls connected but Android blocked the
+  incoming sound and picture (the big play button). Fixed, and call audio now
+  goes to the earpiece (voice) or speaker (video) like a phone call, with a
+  speaker button; the screen stays on during calls
+- Voice calls show a phone icon and "Voice call"; video calls a camera icon and
+  "Video call" — on both phones. A voice call can't be answered with video
+- The microphone always starts on; mute (and camera off) turn red
+- Calls connect more reliably (early connection details were sometimes dropped)
+
+### Fixes
+- **The send arrow works** on phones (before, only the keyboard's send key did)
+- **Chats open at the newest message**, also when coming back from the background
+- **No more pinch-zoom on the app**; it fits the screen. Pictures zoom in the
+  viewer with two fingers or a double-tap
+- Messages written with the VPN off are sent automatically when it is back
+  (tap a message's tick to see its status)
+- A file transfer cut off by a lost connection now resumes by itself (it used to
+  stall and also stopped that contact from reconnecting)
+- Notifications for the open chat while the app is in the background; no more
+  duplicate alerts for files
+- Switching chats never shows the previous chat's messages; long histories load
+  per chat; messages no longer vanish when a slow refresh lands late
+- Back gesture on a contact request closes it instead of declining
+- Android: NFC pairing restarts after the QR scanner or settings, answers only
+  while the app is open, and doesn't pair twice; dark-mode switches no longer
+  restart the app mid-call; "Save as" survives the app being recreated; the
+  all-files-access screen is only shown once; crashes are no longer swallowed
+
+### Security
+- A stranger flooding the TCP port with junk could freeze the app; parsing is now
+  linear, unauthenticated connections close after 30 s, connections are capped
+- Hub: a copied registration could hijack another member's routing; hub
+  registrations are now time-stamped and must be newer (update hub and phones)
+- A replayed announce could redirect a contact's saved address; only newer
+  announces may change it
+- The Android app no longer trusts user-installed certificates for its local page,
+  and the JavaScript bridge only works for the app's own page
+- Back-pressure on incoming files, caps on pending contact requests, temporary
+  share zips are deleted after sending
+
+
 ## v0.3.1 (2026-10-12)
 
 Update both phones — calls need 0.3.1 on each side.
