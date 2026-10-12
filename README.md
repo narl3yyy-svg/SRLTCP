@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
 
-**Current version:** 0.2.0 (not wire-compatible with 0.1.x — update all devices)
+**Current version:** 0.3.0 (works with 0.2.x; not wire-compatible with 0.1.x)
 
 ---
 
@@ -27,6 +27,7 @@
 | **Pairing** | QR code, shareable link, or **NFC tap** (Android) — one scan pairs both sides |
 | **Voice & video calls** | WebRTC, E2EE, signalled over the encrypted session; no third-party servers by default |
 | **Offline delivery** | Messages queue while a contact is offline and deliver on reconnect, with ✓/✓✓ receipts |
+| **Works over WireGuard** | VPN-aware discovery (unicast sweep + replies), Find by IP, automatic address updates |
 | **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected |
 | **Contact requests** | Unknown peers can't message you; they appear as "wants to chat" until you accept |
 | **Chat history** | Saved locally (owner-only file permissions), pruned by your retention setting |
@@ -234,7 +235,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.2.0.apk`
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.3.0.apk`
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -242,7 +243,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.2.0.apk`
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.2.0.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.3.0.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -280,8 +281,32 @@ Start the web UI on two machines on the same LAN:
 ```
 
 1. Click **Pair** on one machine and let the other scan the QR code (or paste the link) — both become trusted contacts
-   - Or click **Announce** on both machines and **Trust** each other under *Discovered*
+   - Or press **Announce** on one device and **Trust** the other under *Discovered*
 2. Select the contact and chat, send files, or start a voice/video call
+
+### Finding each other (LAN, WireGuard / VPN)
+
+| Network | What to do |
+|---------|------------|
+| **Same Wi-Fi / LAN** | Press **Announce** (or leave *Let nearby devices find me* on). Devices appear under *Discovered*. |
+| **WireGuard / any VPN** | Same — press **Announce** once on either phone. VPNs carry no broadcast, so SRLTCP also sends its signed announce directly to every address in the VPN subnet, and the other device answers. Both appear under *Discovered* within a few seconds. |
+| **You know the IP** | *Add Contact → Find a device by IP*, e.g. `10.0.100.5`. |
+
+After that, addresses look after themselves: when a contact's IP changes (new Wi-Fi, mobile data, VPN reconnect) its signed announce updates your contact entry and the app reconnects — measured at under 15 seconds over WireGuard.
+
+**WireGuard checklist** (only if devices don't find each other):
+
+- Each phone's peer config must route the VPN subnet: `AllowedIPs = 10.0.100.0/24` (not just the server's address).
+- The server must forward traffic **between** peers: `net.ipv4.ip_forward=1` and allow `wg0 → wg0` in the firewall (e.g. `iptables -A FORWARD -i wg0 -o wg0 -j ACCEPT`).
+- Allow UDP **7826** (discovery) and TCP **7825** (connections) between peers. Port 9876 is local-only and never needs opening.
+- Test from phone A's browser: `https://10.0.100.5:9876` should show a certificate warning or "SRLTCP is locked" — that proves the phones can reach each other.
+
+### Phones on different mobile carriers
+
+Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data has **no address another phone can connect to**, so no app can link two such phones without something reachable in the middle. SRLTCP gives you two private options — neither can read your messages:
+
+1. **WireGuard (recommended)** — put both phones on your WireGuard server. Everything works: discovery, chat, files and calls (calls go directly over the tunnel).
+2. **SRLTCP hub** — run `srltcp hub` on any machine with a public address (your WireGuard server works) and enable *Settings → Network → Connect via hub server* on both phones. Chat and files are relayed as end-to-end encrypted blobs. Calls need a direct media path, so for calls without a VPN also set a TURN server (e.g. coturn) under *Call relay server*.
 
 ### Pairing
 
@@ -289,13 +314,21 @@ Start the web UI on two machines on the same LAN:
 |--------|-----|
 | **QR code** | *Pair* → the other device taps *Scan their QR code* (Android camera, or a browser with BarcodeDetector) |
 | **Link** | *Pair* → *Copy link* / *Share…*, send it over a channel you trust; the other side pastes it into *Pair* |
-| **NFC (Android)** | Both phones open *Pair*; on one press *Tap phones (NFC)* and hold them back to back. Both contact cards are exchanged in one tap |
+| **NFC (Android)** | Open *Pair* on **both** phones and hold them back to back (NFC on, screens unlocked). The phones take turns reading each other and exchange contact cards automatically; you feel a short vibration when it worked |
 
-A pairing code is a signed contact card (hash ID, public key, name, LAN address). It works once and expires after 15 minutes. Compare the **safety number** (hash ID) shown on both screens if you want to be sure.
+A pairing code is a signed contact card (hash ID, public key, name, and every address the device has — VPN first). It works once and expires after 15 minutes. Compare the **safety number** (hash ID) shown on both screens if you want to be sure.
+
+### Editing contacts
+
+Tap the contact's name at the top of a chat, the **⋮** next to a contact, or long-press it → *Edit contact*. You can rename them (only you see the name), set their LAN/VPN address and port, an optional internet address, block/unblock and delete.
 
 ### Calls
 
-Voice and video calls use WebRTC directly between the two devices; offer/answer/ICE are sent inside the encrypted SRLTCP session, so DTLS fingerprints are authenticated by the contact's identity key. By default no STUN/TURN server is used — calls work on the same network or with direct reachability. For calls across the internet behind NAT, set *Settings → Network → Call STUN server* (this reveals your IP to that server). Calls over a hub relay are not supported yet.
+Voice and video calls use WebRTC directly between the two devices; offer/answer/ICE are sent inside the encrypted SRLTCP session, so DTLS fingerprints are authenticated by the contact's identity key. No STUN/TURN server is used by default — calls work on the same network or over WireGuard/VPN. For calls across mobile networks **without** a VPN, set *Settings → Network → Call relay server* to your own TURN server (`turn:host:3478` + username/password); it relays encrypted media and sees only IP addresses.
+
+### Running in the background (Android)
+
+SRLTCP keeps running after you close it, like any messenger, so messages, calls and contact requests arrive as notifications. Use **Quit** on the SRLTCP notification to stop it completely.
 
 ### Hub server (recommended for internet users)
 
@@ -521,6 +554,7 @@ pytest tests/ -v
 | `srltcp identity` | Show local hash IDs |
 | `srltcp url` | Print the private web UI link (with access token) |
 | `python scripts/simulate.py` | Run three local nodes and drive their UIs end-to-end in Chromium (needs `pip install playwright`) |
+| `sudo bash scripts/simulate_wireguard.sh` | Two "phones" + a server on a real WireGuard VPN in network namespaces: discovery, messaging, IP change |
 | `bash scripts/sync-android-python.sh` | Copy `srltcp/` into Android project before Gradle |
 | `bash scripts/build-android.sh` | Full local APK build |
 
@@ -553,6 +587,13 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [x] Signed LAN announces — Ed25519 signatures on UDP discovery; reject unsigned/spoofed peers (v0.1.57)
 - [x] Noise XX handshake option — Settings → Network (experimental; both peers must match) (v0.1.57)
 
+**Done (v0.3.0)**
+
+- [x] Discovery over WireGuard/VPN (unicast sweep, announce replies, Find by IP)
+- [x] Edit contact; automatic contact address updates; dead-link detection
+- [x] NFC pairing works by just holding phones together
+- [x] Background operation on Android with notifications; TURN relay for calls
+
 **Done (v0.2.0)**
 
 - [x] Pairing by QR code / link / NFC tap, contact requests
@@ -564,7 +605,7 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 **Planned**
 
 - [ ] Group chats
-- [ ] Calls through a hub (media relay) and over serial/RF
+- [ ] Built-in call relay in the hub (no separate TURN server) and calls over serial/RF
 - [ ] Encrypted-at-rest chat history
 - [ ] Wi-Fi Direct / Bluetooth transport for phone-to-phone without a router
 

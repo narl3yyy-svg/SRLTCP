@@ -1,5 +1,46 @@
 # SRLTCP Release Notes
 
+## v0.3.0 (2026-10-12)
+
+Works with 0.2.x devices. Update both phones to get every fix.
+
+### Works over WireGuard / VPN
+- **Announce now finds phones on a WireGuard VPN.** VPNs carry no broadcast
+  packets, so 0.2 could never discover anyone over one. Announce now also sends
+  its signed announce directly to every address in the VPN subnet, and devices
+  answer — one press on one phone and both appear under *Discovered*
+- **Find a device by IP** in *Add Contact* (e.g. `10.0.100.5`)
+- **Android sees the VPN address** — interfaces are now read through Android's
+  own API (the app could not see `tun0` before and advertised the Wi-Fi/mobile IP)
+- **Addresses fix themselves** — when a phone's IP changes it tells its contacts
+  immediately; contacts update and reconnect (14 s in our WireGuard test, even
+  with discovery off). Pairing codes carry every address, VPN first
+- Tested on a real WireGuard network (wireguard-go): discovery, trust, messages,
+  files, video calls and IP changes — `scripts/simulate_wireguard.sh`
+
+### New
+- **Edit contact** — rename, change address/port, internet address, mode, block,
+  delete; from the ⋮ button, a long-press, or tapping the name in a chat
+- **NFC that just works** — open *Pair* on both phones and hold them together;
+  no button to press. Vibration on success; prompt when NFC is off
+- **Runs in the background** — messages, calls and contact requests keep
+  arriving after you close the app (notification with a *Quit* button)
+- **Call relay (TURN)** setting for calls across mobile networks without a VPN
+
+### Fixes
+- Dead connections (network switch, phone asleep) are detected within about a
+  minute and replaced, instead of messages disappearing into them
+- Contacts come back online by themselves (background redial)
+- Blocked contacts can be unblocked again (they used to vanish from the list)
+- Enabling the hub no longer hides LAN/VPN peers; direct addresses are preferred
+- Network interface defaults to *Automatic*; on upgrade the Android app unpins the
+  address saved by 0.2's setup and turns discovery on
+- Connecting to an unreachable address times out after 8 s (was ~2 minutes)
+- Opening an offline contact says "messages will be delivered" instead of an error
+- Find-by-IP / Edit contact layouts on phones; Android service restarts the node
+  itself; activity no longer reloads the page on every resume
+
+
 ## v0.2.0 (2026-10-12)
 
 > **Not wire-compatible with 0.1.x.** Update every device; old and new

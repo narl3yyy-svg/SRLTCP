@@ -41,7 +41,7 @@ bash scripts/build-android.sh
 Output:
 
 ```
-android/app/build/outputs/apk/debug/SRLTCP-0.2.0.apk
+android/app/build/outputs/apk/debug/SRLTCP-0.3.0.apk
 ```
 
 ### Manual steps
@@ -100,9 +100,11 @@ Incoming and shared files default to `Downloads/SRLTCP/` when storage access is 
 ## Pairing, NFC and calls
 
 - **Pair** (sidebar) shows your QR code; *Scan their QR code* opens the camera scanner.
-- **Tap phones (NFC)** — both phones open *Pair*, one presses *Tap phones*, hold them back to back. The phone showing the Pair screen answers as a contactless card (Host Card Emulation, AID `F053524C54435001`); the other reads its contact card and writes its own back in the same tap. NFC only answers while the Pair screen is open and the phone is unlocked.
+- **NFC** — open *Pair* on **both** phones and hold them back to back (NFC on, phones unlocked). While the Pair screen is open each phone alternates every ~0.5–1.1 s between reading (reader mode) and answering as a contactless card (Host Card Emulation, AID `F053524C54435001`), so the phones line up within a second or two and swap contact cards; a short vibration confirms it. If NFC is off, the screen offers a button to open NFC settings. NFC only answers while the Pair screen is open and the phone is unlocked. The APDU protocol lives in `PairingProtocol.kt` and is covered by JVM unit tests (`./gradlew testDebugUnitTest`).
 - **Calls** need the microphone (and camera for video) permission; Android asks the first time.
 - The app holds a Wi-Fi multicast lock while running so LAN discovery broadcasts are not dropped.
+- Network interfaces (including the WireGuard `tun0`) are read through Java `NetworkInterface`, because Android does not let apps read `/sys/class/net`.
+- The node keeps running after the UI is closed (foreground service, notifications posted from Python when no UI is open). **Quit** on the notification stops it.
 
 ## Hub / network on Android
 
