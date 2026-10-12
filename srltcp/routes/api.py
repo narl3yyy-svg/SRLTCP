@@ -643,11 +643,18 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         if updated.handshake_protocol not in ("identity", "noise_xx"):
             updated.handshake_protocol = "identity"
         stun = str(updated.call_stun_server or "").strip()
-        if stun and (not stun.startswith(("stun:", "stuns:")) or len(stun) > 255 or " " in stun):
+        if stun and (
+            not stun.startswith(("stun:", "stuns:", "turn:", "turns:"))
+            or len(stun) > 255
+            or " " in stun
+        ):
             return web.json_response(
-                {"error": "STUN server must look like stun:host:port"}, status=400
+                {"error": "Call server must look like stun:host:3478 or turn:host:3478"},
+                status=400,
             )
         updated.call_stun_server = stun
+        updated.call_turn_username = str(updated.call_turn_username or "").strip()[:128]
+        updated.call_turn_password = str(updated.call_turn_password or "")[:256]
         if updated.ntp_server:
             updated.ntp_server = str(updated.ntp_server).strip()[:253]
 

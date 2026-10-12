@@ -1354,9 +1354,12 @@
     } else if (linked || inTransferCooldown(hashId)) {
       updatePeerStatus("Encrypted · Online");
       setStatusDot("status-dot online");
-    } else {
-      updatePeerStatus("Handshaking…");
+    } else if (state.connectPending.has(hashId)) {
+      updatePeerStatus("Connecting…");
       setStatusDot("status-dot pending");
+    } else {
+      updatePeerStatus("Offline — messages will be delivered when they're back");
+      setStatusDot("status-dot");
     }
     const msgInput = $("#msg-input");
     const sendBtn = $("#send-btn");
@@ -1399,9 +1402,9 @@
         transport,
         force,
       });
-      if (!ok && state.selectedPeer === hashId) {
-        updatePeerStatus("Connection failed");
-        toast(data?.error || "Could not connect to peer", "error");
+      if (!ok) {
+        // Offline contacts are normal: messages queue and deliver later.
+        if (state.selectedPeer === hashId) refreshPeerStatus(hashId);
         return data;
       }
       if (data?.handshake_complete) {
@@ -1421,12 +1424,10 @@
           data.handshake_complete = true;
           if (state.selectedPeer === hashId) refreshPeerStatus(hashId);
         } else if (state.selectedPeer === hashId) {
-          updatePeerStatus("Handshake timed out");
-          toast("Handshake timed out — try again");
+          refreshPeerStatus(hashId);
         }
       } else if (state.selectedPeer === hashId) {
-        updatePeerStatus("Connection failed");
-        toast("Could not connect to peer");
+        refreshPeerStatus(hashId);
       }
       return data;
     })();
@@ -1435,6 +1436,7 @@
       return await run;
     } finally {
       state.connectPending.delete(hashId);
+      if (state.selectedPeer === hashId) refreshPeerStatus(hashId);
     }
   }
 
@@ -1954,6 +1956,8 @@
     setSelectValue("set-clock-source", settings.clock_source || "system");
     setInputValue("set-ntp-server", settings.ntp_server || "pool.ntp.org");
     setInputValue("set-stun", settings.call_stun_server || "");
+    setInputValue("set-turn-user", settings.call_turn_username || "");
+    setInputValue("set-turn-pass", settings.call_turn_password || "");
     toggleNtpField();
     applyClockVisibility();
     if (!$("#settings-window")?.classList.contains("hidden") || !state.interfacesLoaded) {
@@ -3448,6 +3452,8 @@
       clock_source: $("#set-clock-source")?.value || "system",
       ntp_server: $("#set-ntp-server")?.value.trim() || "pool.ntp.org",
       call_stun_server: ($("#set-stun")?.value || "").trim(),
+      call_turn_username: ($("#set-turn-user")?.value || "").trim(),
+      call_turn_password: $("#set-turn-pass")?.value || "",
     };
   }
 
