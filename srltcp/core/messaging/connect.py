@@ -283,6 +283,9 @@ class ConnectMixin:
                 discovered=discovered,
                 trusted=trusted,
             )
+            if not endpoint and not host and isinstance(trusted, TrustedPeer) and trusted.alt_hosts:
+                # Only addresses learnt from the contact (no saved main address).
+                endpoint = (trusted.alt_hosts[0], trusted.tcp_port or self.config.tcp_port)
             if not endpoint:
                 if not host and self.relay_link_reachable(hash_id):
                     return await self.open_relay_link(hash_id)

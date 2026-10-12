@@ -173,6 +173,28 @@ class TCPTransport(Transport):
             raise
         return await self._adopt(reader, writer, f"{host}:{port}")
 
+    @staticmethod
+    async def prime_from(host: str, port: int, local_port: int, ttl: int = 2) -> None:
+        """Send one short-lived SYN from the punch port that expires a couple of
+        hops out: it opens our own router's NAT/firewall mapping towards the
+        peer without reaching the peer's router, which could otherwise answer
+        with a reset and spoil the mapping before the peer dials."""
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        try:
+            sock = bound_socket(family, local_port)
+        except OSError:
+            return
+        try:
+            if family == socket.AF_INET6:
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_UNICAST_HOPS, ttl)
+            else:
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, ttl)
+            with contextlib.suppress(BlockingIOError, InterruptedError, OSError):
+                sock.connect((host, port))
+            await asyncio.sleep(0.03)
+        finally:
+            sock.close()
+
     async def _adopt(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, address: str
     ) -> str:

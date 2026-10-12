@@ -41,8 +41,9 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-PUNCH_WINDOW = 6.0  # seconds both sides keep dialing
+PUNCH_WINDOW = 8.0  # seconds both sides keep dialing
 PUNCH_ATTEMPT_TIMEOUT = 1.5
+PUNCH_FOLLOWER_DELAY = 1.0  # the answering side starts dialing a moment later
 PUNCH_RETRY_EVERY = 120.0  # while on the relay
 PUNCH_BACKOFF = 300.0  # after a failed round
 MAX_CANDIDATES = 6
@@ -167,7 +168,12 @@ class PunchMixin:
             if merged != peer.alt_hosts:
                 self.trusted.update(hash_id, alt_hosts=merged)
         if "u" in data:
-            self._peer_public[hash_id] = _clean_candidates(data.get("u"))
+            public = _clean_candidates(data.get("u"))
+            if public and public != self._peer_public.get(hash_id):
+                # New place to reach them: let the next path check try at once.
+                self._upgrade_attempts.pop(hash_id, None)
+                self._punch_next.pop(hash_id, None)
+            self._peer_public[hash_id] = public
 
     # ── Punching ──
 
@@ -227,7 +233,9 @@ class PunchMixin:
             return
         self._punching.add(hash_id)
         try:
-            peer_id = await self._race_dials(targets, port)
+            peer_id = await self._race_dials(
+                targets, port, delay=0.0 if leader else PUNCH_FOLLOWER_DELAY
+            )
             if not peer_id:
                 log.info("No direct path through the NATs to %s — staying on the relay",
                          hash_id[:8])
@@ -252,10 +260,23 @@ class PunchMixin:
             self._punching.discard(hash_id)
 
     async def _race_dials(
-        self: MessagingBackend, targets: list[tuple[str, int]], port: int
+        self: MessagingBackend, targets: list[tuple[str, int]], port: int, *, delay: float = 0.0
     ) -> str | None:
+        """Keep dialing every candidate until one connects or the window closes.
+
+        The answering side first opens its own router towards the leader
+        (low-TTL SYNs that don't travel far) and waits ``delay`` before its
+        first real SYN, so that SYN never reaches the leader's router before
+        the leader has dialed (some routers answer unexpected SYNs with a
+        reset, which spoils the mapping); the leader's SYNs pass the primed
+        mapping meanwhile.
+        """
         assert self.tcp_transport is not None
         transport = self.tcp_transport
+        if delay:
+            for host, rport in targets:
+                await transport.prime_from(host, rport, port)
+            await asyncio.sleep(delay)
         deadline = time.monotonic() + PUNCH_WINDOW
 
         async def dial(host: str, rport: int) -> str | None:
@@ -264,7 +285,8 @@ class PunchMixin:
                     return await transport.connect_from(
                         host, rport, port, timeout=PUNCH_ATTEMPT_TIMEOUT
                     )
-                except (OSError, TimeoutError, ConnectionError):
+                except (OSError, TimeoutError, ConnectionError) as exc:
+                    log.debug("Punch dial %s:%s: %r", host, rport, exc)
                     await asyncio.sleep(0.25)
             return None
 

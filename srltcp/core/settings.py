@@ -105,6 +105,9 @@ class AppSettings:
     # inside the encrypted session. Direct LAN/VPN paths are always preferred.
     relay_enabled: bool = True
     relay_code: str = ""
+    # Direct connections across networks (hole punching). Shares your public
+    # address with your contacts (only them, inside the encrypted session).
+    direct_internet: bool = True
     handshake_protocol: str = "identity"
     call_stun_server: str = ""  # stun:/turn:/turns: URL (empty = direct only)
     call_turn_username: str = ""
