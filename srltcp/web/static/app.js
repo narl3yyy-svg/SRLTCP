@@ -727,6 +727,15 @@
       const n = r.contacts ? ` · ${r.contacts} contact${r.contacts === 1 ? "" : "s"}` : "";
       return `${r.address} (${who}) — ${state}${n}`;
     });
+    if (rows.length && relay.direct_internet) {
+      rows.push(
+        relay.public && relay.public.length
+          ? `Direct internet: on — contacts can reach you at ${relay.public.join(", ")} (shared only with them)`
+          : "Direct internet: on — waiting for the relay to tell us our public address"
+      );
+    } else if (rows.length) {
+      rows.push("Direct internet: off — everything over the internet goes through the relay");
+    }
     el.textContent = rows.length
       ? rows.join("\n")
       : "No relay yet: paste a code here, or a contact with one shares it automatically.";
@@ -1655,8 +1664,11 @@
       return;
     }
     const transport = activeLinkTransport(hashId);
-    const label = transport === "serial" ? "SERIAL" : transport === "relay" ? "RELAY" : "TCP";
+    const label = transport === "serial" ? "SERIAL" : transport === "relay" ? "RELAY" : "DIRECT";
     badge.textContent = label;
+    badge.title = transport === "relay"
+      ? "Through your internet relay (it can't read anything). Switches to direct when possible."
+      : transport === "serial" ? "Serial / radio link" : "Direct connection, no server in between";
     badge.className = `transport-badge header-badge ${transport}`;
     badge.removeAttribute("aria-hidden");
   }
@@ -2280,6 +2292,7 @@
     setCheckbox("set-auto-announce", !!settings.auto_announce);
     setCheckbox("set-relay-enabled", settings.relay_enabled !== false);
     setInputValue("set-relay-code", settings.relay_code || "");
+    setCheckbox("set-direct-internet", settings.direct_internet !== false);
     setCheckbox("set-wan-expose", !!settings.wan_expose_port);
     setSelectValue("set-handshake-protocol", settings.handshake_protocol || "identity");
     setCheckbox("set-enable-serial", !!settings.enable_serial);
@@ -3999,6 +4012,7 @@
       auto_announce: $(`#${prefix}-auto-announce`)?.checked || false,
       relay_enabled: $("#set-relay-enabled")?.checked ?? true,
       relay_code: ($("#set-relay-code")?.value || "").trim(),
+      direct_internet: $("#set-direct-internet")?.checked ?? true,
       wan_expose_port: $("#set-wan-expose")?.checked || false,
       handshake_protocol: $("#set-handshake-protocol")?.value || "identity",
       enable_serial: $("#set-enable-serial")?.checked || false,

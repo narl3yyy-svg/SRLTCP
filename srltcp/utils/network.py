@@ -262,18 +262,26 @@ def global_ipv6_addresses() -> list[str]:
 
     IPv6 has no NAT: a phone on a carrier or a home network usually has one,
     and two devices can open a direct connection between them by dialing each
-    other at the same time (see relay.py hole punching).
+    other at the same time (see punch.py).
+
+    Addresses whose interface part is derived from the hardware (MAC) address
+    (EUI-64, ``…ff:fe…``) are never returned: contacts would learn a stable
+    device identifier. Temporary (privacy) addresses come first.
     """
     found: list[str] = []
+    preferred: list[str] = []
 
-    def add(raw: str) -> None:
+    def add(raw: str, temporary: bool = False) -> None:
         raw = raw.split("%", 1)[0]
         try:
             ip = ipaddress.IPv6Address(raw)
         except ValueError:
             return
-        if ip.is_global and not ip.ipv4_mapped and str(ip) not in found:
-            found.append(str(ip))
+        packed = ip.packed
+        if packed[11] == 0xFF and packed[12] == 0xFE:
+            return  # EUI-64: embeds the MAC address
+        if ip.is_global and not ip.ipv4_mapped and str(ip) not in found + preferred:
+            (preferred if temporary else found).append(str(ip))
 
     from srltcp.utils.platform import is_android
 
@@ -297,10 +305,18 @@ def global_ipv6_addresses() -> list[str]:
             with open("/proc/net/if_inet6", encoding="ascii") as f:
                 for line in f:
                     parts = line.split()
-                    if len(parts) >= 6 and parts[5] != "lo":
-                        add(":".join(parts[0][i : i + 4] for i in range(0, 32, 4)))
+                    if len(parts) < 6 or parts[5] == "lo":
+                        continue
+                    flags = int(parts[4], 16)
+                    if flags & 0x20:  # IFA_F_DEPRECATED
+                        continue
+                    add(
+                        ":".join(parts[0][i : i + 4] for i in range(0, 32, 4)),
+                        temporary=bool(flags & 0x01),  # IFA_F_TEMPORARY
+                    )
         except OSError:
             pass
+    found = preferred + found
     if not found:
         try:  # which source address would reach the IPv6 internet (no packet sent)
             s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
