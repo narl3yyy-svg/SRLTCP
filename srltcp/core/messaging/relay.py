@@ -217,7 +217,9 @@ class RelayMixin:
         self._relay_conns: dict[str, RelayConnection] = {}
         self._relay_connecting: set[str] = set()
         self._relay_errors: dict[str, str] = {}
-        self._relay_in_tokens: dict[bytes, str] = {}  # token -> contact (mailboxes we listen on)
+        # relay_id -> {token: contact}: the mailboxes we listen on, rebuilt on
+        # every subscription (so old days' tokens don't pile up)
+        self._relay_in_tokens: dict[str, dict[bytes, str]] = {}
         self._relay_out_tokens: dict[bytes, str] = {}  # token -> contact (mailboxes we send to)
         self._relay_subscribed_day: dict[str, int] = {}
         self._pairboxes: dict[str, tuple[bytes, PairBox]] = {}
@@ -432,8 +434,7 @@ class RelayMixin:
         key = (day, signature)
         if self._relay_sub_state.get(relay_id) == key:
             return
-        for token, hash_id in in_tokens.items():
-            self._relay_in_tokens[token] = hash_id
+        self._relay_in_tokens[relay_id] = in_tokens
         await conn.send(R_SUB, b"".join(preimages))
         self._relay_sub_state[relay_id] = key
 
@@ -483,7 +484,7 @@ class RelayMixin:
         kind, body = frame[0], frame[1:]
         if kind == R_DELIVER and len(body) > TOKEN_SIZE:
             token, payload = body[:TOKEN_SIZE], body[TOKEN_SIZE:]
-            hash_id = self._relay_in_tokens.get(token)
+            hash_id = self._relay_in_tokens.get(conn.code.relay_id, {}).get(token)
             if not hash_id:
                 return
             box = self._pairbox(hash_id)
