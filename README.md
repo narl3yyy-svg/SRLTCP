@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
 
-**Current version:** 0.1.57
+**Current version:** 0.2.0 (not wire-compatible with 0.1.x — update all devices)
 
 ---
 
@@ -24,6 +24,9 @@
 | **Web UI** | Localhost **HTTPS-only** chat UI (default port **9876**) |
 | **Settings** | First-run wizard + persistent config (folders, retention, LAN IP) |
 | **System stats** | CPU usage & temperature in the web UI status bar |
+| **Pairing** | QR code, shareable link, or **NFC tap** (Android) — one scan pairs both sides |
+| **Voice & video calls** | WebRTC, E2EE, signalled over the encrypted session; no third-party servers by default |
+| **Offline delivery** | Messages queue while a contact is offline and deliver on reconnect, with ✓/✓✓ receipts |
 | **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected (v0.1.57) |
 | **Noise XX handshake** | Optional experimental handshake protocol in Settings → Network |
 | **Trusted peers** | Trust-before-message security model |
@@ -52,7 +55,8 @@ srltcp/
       links.py              # Peer link map
       connect.py            # Handshake + session keys
       announce.py           # Discovery broadcasts
-      queue.py              # Offline message queue
+      pairing.py            # Contact cards (QR / link / NFC) + mutual pairing
+      store.py              # On-disk chat history
       transfer.py           # Chunked file transfer
       hub.py                # Hub client + server forwarding
       presence.py           # Hub presence registry
@@ -162,7 +166,7 @@ cd SRLTCP
 ./run.sh web --debug
 ```
 
-Open **https://127.0.0.1:9876** in your browser (self-signed cert — accept once for localhost).
+Open the link printed in the terminal — `https://127.0.0.1:9876/?token=…` (self-signed cert — accept once for localhost). The token keeps other programs on your machine out of your chats; run `srltcp url` to print the link again.
 
 Press **Ctrl+C** in the terminal to shut down cleanly.
 
@@ -199,7 +203,7 @@ See [android/README.md](android/README.md). The APK embeds the same `srltcp/` Py
 
 | Tool | Notes |
 |------|--------|
-| **JDK 17** | `export JAVA_HOME=/usr/lib/jvm/java-17-openjdk` |
+| **JDK 17+** | Any JDK 17 or newer (tested with 21); set `JAVA_HOME` if `java` is not on PATH |
 | **Android SDK API 34** | Platform + build-tools 34.x |
 | **Python 3.12** | Used by Chaquopy to compile the embedded runtime |
 | **adb** | USB debugging enabled on the phone |
@@ -220,7 +224,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.1.57.apk`
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.2.0.apk`
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -228,7 +232,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.1.57.apk`
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.1.57.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.2.0.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -244,7 +248,7 @@ adb logcat -s SRLTCP:* python.stderr:*      # follow SRLTCP + Python output
 | Symptom | What to do |
 |---------|------------|
 | `SDK location not found` | Set `ANDROID_HOME` or `android/local.properties` with `sdk.dir=...` |
-| Gradle / Java errors | Use JDK 17 |
+| Gradle / Java errors | Use JDK 17 or newer |
 | White screen | Wait ~30s for Python; check logcat |
 | File attach fails | Rebuild with v0.1.52+ (WebView file picker) |
 | Can't delete shared folder | Use **Delete** in Settings → Folders (v0.1.52+) |
@@ -265,9 +269,23 @@ Start the web UI on two machines on the same LAN:
 ./run.sh web --name "bob"
 ```
 
-1. Click **Announce** on both machines
-2. Select a discovered peer in the sidebar
-3. Send encrypted messages in the chat panel
+1. Click **Pair** on one machine and let the other scan the QR code (or paste the link) — both become trusted contacts
+   - Or click **Announce** on both machines and **Trust** each other under *Discovered*
+2. Select the contact and chat, send files, or start a voice/video call
+
+### Pairing
+
+| Method | How |
+|--------|-----|
+| **QR code** | *Pair* → the other device taps *Scan their QR code* (Android camera, or a browser with BarcodeDetector) |
+| **Link** | *Pair* → *Copy link* / *Share…*, send it over a channel you trust; the other side pastes it into *Pair* |
+| **NFC (Android)** | Both phones open *Pair*; on one press *Tap phones (NFC)* and hold them back to back. Both contact cards are exchanged in one tap |
+
+A pairing code is a signed contact card (hash ID, public key, name, LAN address). It works once and expires after 15 minutes. Compare the **safety number** (hash ID) shown on both screens if you want to be sure.
+
+### Calls
+
+Voice and video calls use WebRTC directly between the two devices; offer/answer/ICE are sent inside the encrypted SRLTCP session, so DTLS fingerprints are authenticated by the contact's identity key. By default no STUN/TURN server is used — calls work on the same network or with direct reachability. For calls across the internet behind NAT, set *Settings → Network → Call STUN server* (this reveals your IP to that server). Calls over a hub relay are not supported yet.
 
 ### Hub server (recommended for internet users)
 
@@ -483,6 +501,8 @@ pytest tests/ -v
 | `srltcp hub` | Headless connection hub server |
 | `srltcp send` | One-shot CLI message |
 | `srltcp identity` | Show local hash IDs |
+| `srltcp url` | Print the private web UI link (with access token) |
+| `python scripts/simulate.py` | Run three local nodes and drive their UIs end-to-end in Chromium (needs `pip install playwright`) |
 | `bash scripts/sync-android-python.sh` | Copy `srltcp/` into Android project before Gradle |
 | `bash scripts/build-android.sh` | Full local APK build |
 
@@ -515,7 +535,20 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [x] Signed LAN announces — Ed25519 signatures on UDP discovery; reject unsigned/spoofed peers (v0.1.57)
 - [x] Noise XX handshake option — Settings → Network (experimental; both peers must match) (v0.1.57)
 
+**Done (v0.2.0)**
+
+- [x] Pairing by QR code / link / NFC tap, contact requests
+- [x] Voice & video calls (WebRTC, E2EE signalling)
+- [x] Offline message queue with delivery receipts; chat history on disk
+- [x] Authenticated handshake (hash ↔ key binding), replay protection, Noise key fix
+- [x] Access token for the local web UI/API; Android certificate pinning
+
 **Planned**
+
+- [ ] Group chats
+- [ ] Calls through a hub (media relay) and over serial/RF
+- [ ] Encrypted-at-rest chat history
+- [ ] Wi-Fi Direct / Bluetooth transport for phone-to-phone without a router
 
 - [ ] Multi-hop hub chains with source routing and loop prevention
 - [ ] Android USB serial Chaquopy shim (full OTG support)

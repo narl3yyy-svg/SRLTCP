@@ -216,6 +216,11 @@ body {
 }
 .contact {
   display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  color: inherit;
+  font: inherit;
   align-items: center;
   gap: 0.75rem;
   padding: 0.7rem 0.75rem;
@@ -1662,3 +1667,14 @@ label.field > span {
 .call-btn.accept { background: #3ecf8e; }
 .call-btn.decline { background: #f0546a; }
 .call-btn.hidden { display: none; }
+
+/* Phone chat header: keep room for the contact name next to the call buttons.
+   Folder actions stay reachable via long-press on the contact. */
+@media (max-width: 600px) {
+  #btn-share-folder,
+  #btn-send-folder-peer { display: none; }
+  .chat-header-actions { gap: 0.15rem; }
+  .chat-header-info { min-width: 0; flex: 1; }
+  .chat-peer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chat-peer-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}

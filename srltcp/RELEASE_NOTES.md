@@ -1,5 +1,63 @@
 # SRLTCP Release Notes
 
+## v0.2.0 (2026-10-12)
+
+> **Not wire-compatible with 0.1.x.** Update every device; old and new
+> versions will not link.
+
+### New
+- **Pairing** — Pair button: show a QR code / shareable link, or paste/scan
+  someone else's. One scan pairs both sides (signed contact card + one-time
+  token). On Android: **tap phones together (NFC)** or use the camera scanner
+- **Voice & video calls** — WebRTC, end-to-end encrypted; call setup travels
+  inside the existing encrypted session. No STUN/TURN by default (LAN/direct);
+  optional STUN server in Settings → Network for internet calls
+- **Delivery receipts** — ✓ sent, ✓✓ delivered, ⚠ waiting for them to accept you
+- **Offline messages** — queued, retried in the background and delivered when
+  the contact comes back; sending never blocks
+- **Chat history saved to disk** (follows the "Keep messages" setting)
+- **Contact requests** — someone who isn't your contact yet shows up in
+  Discovered as "wants to chat" with an Accept button
+
+### Security fixes
+- Handshake now proves the peer owns the key behind its hash ID (contacts
+  could previously be impersonated), with replay protection and pinned keys
+- Noise XX mode derived its keys from public data — fixed, and identities are
+  now bound to the Noise session
+- Encrypted messages use counters + a replay window; header bound as AAD;
+  unencrypted application messages are rejected
+- Messages from untrusted peers are no longer shown as chat messages
+- A connected peer could overwrite a file you were sending, request your
+  outgoing files, or cancel others' transfers — fixed
+- Shared folders: requester identity comes from the session (was spoofable);
+  stricter path checks; symlinks leaving the share are skipped
+- Hub: authenticated sender on relayed packets; signed presence
+- Local web UI/API now requires a per-install token (other apps on the phone
+  could read messages and delete folders via 127.0.0.1)
+- Android: localhost certificate pinned, external links open outside the app,
+  camera/mic only for the local UI
+- Removed Google Fonts (third-party request on every launch)
+
+### Bug fixes
+- Link-up was never processed (UI not told, paused transfers never resumed)
+- Offline message queue was never sent
+- Simultaneous dials produced mismatched keys
+- Android LAN discovery: Wi-Fi multicast lock (phones dropped broadcasts)
+- Android build failed on JDKs other than 17 / without
+  `/usr/lib/jvm/java-17-openjdk`
+- Hub dropped a live member when its old connection closed; clients now
+  register on connect
+- Contact list rows broke on "Trust" (nested buttons); phone chat header hid
+  the contact name; spurious "restart with --port" toast
+- `srltcp send` waits for the delivery receipt; port 0 binding reports the
+  real port
+
+### Testing
+- End-to-end tests with real nodes over loopback (direct, hub, Noise, pairing,
+  offline, impersonation, malicious peers) and `scripts/simulate.py`, which
+  drives three nodes' UIs in Chromium (pairing, chat, files, video call,
+  phone layout, discovery, offline delivery)
+
 ## v0.1.57 (2026-07-06)
 
 ### Security

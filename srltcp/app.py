@@ -223,19 +223,30 @@ async def run_hub(args: argparse.Namespace) -> None:
 
 async def run_send(args: argparse.Namespace) -> None:
     settings = AppSettings()
-    config = NodeConfig(name=args.name, enable_serial=False, announce=False)
+    config = NodeConfig(
+        name=args.name, enable_serial=False, announce=False, tcp_port=0, discovery_port=0
+    )
     node = SRLTCPNode(config, settings)
     await node.start()
-    await node.backend.connect_to_peer(args.recipient, host=args.host, port=args.port)
-    await asyncio.sleep(2)
-    msg = await node.backend.send_message(args.recipient, args.text)
-    if msg:
-        print(f"Sent: {msg.id} ({msg.status})")
-    else:
-        print("Failed to send", file=sys.stderr)
-        sys.exit(1)
-    await asyncio.sleep(1)
-    await node.stop()
+    try:
+        backend = node.backend
+        if not backend.trusted.is_trusted(args.recipient):
+            print("Recipient is not a trusted contact (pair first)", file=sys.stderr)
+            sys.exit(1)
+        await backend.connect_to_peer(args.recipient, host=args.host, port=args.port)
+        msg = await backend.send_message(args.recipient, args.text)
+        if not msg:
+            print("Failed to send", file=sys.stderr)
+            sys.exit(1)
+        for _ in range(100):
+            if msg.status in ("delivered", "not_trusted"):
+                break
+            await asyncio.sleep(0.1)
+        print(f"{msg.id}: {msg.status}")
+        if msg.status != "delivered":
+            sys.exit(2)
+    finally:
+        await node.stop()
 
 
 async def run_identity() -> None:
