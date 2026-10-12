@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,15 +21,17 @@ from srltcp.core.messaging.hub import HubMixin
 from srltcp.core.messaging.links import PeerLink, PeerLinkMixin
 from srltcp.core.messaging.models import ChatMessage
 from srltcp.core.messaging.ping import PingMixin
-from srltcp.core.messaging.queue import QueueMixin
 from srltcp.core.messaging.share_peer import SharePeerMixin
+from srltcp.core.messaging.store import MessageStore
 from srltcp.core.messaging.transfer import TransferMixin
 from srltcp.core.protocol.messages import (
+    SESSION_MESSAGE_TYPES,
     Flags,
     MessageType,
     build_header,
     decode_payload,
     encode_payload,
+    header_aad,
     parse_header,
 )
 from srltcp.core.settings import prune_messages_by_retention
@@ -41,6 +44,8 @@ from srltcp.utils.logging import get_logger
 log = get_logger(__name__)
 
 EventCallback = Callable[..., Awaitable[None]]
+
+MAX_TEXT_BYTES = 65536
 
 
 @dataclass
@@ -71,7 +76,6 @@ class MessagingBackend(
     ConnectMixin,
     AnnounceMixin,
     PingMixin,
-    QueueMixin,
     TransferMixin,
     SharePeerMixin,
     HubMixin,
@@ -89,6 +93,10 @@ class MessagingBackend(
         self._serial_error: str | None = None
         self._running = False
         self._messages: list[ChatMessage] = []
+        self._message_store = MessageStore()
+        self._persist_handle: asyncio.TimerHandle | None = None
+        self._contact_requests: dict[str, float] = {}
+        self._dial_tasks: dict[str, asyncio.Task[None]] = {}
 
         # Event callbacks for web UI
         self._on_message: EventCallback | None = None
@@ -106,7 +114,6 @@ class MessagingBackend(
         self._init_connect()
         self._init_announce()
         self._init_ping()
-        self._init_queue()
         self._init_transfer()
         self._init_share_peer()
         self._init_hub()
@@ -138,6 +145,7 @@ class MessagingBackend(
         if self._running:
             return
         self._running = True
+        self.load_message_history()
 
         if self.config.enable_tcp:
             if not self.config.hub_mode:
@@ -178,6 +186,8 @@ class MessagingBackend(
             await self.start_ping_loop()
         if self._hub_enabled():
             await self.start_hub_client()
+        if not self.config.hub_mode:
+            self.connect_known_contacts()
 
         log.info(
             "MessagingBackend started (tcp=%s, serial=%s, hub_mode=%s, hub_client=%s)",
@@ -189,6 +199,10 @@ class MessagingBackend(
 
     async def stop(self) -> None:
         self._running = False
+        self.save_message_history()
+        for task in list(self._dial_tasks.values()):
+            task.cancel()
+        self._dial_tasks.clear()
         await self.stop_hub_client()
         await self.stop_announce_loop()
         await self.stop_ping_loop()
@@ -408,12 +422,14 @@ class MessagingBackend(
                     await self._handle_hub_relay_server(peer.peer_id, body)
                 return
 
-            if msg_type == MessageType.ANNOUNCE:
+            if msg_type in SESSION_MESSAGE_TYPES:
+                await self._dispatch_session_message(peer, msg_type, flags, body)
+            elif msg_type == MessageType.ANNOUNCE:
                 if peer.transport == "serial":
                     log.info("Serial ANNOUNCE received on %s", peer.address)
                 await self._handle_discovered(peer.address, peer.transport, body)
             elif msg_type == MessageType.HANDSHAKE:
-                await self._handle_handshake(peer.peer_id, body, initiator=False)
+                await self._handle_handshake(peer.peer_id, body)
             elif msg_type == MessageType.HANDSHAKE_ACK:
                 await self._handle_handshake_ack(peer.peer_id, body)
             elif msg_type == MessageType.HANDSHAKE_FINISH:
@@ -422,91 +438,112 @@ class MessagingBackend(
                 await self._reply_pong_with_rtt(peer, body)
             elif msg_type == MessageType.PONG:
                 await self._handle_pong(peer.peer_id, body)
-            elif msg_type == MessageType.TEXT:
-                await self._handle_text(peer.peer_id, body, flags)
-            elif msg_type == MessageType.FILE_OFFER:
-                link = self.get_link_by_peer_id(peer.peer_id)
-                if link and flags & Flags.ENCRYPTED:
-                    body = link.crypto.decrypt(body)
-                await self._handle_file_offer(
-                    link.hash_id if link else peer.peer_id, body
-                )
-            elif msg_type == MessageType.FILE_ACCEPT:
-                link = self.get_link_by_peer_id(peer.peer_id)
-                if link and flags & Flags.ENCRYPTED:
-                    body = link.crypto.decrypt(body)
-                if link:
-                    await self._handle_file_accept(link.hash_id, body)
-            elif msg_type == MessageType.FILE_REJECT:
-                link = self.get_link_by_peer_id(peer.peer_id)
-                if link and flags & Flags.ENCRYPTED:
-                    body = link.crypto.decrypt(body)
-                if link:
-                    await self._handle_file_reject(link.hash_id, body)
-            elif msg_type == MessageType.FILE_CHUNK:
-                link = self.get_link_by_peer_id(peer.peer_id)
-                if link:
-                    hash_id = link.hash_id
-                    compressed = bool(flags & Flags.COMPRESSED)
-
-                    async def _process_chunk() -> None:
-                        try:
-                            await self._handle_file_chunk(
-                                hash_id, body, compressed=compressed
-                            )
-                        except Exception as exc:
-                            log.warning(
-                                "File chunk handler failed from %s: %s",
-                                hash_id[:8],
-                                exc,
-                            )
-
-                    task = asyncio.create_task(_process_chunk())
-                    self._track_chunk_task(hash_id, task)
-            elif msg_type == MessageType.FILE_COMPLETE:
-                link = self.get_link_by_peer_id(peer.peer_id)
-                if link and flags & Flags.ENCRYPTED:
-                    body = link.crypto.decrypt(body)
-                if link:
-                    await self._handle_file_complete(link.hash_id, body)
-            elif msg_type == MessageType.FILE_RESUME:
-                link = self.get_link_by_peer_id(peer.peer_id)
-                if link and flags & Flags.ENCRYPTED:
-                    body = link.crypto.decrypt(body)
-                if link:
-                    await self._handle_file_resume(link.hash_id, body)
-            elif msg_type == MessageType.SHARE_LIST:
-                link = self.get_link_by_peer_id(peer.peer_id)
-                if link and flags & Flags.ENCRYPTED:
-                    body = link.crypto.decrypt(body)
-                if link:
-                    await self._handle_share_list(link.hash_id, body)
-            elif msg_type == MessageType.SHARE_REQUEST:
-                link = self.get_link_by_peer_id(peer.peer_id)
-                if link and flags & Flags.ENCRYPTED:
-                    body = link.crypto.decrypt(body)
-                if link:
-                    await self._handle_share_request(link.hash_id, body)
-            elif msg_type == MessageType.HUB_REGISTER:
-                if self.config.hub_mode:
-                    await self._handle_hub_register_server(peer.peer_id, body)
-            elif msg_type == MessageType.HUB_PRESENCE:
-                if not self.config.hub_mode:
+            elif peer.peer_id == self._hub_peer_id:
+                # Only our own hub connection may send hub control messages.
+                if msg_type == MessageType.HUB_PRESENCE:
                     await self._handle_hub_presence_client(body)
-            elif msg_type == MessageType.HUB_DEPART:
-                if not self.config.hub_mode:
+                elif msg_type == MessageType.HUB_DEPART:
                     await self._handle_hub_depart_client(body)
-            elif msg_type == MessageType.RELAY_ENVELOPE:
-                if self.config.hub_mode:
-                    await self._handle_hub_relay_server(peer.peer_id, body)
-                else:
+                elif msg_type == MessageType.RELAY_ENVELOPE:
                     await self._handle_hub_relay_client(body)
         except Exception as exc:
             log.warning(
                 "Handler failed for msg_type=%s from %s: %s",
-                msg_type.name if hasattr(msg_type, 'name') else msg_type,
+                msg_type.name if hasattr(msg_type, "name") else msg_type,
                 peer.peer_id[:8],
                 exc,
+            )
+
+    async def _dispatch_session_message(
+        self, peer: TransportPeer, msg_type: MessageType, flags: int, body: bytes
+    ) -> None:
+        """Decrypt and route a message that must travel inside an E2EE session."""
+        link = self.get_link_by_peer_id(peer.peer_id)
+        if not link or not link.handshake_complete:
+            log.debug("Dropping %s from %s — no session", msg_type.name, peer.peer_id[:8])
+            return
+        if not flags & Flags.ENCRYPTED:
+            log.warning("Dropping unencrypted %s from %s", msg_type.name, link.hash_id[:8])
+            return
+        try:
+            body = link.crypto.decrypt(body, header_aad(msg_type, flags))
+        except Exception as exc:
+            log.warning("Decrypt failed for %s from %s: %s", msg_type.name, link.hash_id[:8], exc)
+            return
+        hash_id = link.hash_id
+        if msg_type == MessageType.RECEIPT:
+            await self._handle_receipt(hash_id, body)
+            return
+        if not self.is_trusted(hash_id):
+            await self._handle_untrusted_message(link, msg_type, body)
+            return
+        if msg_type == MessageType.TEXT:
+            await self._handle_text(hash_id, body, flags)
+        elif msg_type == MessageType.FILE_OFFER:
+            await self._handle_file_offer(hash_id, body)
+        elif msg_type == MessageType.FILE_ACCEPT:
+            await self._handle_file_accept(hash_id, body)
+        elif msg_type == MessageType.FILE_REJECT:
+            await self._handle_file_reject(hash_id, body)
+        elif msg_type == MessageType.FILE_CHUNK:
+            compressed = bool(flags & Flags.COMPRESSED)
+
+            async def _process_chunk() -> None:
+                try:
+                    await self._handle_file_chunk(hash_id, body, compressed=compressed)
+                except Exception as exc:
+                    log.warning("File chunk handler failed from %s: %s", hash_id[:8], exc)
+
+            task = asyncio.create_task(_process_chunk())
+            self._track_chunk_task(hash_id, task)
+        elif msg_type == MessageType.FILE_COMPLETE:
+            await self._handle_file_complete(hash_id, body)
+        elif msg_type == MessageType.FILE_RESUME:
+            await self._handle_file_resume(hash_id, body)
+        elif msg_type == MessageType.SHARE_LIST:
+            await self._handle_share_list(hash_id, body)
+        elif msg_type == MessageType.SHARE_REQUEST:
+            await self._handle_share_request(hash_id, body)
+        elif msg_type == MessageType.CALL_SIGNAL:
+            await self._handle_call_signal(hash_id, body)
+
+    async def _handle_untrusted_message(
+        self, link: PeerLink, msg_type: MessageType, body: bytes
+    ) -> None:
+        """A verified but not-yet-trusted peer tried to talk to us.
+
+        Nothing is stored or shown as a message; the user gets a contact
+        request they can accept, and the sender learns it was not delivered.
+        """
+        hash_id = link.hash_id
+        if msg_type == MessageType.TEXT:
+            with contextlib.suppress(Exception):
+                data = decode_payload(body)
+                msg_id = str(data.get("id", ""))
+                if msg_id:
+                    await self._send_receipt(link, msg_id, "not_trusted")
+        now = time.monotonic()
+        if now - self._contact_requests.get(hash_id, 0.0) < 30.0:
+            return
+        self._contact_requests[hash_id] = now
+        if self.trusted.get(hash_id):  # blocked contacts stay silent
+            return
+        self.discovery.upsert_contact_request(
+            hash_id=hash_id,
+            name=link.peer_name,
+            public_key=link.public_key.hex(),
+            transport=link.transport,
+            address=link.address,
+        )
+        log.info("Contact request from untrusted peer %s (%s)", link.peer_name, hash_id[:8])
+        if self._on_event:
+            await self._on_event(
+                {
+                    "kind": "contact_request",
+                    "hash_id": hash_id,
+                    "name": link.peer_name,
+                    "transport": link.transport,
+                }
             )
 
     def is_trusted(self, hash_id: str) -> bool:
@@ -516,7 +553,10 @@ class MessagingBackend(
     def delete_message(self, message_id: str) -> bool:
         before = len(self._messages)
         self._messages = [m for m in self._messages if m.id != message_id]
-        return len(self._messages) < before
+        removed = len(self._messages) < before
+        if removed:
+            self._persist_messages()
+        return removed
 
     def clear_messages_for_peer(self, hash_id: str) -> int:
         before = len(self._messages)
@@ -525,31 +565,64 @@ class MessagingBackend(
             for m in self._messages
             if m.sender_hash != hash_id and m.recipient_hash != hash_id
         ]
+        self._persist_messages()
         return before - len(self._messages)
 
-    async def _handle_text(self, peer_id: str, body: bytes, flags: int) -> None:
-        link = self.get_link_by_peer_id(peer_id)
-        if not link or not link.handshake_complete:
+    async def _handle_text(self, hash_id: str, body: bytes, flags: int) -> None:
+        link = self.get_link(hash_id)
+        if not link:
             return
-        if flags & Flags.ENCRYPTED:
+        if flags & Flags.COMPRESSED:
             try:
-                body = link.crypto.decrypt(body)
+                body = zstd.ZstdDecompressor().decompress(body, max_output_size=MAX_TEXT_BYTES)
             except Exception:
                 return
-        if flags & Flags.COMPRESSED:
-            with contextlib.suppress(Exception):
-                body = zstd.ZstdDecompressor().decompress(body)
         data = decode_payload(body)
+        msg_id = str(data.get("id") or "")[:64]
+        if msg_id:
+            # Always acknowledge (even duplicates) so the sender stops retrying.
+            await self._send_receipt(link, msg_id, "delivered")
+            if any(m.id == msg_id and m.sender_hash == hash_id for m in self._messages):
+                return
+        text = str(data.get("text", ""))[:MAX_TEXT_BYTES]
         msg = ChatMessage.create(
-            sender_hash=link.hash_id,
+            sender_hash=hash_id,
             recipient_hash=self._identity_for_transport(link.transport).hash_id,
-            text=data.get("text", ""),
+            text=text,
             transport=link.transport,
-            metadata=data.get("metadata", {}),
         )
+        if msg_id:
+            msg.id = msg_id
+        msg.status = "delivered"
+        sent_ts = data.get("ts")
+        if isinstance(sent_ts, int | float) and abs(time.time() - float(sent_ts)) < 7 * 86400:
+            msg.metadata["sent_at"] = float(sent_ts)
         self._messages.append(msg)
+        self._persist_messages()
         if self._on_message:
             await self._on_message(msg.to_dict())
+
+    async def _send_receipt(self, link: PeerLink, msg_id: str, status: str) -> None:
+        body = encode_payload({"id": msg_id, "status": status})
+        with contextlib.suppress(Exception):
+            packet = self._seal(link, MessageType.RECEIPT, body)
+            await self._send_raw(link.transport_peer_id, link.transport, packet)
+
+    async def _handle_receipt(self, hash_id: str, body: bytes) -> None:
+        data = decode_payload(body)
+        msg_id = str(data.get("id", ""))
+        status = str(data.get("status", ""))
+        if status not in ("delivered", "not_trusted"):
+            return
+        for msg in reversed(self._messages):
+            if msg.id == msg_id and msg.recipient_hash == hash_id:
+                if msg.status == status:
+                    return
+                msg.status = status
+                self._persist_messages()
+                if self._on_message:
+                    await self._on_message(msg.to_dict())
+                return
 
     async def send_message(
         self,
@@ -558,47 +631,149 @@ class MessagingBackend(
         *,
         transport: str = "tcp",
     ) -> ChatMessage | None:
+        """Queue a message and try to deliver it now.
+
+        Returns immediately with status ``sent`` (written to an open session)
+        or ``pending`` (will be retried when the contact comes online).
+        A ``RECEIPT`` from the peer later upgrades the status to ``delivered``.
+        """
         if not self.trusted.is_trusted(recipient_hash):
             log.warning("Recipient %s not in trusted list", recipient_hash[:8])
             return None
         link = self.get_link(recipient_hash)
-        if not link or not link.handshake_complete:
-            await self.connect_to_peer(recipient_hash, transport=transport, force=False)
-            await self.wait_for_handshake(recipient_hash, timeout=8.0)
-            link = self.get_link(recipient_hash)
-        identity = self._identity_for_transport(transport)
+        identity = self._identity_for_transport(link.transport if link else transport)
         msg = ChatMessage.create(
             sender_hash=identity.hash_id,
             recipient_hash=recipient_hash,
-            text=text,
-            transport=transport,
+            text=text[:MAX_TEXT_BYTES],
+            transport=link.transport if link else transport,
         )
-        if not link or not link.handshake_complete:
-            msg.status = "pending"
-            await self.enqueue_message(msg)
-            self._messages.append(msg)
-            return msg
+        msg.status = "pending"
+        self._messages.append(msg)
+        self._persist_messages()
+        if link and link.handshake_complete and self._is_link_reachable(link):
+            await self._transmit_text(msg)
+        else:
+            self._kick_connect(recipient_hash, transport)
+        if self._on_message:
+            await self._on_message(msg.to_dict())
+        return msg
 
-        body = encode_payload({"text": text})
-        flags = Flags.ENCRYPTED | Flags.E2EE
+    async def _transmit_text(self, msg: ChatMessage) -> bool:
+        link = self.get_link(msg.recipient_hash)
+        if not link or not link.handshake_complete:
+            return False
+        body = encode_payload({"id": msg.id, "text": msg.text, "ts": msg.timestamp})
+        flags = 0
         if len(body) >= COMPRESS_THRESHOLD:
             compressed = zstd.ZstdCompressor(level=3).compress(body)
             if len(compressed) < len(body):
                 body = compressed
                 flags |= Flags.COMPRESSED
-        encrypted = link.crypto.encrypt(body)
-        packet = build_header(MessageType.TEXT, flags=flags, body=encrypted)
-        await self._send_raw(link.transport_peer_id, link.transport, packet)
-        self._messages.append(msg)
-        if self._on_message:
-            await self._on_message(msg.to_dict())
-        return msg
+        try:
+            packet = self._seal(link, MessageType.TEXT, body, flags)
+            await self._send_raw(link.transport_peer_id, link.transport, packet)
+        except (KeyError, OSError, RuntimeError, ConnectionError) as exc:
+            log.info("Send to %s failed, will retry: %s", msg.recipient_hash[:8], exc)
+            return False
+        msg.status = "sent"
+        msg.transport = link.transport
+        msg.metadata["attempts"] = int(msg.metadata.get("attempts", 0)) + 1
+        self._persist_messages()
+        return True
+
+    def _kick_connect(self, hash_id: str, transport: str = "tcp") -> None:
+        """Start a background dial so queued messages flush on link-up."""
+        if not self._running:
+            return
+        existing = self._dial_tasks.get(hash_id)
+        if existing and not existing.done():
+            return
+
+        async def _dial() -> None:
+            try:
+                await self.connect_to_peer(hash_id, transport=transport, force=False)
+            except (OSError, TimeoutError, ConnectionError, KeyError, RuntimeError) as exc:
+                log.debug("Background dial to %s failed: %s", hash_id[:8], exc)
+            finally:
+                self._dial_tasks.pop(hash_id, None)
+
+        self._dial_tasks[hash_id] = asyncio.create_task(_dial())
+
+    def peers_with_undelivered(self) -> set[str]:
+        return {
+            m.recipient_hash
+            for m in self._messages
+            if m.msg_type == "text" and m.status in ("pending", "sent")
+            and m.recipient_hash not in self._own_hash_ids()
+        }
+
+    def retry_outbox_connections(self) -> None:
+        """Dial contacts we still owe messages to (no-op when already linked)."""
+        for hash_id in self.peers_with_undelivered():
+            if not self.is_trusted(hash_id):
+                continue
+            link = self.get_link(hash_id)
+            if link and link.handshake_complete:
+                continue
+            self._kick_connect(hash_id)
+
+    def connect_known_contacts(self) -> None:
+        """Bring up sessions with trusted contacts at startup so their queued
+        messages to us arrive without anyone pressing a button."""
+        for peer in self.trusted.list_peers():
+            if peer.tcp_host or peer.wan_host or self._hub_enabled():
+                self._kick_connect(peer.hash_id, peer.transport)
+
+    async def flush_outbox(self, hash_id: str) -> int:
+        """Resend messages still pending/sent-but-unacknowledged to a peer."""
+        pending = [
+            m
+            for m in self._messages
+            if m.recipient_hash == hash_id
+            and m.msg_type == "text"
+            and m.status in ("pending", "sent", "not_trusted")
+        ]
+        sent = 0
+        for msg in pending:
+            if await self._transmit_text(msg):
+                sent += 1
+                if self._on_message:
+                    await self._on_message(msg.to_dict())
+        return sent
+
+    def _seal(
+        self, link: PeerLink, msg_type: MessageType, body: bytes, flags: int = 0
+    ) -> bytes:
+        flags |= Flags.ENCRYPTED | Flags.E2EE
+        encrypted = link.crypto.encrypt(body, header_aad(msg_type, flags))
+        return build_header(msg_type, flags=flags, body=encrypted)
 
     async def _encrypt_for_link(
         self, link: PeerLink, msg_type: MessageType, body: bytes
     ) -> bytes:
-        encrypted = link.crypto.encrypt(body)
-        return build_header(msg_type, flags=Flags.ENCRYPTED | Flags.E2EE, body=encrypted)
+        return self._seal(link, msg_type, body)
+
+    # -- Call signalling (WebRTC offer/answer/ICE relayed inside the E2EE session) --
+
+    async def send_call_signal(self, recipient_hash: str, signal: dict[str, Any]) -> bool:
+        if not self.is_trusted(recipient_hash):
+            return False
+        link = self.get_link(recipient_hash)
+        if not link or not link.handshake_complete:
+            return False
+        body = encode_payload(signal)
+        if len(body) > 256 * 1024:
+            return False
+        packet = self._seal(link, MessageType.CALL_SIGNAL, body)
+        await self._send_raw(link.transport_peer_id, link.transport, packet)
+        return True
+
+    async def _handle_call_signal(self, hash_id: str, body: bytes) -> None:
+        data = decode_payload(body)
+        if not isinstance(data, dict) or self._on_event is None:
+            return
+        await self._on_event({"kind": "call_signal", "hash_id": hash_id, "signal": data})
 
     async def _send_raw(self, peer_id: str, transport: str, packet: bytes) -> None:
         if transport == "hub":
@@ -649,6 +824,50 @@ class MessagingBackend(
         if self._hub_enabled() or self.config.hub_mode:
             status["hub"] = self.hub_status()
         return status
+
+    def _history_enabled(self) -> bool:
+        return self.config.message_retention_hours > 0
+
+    def load_message_history(self) -> None:
+        if not self._history_enabled():
+            self._message_store.clear()
+            return
+        stored = self._message_store.load()
+        stored_ids = {m.id for m in stored}
+        for msg in stored:
+            # Transfers do not survive a restart; show unfinished ones as failed.
+            if msg.msg_type != "text" and msg.metadata.get("state") in (
+                "pending",
+                "offered",
+                "accepted",
+                "transferring",
+                "paused",
+            ):
+                msg.metadata["state"] = "failed"
+        self._messages = stored + [m for m in self._messages if m.id not in stored_ids]
+        self._prune_messages()
+
+    def _persist_messages(self) -> None:
+        """Debounced write of chat history to disk."""
+        if not self._history_enabled():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.save_message_history()
+            return
+        if self._persist_handle:
+            return
+        self._persist_handle = loop.call_later(0.5, self.save_message_history)
+
+    def save_message_history(self) -> None:
+        if self._persist_handle:
+            self._persist_handle.cancel()
+            self._persist_handle = None
+        if not self._history_enabled():
+            return
+        self._prune_messages()
+        self._message_store.save(self._messages)
 
     def _prune_messages(self) -> None:
         self._messages = prune_messages_by_retention(
@@ -712,6 +931,10 @@ class MessagingBackend(
     def clear_messages(self) -> int:
         count = len(self._messages)
         self._messages.clear()
+        if self._persist_handle:
+            self._persist_handle.cancel()
+            self._persist_handle = None
+        self._message_store.clear()
         return count
 
     def _file_msg_type(self, filename: str) -> str:
@@ -751,6 +974,7 @@ class MessagingBackend(
             },
         )
         self._messages.append(msg)
+        self._persist_messages()
         if self._on_message:
             await self._on_message(msg.to_dict())
 
@@ -772,6 +996,8 @@ class MessagingBackend(
                 if meta.get("is_folder_zip"):
                     msg.metadata["is_folder_zip"] = True
                     msg.metadata["folder_name"] = meta.get("folder_name")
+                if notify:
+                    self._persist_messages()
                 if notify and self._on_message:
                     await self._on_message(msg.to_dict())
                 return

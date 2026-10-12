@@ -28,6 +28,8 @@ class MessageType(IntEnum):
     FILE_RESUME = 0x35
     SHARE_LIST = 0x40
     SHARE_REQUEST = 0x41
+    RECEIPT = 0x21
+    CALL_SIGNAL = 0x60
     RELAY_ENVELOPE = 0x50
     HUB_REGISTER = 0x52
     HUB_PRESENCE = 0x53
@@ -40,6 +42,30 @@ class Flags:
     ENCRYPTED = 0x02
     RELAY = 0x04
     E2EE = 0x08
+
+
+# Messages that are only valid inside an established E2EE session. They must
+# carry Flags.ENCRYPTED and are authenticated with the header as AAD.
+SESSION_MESSAGE_TYPES = frozenset(
+    {
+        MessageType.TEXT,
+        MessageType.RECEIPT,
+        MessageType.FILE_OFFER,
+        MessageType.FILE_ACCEPT,
+        MessageType.FILE_REJECT,
+        MessageType.FILE_CHUNK,
+        MessageType.FILE_COMPLETE,
+        MessageType.FILE_RESUME,
+        MessageType.SHARE_LIST,
+        MessageType.SHARE_REQUEST,
+        MessageType.CALL_SIGNAL,
+    }
+)
+
+
+def header_aad(msg_type: MessageType, flags: int) -> bytes:
+    """Associated data binding a ciphertext to its message type and flags."""
+    return bytes([int(msg_type) & 0xFF, flags & 0xFF])
 
 
 def parse_header(data: bytes) -> tuple[MessageType, int, int, int, bytes]:

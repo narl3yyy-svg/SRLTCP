@@ -26,7 +26,6 @@ from srltcp.utils.logging import get_logger
 from srltcp.utils.wan import (
     is_private_or_lan_host,
     resolve_wan_endpoint,
-    validate_hub_host,
     validate_wan_port,
 )
 
@@ -115,7 +114,10 @@ class HubMixin:
     async def start_hub_client(self: MessagingBackend) -> None:
         if not self._hub_enabled() or self.config.hub_mode:
             return
-        await self._ensure_hub_connection()
+        if await self._ensure_hub_connection():
+            # Register right away so contacts can reach us without a manual announce.
+            with contextlib.suppress(Exception):
+                await self._send_hub_register()
 
     async def stop_hub_client(self: MessagingBackend) -> None:
         if self._hub_connect_task and not self._hub_connect_task.done():
@@ -271,17 +273,9 @@ class HubMixin:
         if previous and previous.hash_id != hash_id:
             log.debug("Replaced hub registration for conn %s", conn_peer_id[:8])
 
-        presence_body = encode_payload(
-            {
-                "type": "hub_presence",
-                "hash_id": data.get("hash_id"),
-                "name": data.get("name", "unknown"),
-                "public_key": data.get("public_key", ""),
-                "transport": "hub",
-                "via_hub": True,
-            }
-        )
-        presence_pkt = build_header(MessageType.HUB_PRESENCE, body=presence_body)
+        # Forward the member's own signed registration so other clients can
+        # verify it — the hub cannot forge presence for an identity.
+        presence_pkt = build_header(MessageType.HUB_PRESENCE, body=body)
         if self.tcp_transport:
             for other_conn in self._hub_presence.list_other_conns(conn_peer_id):
                 with contextlib.suppress(Exception):
@@ -289,24 +283,11 @@ class HubMixin:
             for member in self._hub_presence.list_members():
                 if member.hash_id == hash_id:
                     continue
-                try:
-                    reg = decode_payload(member.announce)
-                except Exception:
-                    continue
-                existing_presence = encode_payload(
-                    {
-                        "type": "hub_presence",
-                        "hash_id": reg.get("hash_id"),
-                        "name": reg.get("name", "unknown"),
-                        "public_key": reg.get("public_key", ""),
-                        "transport": "hub",
-                        "via_hub": True,
-                    }
-                )
-                await self.tcp_transport.send(
-                    conn_peer_id,
-                    build_header(MessageType.HUB_PRESENCE, body=existing_presence),
-                )
+                with contextlib.suppress(Exception):
+                    await self.tcp_transport.send(
+                        conn_peer_id,
+                        build_header(MessageType.HUB_PRESENCE, body=member.announce),
+                    )
 
         log.info("Hub member online: %s (%s)", data.get("name"), hash_id[:8])
 
@@ -351,8 +332,12 @@ class HubMixin:
     async def _handle_hub_relay_server(
         self: MessagingBackend, from_conn: str, body: bytes
     ) -> None:
+        sender = self._hub_presence.hash_for_conn(from_conn)
+        if not sender:
+            log.debug("Relay from unregistered connection %s dropped", from_conn[:8])
+            return
         try:
-            dest_hash, _src_hash, _inner = relay_unwrap(body)
+            dest_hash, _src_hash, inner = relay_unwrap(body)
         except ValueError:
             log.debug("Invalid relay envelope from %s", from_conn[:8])
             return
@@ -364,8 +349,11 @@ class HubMixin:
             log.debug("No hub route to %s", dest_hash[:8])
             return
         if self.tcp_transport:
-            packet = build_header(MessageType.RELAY_ENVELOPE, flags=0x08, body=body)
-            await self.tcp_transport.send(target, packet)
+            # Stamp the authenticated sender so clients cannot spoof the source.
+            wrapped = relay_wrap(inner, dest_hash, src_hash=sender)
+            packet = build_header(MessageType.RELAY_ENVELOPE, flags=0x08, body=wrapped)
+            with contextlib.suppress(KeyError, OSError, ConnectionError):
+                await self.tcp_transport.send(target, packet)
 
     async def _handle_hub_relay_client(
         self: MessagingBackend, body: bytes
@@ -379,16 +367,6 @@ class HubMixin:
             return
         if dest_hash != identity.hash_id:
             return
-        if not src_hash:
-            try:
-                from srltcp.core.protocol.messages import parse_header
-
-                msg_type, _flags, _sid, _seq, msg_body = parse_header(inner)
-                if msg_type in (MessageType.HANDSHAKE, MessageType.HANDSHAKE_ACK):
-                    payload = decode_payload(msg_body)
-                    src_hash = str(payload.get("hash_id", ""))
-            except Exception:
-                return
         if not src_hash or len(src_hash) != 32:
             log.debug("Hub relay: missing sender hash")
             return
@@ -429,4 +407,6 @@ class HubMixin:
                 link = self._links.get(hash_id)
                 if link and link.transport == "hub":
                     self.remove_link(hash_id)
+                    if self._on_link_down:
+                        asyncio.ensure_future(self._on_link_down(hash_id, link.peer_name))
             self._schedule_hub_reconnect()

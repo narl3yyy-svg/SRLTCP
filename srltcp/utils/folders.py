@@ -117,9 +117,7 @@ def _deletable(path: Path, roots: list[Path] | None = None) -> bool:
             continue
         if not rel.parts:
             return False
-        if root_r.name.lower() in ("download", "downloads") and len(rel.parts) < 2:
-            return False
-        return True
+        return not (root_r.name.lower() in ("download", "downloads") and len(rel.parts) < 2)
     return False
 
 

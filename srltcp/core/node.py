@@ -152,7 +152,7 @@ class SRLTCPNode:
         if not session or not session.is_valid(token):
             return None
         target = (session.path / rel_path).resolve()
-        if not str(target).startswith(str(session.path)):
+        if not target.is_relative_to(session.path):
             return None
         return target
 

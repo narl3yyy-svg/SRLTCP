@@ -30,7 +30,7 @@ class ChatMessage:
     text: str
     transport: str
     timestamp: float = field(default_factory=time.time)
-    status: str = "sent"  # sent | delivered | read | pending
+    status: str = "sent"  # pending | sent | delivered | not_trusted | failed
     msg_type: str = "text"
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -54,6 +54,23 @@ class ChatMessage:
             msg_type=msg_type,
             metadata=metadata or {},
         )
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ChatMessage | None:
+        try:
+            return cls(
+                id=str(data["id"]),
+                sender_hash=str(data["sender_hash"]),
+                recipient_hash=str(data["recipient_hash"]),
+                text=str(data.get("text", "")),
+                transport=str(data.get("transport", "tcp")),
+                timestamp=float(data.get("timestamp", time.time())),
+                status=str(data.get("status", "sent")),
+                msg_type=str(data.get("msg_type", "text")),
+                metadata=dict(data.get("metadata") or {}),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -299,8 +299,9 @@ class SharePeerMixin:
 
     def _zip_share_path(self: MessagingBackend, grant: ShareGrant, rel: str) -> Path | None:
         rel_norm = rel.replace("\\", "/").strip("/")
-        target = (grant.root / rel_norm).resolve() if rel_norm else grant.root
-        if not str(target).startswith(str(grant.root.resolve())):
+        root = grant.root.resolve()
+        target = (root / rel_norm).resolve() if rel_norm else root
+        if not target.is_relative_to(root):
             return None
         if not target.exists():
             return None
@@ -335,9 +336,10 @@ class SharePeerMixin:
         data = decode_payload(body)
         action = data.get("action", "")
         if action == "revoke":
-            grant_id = data.get("grant_id", "")
-            if grant_id in self._remote_share_grants:
-                self._remote_share_grants[grant_id].revoked = True
+            grant_id = str(data.get("grant_id", ""))
+            remote = self._remote_share_grants.get(grant_id)
+            if remote and remote.owner_hash == hash_id:
+                remote.revoked = True
                 if self._on_event:
                     await self._on_event(
                         {
@@ -348,8 +350,11 @@ class SharePeerMixin:
                     )
             return
         if action == "offer":
-            grant_id = data.get("grant_id", "")
+            grant_id = str(data.get("grant_id", ""))[:64]
             if not grant_id:
+                return
+            prior = self._remote_share_grants.get(grant_id)
+            if prior and prior.owner_hash != hash_id:
                 return
             identity = ""
             link = self.get_link(hash_id)
@@ -380,10 +385,17 @@ class SharePeerMixin:
                 )
             return
         if action == "listing":
-            grant_id = data.get("grant_id", "")
+            grant_id = str(data.get("grant_id", ""))
+            remote = self._remote_share_grants.get(grant_id)
+            if not remote or remote.owner_hash != hash_id:
+                return
             entries = data.get("entries", [])
+            if not isinstance(entries, list):
+                return
             normalized = []
-            for entry in entries:
+            for entry in entries[:MAX_SHARE_ENTRIES]:
+                if not isinstance(entry, dict):
+                    continue
                 name = str(entry.get("name", entry.get("path", "")))
                 normalized.append(
                     {
@@ -413,8 +425,10 @@ class SharePeerMixin:
         from srltcp.core.protocol.messages import decode_payload
 
         data = decode_payload(body)
-        grant_id = data.get("grant_id", "")
-        requester = str(data.get("requester_hash") or hash_id)
+        grant_id = str(data.get("grant_id", ""))
+        # The requester is whoever authenticated this session — never a field
+        # the remote side controls.
+        requester = hash_id
         grant = self._share_grants.get(grant_id)
         action = data.get("action", "")
         link = self.get_link(hash_id)
@@ -441,7 +455,7 @@ class SharePeerMixin:
             return
 
         if action == "list":
-            entries = walk_directory(grant.root)[:MAX_SHARE_ENTRIES]
+            entries = (await asyncio.to_thread(walk_directory, grant.root))[:MAX_SHARE_ENTRIES]
             listing = [
                 {
                     "name": str(e.get("name", "")),
@@ -469,12 +483,12 @@ class SharePeerMixin:
             as_folder = bool(data.get("as_folder", False))
             root_resolved = grant.root.resolve()
             target = (root_resolved / rel).resolve() if rel else root_resolved
-            if not str(target).startswith(str(root_resolved)):
+            if not target.is_relative_to(root_resolved):
                 return
 
             send_path: Path | None = None
             if as_folder or target.is_dir():
-                send_path = self._zip_share_path(grant, rel)
+                send_path = await asyncio.to_thread(self._zip_share_path, grant, rel)
             elif target.is_file():
                 send_path = target
             if not send_path or not send_path.is_file():

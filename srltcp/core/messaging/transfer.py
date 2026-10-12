@@ -23,7 +23,6 @@ from srltcp.core.messaging.models import FileTransfer, TransferState
 from srltcp.core.protocol.messages import (
     Flags,
     MessageType,
-    build_header,
     decode_payload,
     encode_payload,
     normalize_transfer_id,
@@ -33,6 +32,7 @@ from srltcp.core.protocol.messages import (
 from srltcp.utils.files import (
     ensure_dir,
     fsync_file,
+    safe_filename,
     sha256_file,
     unique_dest_path,
     write_file_chunk,
@@ -117,11 +117,14 @@ class TransferMixin:
             await self._on_transfer_progress(payload)
         await self._update_file_message(payload, notify=terminal)
 
-    def _maybe_decompress(self: MessagingBackend, data: bytes, compressed: bool) -> bytes:
+    def _maybe_decompress(
+        self: MessagingBackend, data: bytes, compressed: bool, *, max_size: int = 0
+    ) -> bytes:
         if not compressed:
             return data
         dctx = zstd.ZstdDecompressor()
-        return dctx.decompress(data)
+        # Bound output so a tiny compressed chunk cannot expand without limit.
+        return dctx.decompress(data, max_output_size=max(1, max_size or CHUNK_SIZE))
 
     def _own_hash_ids(self: MessagingBackend) -> set[str]:
         return {i.hash_id for i in self.identities.values()}
@@ -184,45 +187,65 @@ class TransferMixin:
         data = decode_payload(body)
         try:
             transfer_id = normalize_transfer_id(str(data["transfer_id"]))
-        except (KeyError, ValueError) as exc:
+            size = int(data["size"])
+            sha256 = str(data["sha256"]).lower()
+            filename = str(data.get("filename") or "file")[:255]
+        except (KeyError, ValueError, TypeError) as exc:
             log.warning("Invalid file offer from %s: %s", hash_id[:8], exc)
             return
-        dest = unique_dest_path(self._transfer_dir, data["filename"])
-        identity_hash = ""
+        if size < 0 or len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+            log.warning("Invalid file offer metadata from %s", hash_id[:8])
+            return
+        existing = self._transfers.get(transfer_id)
+        if existing and existing.sender_hash != hash_id:
+            log.warning("Transfer id collision from %s — offer ignored", hash_id[:8])
+            return
         link = self.get_link(hash_id)
-        if link:
-            identity_hash = self._identity_for_transport(link.transport).hash_id
+        if not link:
+            return
+        if existing:
+            # Re-offer of a transfer we already know (e.g. after reconnect): resume.
+            dest = self._incoming_paths.get(transfer_id, existing.path)
+            offset = dest.stat().st_size if dest.is_file() else 0
+            accept_body = encode_payload({"transfer_id": transfer_id, "offset": offset})
+            packet = await self._encrypt_for_link(link, MessageType.FILE_ACCEPT, accept_body)
+            await self._send_raw(link.transport_peer_id, link.transport, packet)
+            return
+        filename = safe_filename(filename).lstrip(".") or "file"
+        dest = unique_dest_path(self._transfer_dir, filename)
+        identity_hash = self._identity_for_transport(link.transport).hash_id
         transfer = FileTransfer(
             id=transfer_id,
             sender_hash=hash_id,
             recipient_hash=identity_hash,
-            filename=data["filename"],
+            filename=filename,
             path=dest,
-            size=int(data["size"]),
-            sha256=data["sha256"],
-            transport="tcp",
+            size=size,
+            sha256=sha256,
+            transport=link.transport,
             state=TransferState.OFFERED,
         )
-        if link:
-            transfer.transport = link.transport
         self._transfers[transfer_id] = transfer
         self._incoming_paths[transfer_id] = dest
+        # Reserve the name so concurrent offers with the same filename don't collide.
+        with contextlib.suppress(OSError):
+            dest.touch(exist_ok=True)
 
-        if link:
-            accept_body = encode_payload({"transfer_id": transfer_id, "offset": 0})
-            packet = await self._encrypt_for_link(link, MessageType.FILE_ACCEPT, accept_body)
-            await self._send_raw(link.transport_peer_id, link.transport, packet)
-            transfer.state = TransferState.ACCEPTED
-            transfer.recipient_hash = self._identity_for_transport(link.transport).hash_id
-            if self._on_file_offer:
-                await self._on_file_offer(transfer.to_dict())
-            await self._append_file_message(
-                sender_hash=hash_id,
-                recipient_hash=transfer.recipient_hash,
-                transport=link.transport,
-                transfer=transfer.to_dict(),
-                direction="in",
-            )
+        accept_body = encode_payload({"transfer_id": transfer_id, "offset": 0})
+        packet = await self._encrypt_for_link(link, MessageType.FILE_ACCEPT, accept_body)
+        await self._send_raw(link.transport_peer_id, link.transport, packet)
+        transfer.state = TransferState.ACCEPTED
+        if self._on_file_offer:
+            await self._on_file_offer(transfer.to_dict())
+        await self._append_file_message(
+            sender_hash=hash_id,
+            recipient_hash=transfer.recipient_hash,
+            transport=link.transport,
+            transfer=transfer.to_dict(),
+            direction="in",
+        )
+        if size == 0:
+            await self._maybe_finalize_incoming_transfer(transfer_id, peer_hash=hash_id)
 
     async def _handle_file_accept(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
@@ -231,10 +254,16 @@ class TransferMixin:
         except (KeyError, ValueError) as exc:
             log.warning("Invalid file accept from %s: %s", hash_id[:8], exc)
             return
-        offset = int(data.get("offset", 0))
         transfer = self._transfers.get(transfer_id)
-        if not transfer:
+        if not transfer or transfer.recipient_hash != hash_id:
             return
+        if transfer.sender_hash not in self._own_hash_ids():
+            return
+        try:
+            offset = int(data.get("offset", 0))
+        except (TypeError, ValueError):
+            return
+        offset = max(0, min(offset, transfer.size))
         if transfer.state in (
             TransferState.COMPLETE,
             TransferState.CANCELLED,
@@ -250,7 +279,8 @@ class TransferMixin:
         if existing and existing.done():
             self._transfer_tasks.pop(transfer_id, None)
         transfer.state = TransferState.TRANSFERRING
-        transfer.offset = max(transfer.offset, offset)
+        # The receiver's offset is authoritative: it is what is on its disk.
+        transfer.offset = offset
         self._transfer_started[transfer_id] = time.time()
         await self._emit_transfer_progress(transfer, force=True)
         task = asyncio.create_task(self._send_file_chunks(hash_id, transfer))
@@ -303,15 +333,8 @@ class TransferMixin:
                         chunk, transport=transfer.transport
                     )
                     raw = pack_file_chunk(transfer.id, transfer.offset, payload)
-                    flags = Flags.ENCRYPTED | Flags.E2EE
-                    if compressed:
-                        flags |= Flags.COMPRESSED
-                    encrypted = link.crypto.encrypt(raw)
-                    packet = build_header(
-                        MessageType.FILE_CHUNK,
-                        flags=flags,
-                        body=encrypted,
-                    )
+                    flags = Flags.COMPRESSED if compressed else 0
+                    packet = self._seal(link, MessageType.FILE_CHUNK, raw, flags)
                     await self._send_raw(link.transport_peer_id, link.transport, packet)
                     transfer.offset += len(chunk)
                     started = self._transfer_started.get(transfer.id, time.time())
@@ -361,28 +384,36 @@ class TransferMixin:
     async def _handle_file_chunk(
         self: MessagingBackend, hash_id: str, body: bytes, *, compressed: bool = False
     ) -> None:
-        link = self.get_link(hash_id)
-        if not link:
-            return
+        """Write one decrypted chunk of an *incoming* transfer from its sender."""
         try:
-            decrypted = link.crypto.decrypt(body)
-            transfer_id, offset, data = unpack_file_chunk(decrypted)
-        except Exception as exc:
-            log.warning("File chunk decrypt failed from %s: %s", hash_id[:8], exc)
+            transfer_id, offset, data = unpack_file_chunk(body)
+        except ValueError as exc:
+            log.warning("Malformed file chunk from %s: %s", hash_id[:8], exc)
             return
 
         transfer = self._transfers.get(transfer_id)
-        if not transfer:
-            log.warning("Unknown transfer %s from %s", transfer_id, hash_id[:8])
+        dest = self._incoming_paths.get(transfer_id)
+        if not transfer or dest is None or transfer.sender_hash != hash_id:
+            log.warning("Unexpected chunk for transfer %s from %s", transfer_id, hash_id[:8])
+            return
+        if transfer.state in (
+            TransferState.COMPLETE,
+            TransferState.CANCELLED,
+            TransferState.FAILED,
+            TransferState.REJECTED,
+        ):
             return
 
         try:
-            data = self._maybe_decompress(data, compressed)
+            limit = max(0, transfer.size - offset)
+            data = self._maybe_decompress(data, compressed, max_size=limit)
         except Exception as exc:
             log.warning("File chunk decompress failed for %s: %s", transfer_id, exc)
             return
+        if offset < 0 or offset + len(data) > transfer.size:
+            log.warning("Chunk outside file bounds for %s from %s", transfer_id, hash_id[:8])
+            return
 
-        dest = self._incoming_paths.get(transfer_id, transfer.path)
         await write_file_chunk(dest, offset, data)
         transfer.offset = max(transfer.offset, offset + len(data))
         transfer.state = TransferState.TRANSFERRING
@@ -501,11 +532,15 @@ class TransferMixin:
 
     async def _handle_file_complete(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
-        transfer_id = data["transfer_id"]
-        transfer = self._transfers.get(transfer_id)
-        if not transfer:
+        try:
+            transfer_id = normalize_transfer_id(str(data["transfer_id"]))
+        except (KeyError, ValueError):
             return
-        dest = self._incoming_paths.get(transfer_id, transfer.path)
+        transfer = self._transfers.get(transfer_id)
+        dest = self._incoming_paths.get(transfer_id)
+        if not transfer or dest is None or transfer.sender_hash != hash_id:
+            return
+        await self._drain_pending_chunk_tasks(hash_id)
         await fsync_file(dest)
         if dest.is_file():
             transfer.offset = max(transfer.offset, dest.stat().st_size)
@@ -600,9 +635,14 @@ class TransferMixin:
 
     async def _handle_file_reject(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
-        transfer_id = data.get("transfer_id", "")
+        try:
+            transfer_id = normalize_transfer_id(str(data.get("transfer_id", "")))
+        except ValueError:
+            return
         transfer = self._transfers.get(transfer_id)
-        if not transfer:
+        if not transfer or self._peer_hash_for_transfer(transfer) != hash_id:
+            return
+        if transfer.state in (TransferState.COMPLETE, TransferState.CANCELLED):
             return
         transfer.state = TransferState.CANCELLED
         task = self._transfer_tasks.pop(transfer_id, None)

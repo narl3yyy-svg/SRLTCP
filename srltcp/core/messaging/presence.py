@@ -37,6 +37,10 @@ class HubPresenceRegistry:
             previous = self._by_hash.pop(old_conn_hash, None)
         if hash_id in self._by_hash:
             previous = self._by_hash[hash_id]
+            if previous.conn_peer_id != conn_peer_id:
+                # Same identity reconnected on a new connection: forget the old one
+                # so its eventual disconnect does not remove the live registration.
+                self._by_conn.pop(previous.conn_peer_id, None)
         member = HubMember(hash_id=hash_id, conn_peer_id=conn_peer_id, announce=announce)
         self._by_hash[hash_id] = member
         self._by_conn[conn_peer_id] = hash_id
@@ -46,7 +50,13 @@ class HubPresenceRegistry:
         hash_id = self._by_conn.pop(conn_peer_id, None)
         if not hash_id:
             return None
-        return self._by_hash.pop(hash_id, None)
+        member = self._by_hash.get(hash_id)
+        if member and member.conn_peer_id == conn_peer_id:
+            return self._by_hash.pop(hash_id)
+        return None
+
+    def hash_for_conn(self, conn_peer_id: str) -> str | None:
+        return self._by_conn.get(conn_peer_id)
 
     def get_conn(self, hash_id: str) -> str | None:
         member = self._by_hash.get(hash_id)
