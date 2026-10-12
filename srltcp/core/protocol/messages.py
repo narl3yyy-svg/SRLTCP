@@ -30,7 +30,8 @@ class MessageType(IntEnum):
     SHARE_REQUEST = 0x41
     RECEIPT = 0x21
     PAIR = 0x22
-    RENDEZVOUS = 0x23  # pair-secret contribution + relay code (internet relay)
+    RENDEZVOUS = 0x23  # pair-secret contribution + relay code + addresses
+    PUNCH = 0x24  # hole punching offer/answer (punch.py)
     CALL_SIGNAL = 0x60
     CALL_MEDIA = 0x61
     GROUP_UPDATE = 0x70
@@ -54,6 +55,7 @@ SESSION_MESSAGE_TYPES = frozenset(
         MessageType.RECEIPT,
         MessageType.PAIR,
         MessageType.RENDEZVOUS,
+        MessageType.PUNCH,
         MessageType.FILE_OFFER,
         MessageType.FILE_ACCEPT,
         MessageType.FILE_REJECT,

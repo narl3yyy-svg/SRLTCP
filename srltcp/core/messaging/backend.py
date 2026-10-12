@@ -23,6 +23,7 @@ from srltcp.core.messaging.links import PeerLink, PeerLinkMixin
 from srltcp.core.messaging.models import ChatMessage
 from srltcp.core.messaging.pairing import PairingMixin
 from srltcp.core.messaging.ping import PingMixin
+from srltcp.core.messaging.punch import PunchMixin
 from srltcp.core.messaging.relay import RelayMixin, relay_peer_hash
 from srltcp.core.messaging.share_peer import SharePeerMixin
 from srltcp.core.messaging.store import MessageStore
@@ -64,6 +65,8 @@ class NodeConfig:
     strict_ports: bool = True
     relay_enabled: bool = True
     relay_code: str = ""
+    direct_internet: bool = True  # hole punching; shares public IP with contacts
+    punch_port: int = 0  # 0 = listen port + 3
     enable_tcp: bool = True
     enable_serial: bool = False
     serial_port: str = ""
@@ -85,6 +88,7 @@ class MessagingBackend(
     RelayMixin,
     PairingMixin,
     GroupMixin,
+    PunchMixin,
 ):
     """Central messaging orchestrator."""
 
@@ -125,6 +129,7 @@ class MessagingBackend(
         self._init_transfer()
         self._init_share_peer()
         self._init_relay()
+        self._init_punch()
         self._init_pairing()
         self._init_groups()
 
@@ -535,6 +540,8 @@ class MessagingBackend(
             self._handle_call_media(hash_id, body)
         elif msg_type == MessageType.RENDEZVOUS:
             await self._handle_rendezvous(hash_id, body)
+        elif msg_type == MessageType.PUNCH:
+            await self._handle_punch(hash_id, body)
 
     async def _handle_untrusted_message(
         self, link: PeerLink, msg_type: MessageType, body: bytes

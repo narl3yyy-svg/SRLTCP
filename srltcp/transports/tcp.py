@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import socket
 import uuid
 from typing import Any
 
@@ -13,6 +15,27 @@ from srltcp.utils.network import broadcast_targets
 from srltcp.utils.ports import bind_udp_port, start_tcp_server
 
 log = get_logger(__name__)
+
+def bound_socket(family: int, local_port: int) -> socket.socket:
+    """A TCP socket bound to a fixed local port that other outgoing sockets may
+    share (SO_REUSEADDR, never listening): the relay connection and the hole
+    punching dials all leave from the same port, so the NAT maps them the same
+    way and the address the relay reports is the one contacts must dial."""
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            with contextlib.suppress(OSError):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        if family == socket.AF_INET6:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        sock.bind(("::" if family == socket.AF_INET6 else "0.0.0.0", local_port))
+        sock.setblocking(False)
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
 
 # Hard cap on open TCP connections (a phone has a handful of contacts; a hub
 # a few hundred members).
@@ -124,6 +147,36 @@ class TCPTransport(Transport):
         )
         peer_id = str(uuid.uuid4())
         address = f"{host}:{port}"
+        peer = TransportPeer(peer_id=peer_id, address=address, transport="tcp")
+        conn = Connection(peer, reader, writer)
+        conn.set_frame_handler(self._handle_frame)
+        conn.set_close_handler(self._on_connection_closed)
+        self._connections[peer_id] = conn
+        await conn.start_reading()
+        await self._emit_event(TransportEvent(kind="connected", peer=peer))
+        return peer_id
+
+    async def connect_from(
+        self, host: str, port: int, local_port: int, *, timeout: float = 2.0
+    ) -> str:
+        """Dial from a fixed local port (hole punching: both sides dial each
+        other at the same time from their punch port; the crossing SYNs open
+        the path through NATs and firewalls — TCP simultaneous open)."""
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        sock = bound_socket(family, local_port)
+        loop = asyncio.get_running_loop()
+        try:
+            await asyncio.wait_for(loop.sock_connect(sock, (host, port)), timeout=timeout)
+            reader, writer = await asyncio.open_connection(sock=sock)
+        except BaseException:
+            sock.close()
+            raise
+        return await self._adopt(reader, writer, f"{host}:{port}")
+
+    async def _adopt(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, address: str
+    ) -> str:
+        peer_id = str(uuid.uuid4())
         peer = TransportPeer(peer_id=peer_id, address=address, transport="tcp")
         conn = Connection(peer, reader, writer)
         conn.set_frame_handler(self._handle_frame)

@@ -266,7 +266,10 @@ class RelayServer:
                 self.stats["rejected"] += 1
                 return False
             conn.authed = True
-            conn.send(R_WELCOME, bytes([RELAY_VERSION]))
+            # Tell the phone its public address as seen from here (like STUN):
+            # contacts dial it when punching through NATs.
+            observed = conn.addr.rsplit(":", 1)
+            conn.send(R_WELCOME, bytes([RELAY_VERSION]) + f"{observed[0]} {observed[1]}".encode())
             return True
         if kind == R_SEND:
             if len(body) < TOKEN_SIZE + 1:

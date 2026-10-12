@@ -98,6 +98,7 @@ class PingMixin:
                             await self._on_link_down(hash_id, name)
                         self._kick_connect(hash_id)
                 await self.relay_network_changed(ips)
+                await self.addresses_changed()
             last = ips
 
     async def stop_ping_loop(self: MessagingBackend) -> None:

@@ -20,6 +20,7 @@ import contextlib
 import hashlib
 import hmac
 import secrets
+import socket
 import ssl
 import struct
 import time
@@ -51,6 +52,7 @@ from srltcp.core.relay_proto import (
     relay_token,
 )
 from srltcp.transports.base import TransportPeer
+from srltcp.transports.tcp import bound_socket
 from srltcp.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -105,6 +107,9 @@ class RelayConnection:
         self.ready = False
         self.last_rx = 0.0
         self.error = ""
+        # Our public address as the relay sees it, when we connected from the
+        # punch port (then it is what contacts can dial to reach us).
+        self.observed: tuple[str, int] | None = None
 
     @property
     def connected(self) -> bool:
@@ -115,16 +120,9 @@ class RelayConnection:
         sockname = self._writer.get_extra_info("sockname") if self._writer else None
         return str(sockname[0]) if sockname else ""
 
-    async def connect(self) -> None:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(
-                self.code.host,
-                self.code.port,
-                ssl=client_ssl_context(),
-                server_hostname=None if _is_ip(self.code.host) else self.code.host,
-                limit=MAX_RELAY_FRAME * 2,
-            ),
-            timeout=RELAY_CONNECT_TIMEOUT,
+    async def connect(self, local_port: int = 0) -> None:
+        reader, writer, bound = await asyncio.wait_for(
+            self._open(local_port), timeout=RELAY_CONNECT_TIMEOUT
         )
         ssl_obj = writer.get_extra_info("ssl_object")
         der = ssl_obj.getpeercert(binary_form=True) if ssl_obj else None
@@ -146,6 +144,7 @@ class RelayConnection:
                 continue
             first = got[0]
             if first[:1] == bytes([R_WELCOME]):
+                self.observed = _parse_observed(first[2:]) if bound else None
                 break
             if first[:1] == bytes([R_ERROR]):
                 raise ConnectionError(first[2:].decode("utf-8", "replace") or "relay refused")
@@ -153,6 +152,40 @@ class RelayConnection:
         self.ready = True
         self.last_rx = time.monotonic()
         self._task = asyncio.create_task(self._read_loop(frames, got[1:]))
+
+    async def _open(
+        self, local_port: int
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, bool]:
+        kwargs: dict[str, Any] = {
+            "ssl": client_ssl_context(),
+            "server_hostname": None if _is_ip(self.code.host) else self.code.host,
+            "limit": MAX_RELAY_FRAME * 2,
+        }
+        if local_port:
+            # Leave from the punch port so the relay sees the NAT mapping that
+            # hole punching will reuse. Falls back to any port if that fails.
+            loop = asyncio.get_running_loop()
+            try:
+                infos = await loop.getaddrinfo(
+                    self.code.host, self.code.port, type=socket.SOCK_STREAM
+                )
+                family, _t, _p, _c, addr = infos[0]
+                sock = bound_socket(family, local_port)
+                try:
+                    await loop.sock_connect(sock, addr)
+                except BaseException:
+                    sock.close()
+                    raise
+                # With a ready socket asyncio needs a server name; "" means
+                # none (IP address relay: the certificate pin is the check).
+                reader, writer = await asyncio.open_connection(
+                    sock=sock, **{**kwargs, "server_hostname": kwargs["server_hostname"] or ""}
+                )
+                return reader, writer, True
+            except (OSError, IndexError) as exc:
+                log.debug("Relay connection from the punch port failed (%s); retrying", exc)
+        reader, writer = await asyncio.open_connection(self.code.host, self.code.port, **kwargs)
+        return reader, writer, False
 
     async def _read_loop(self, frames: FrameReader, pending: list[bytes]) -> None:
         assert self._reader is not None
@@ -210,6 +243,18 @@ def _acceptable_peer_relay_host(host: str) -> bool:
     except ValueError:
         return True  # hostname
     return not (ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved)
+
+
+def _parse_observed(raw: bytes) -> tuple[str, int] | None:
+    import ipaddress
+
+    try:
+        host, port_s = raw.decode("ascii").split(" ", 1)
+        ipaddress.ip_address(host)
+        port = int(port_s)
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return (host, port) if 0 < port < 65536 else None
 
 
 def _is_ip(host: str) -> bool:
@@ -406,10 +451,11 @@ class RelayMixin:
             if old:
                 await old.close()
             conn = RelayConnection(code, self._on_relay_frame, self._on_relay_closed)
-            await conn.connect()
+            await conn.connect(self.punch_port())
             self._relay_conns[relay_id] = conn
             self._relay_errors.pop(relay_id, None)
             log.info("Connected to relay %s", code.display)
+            await self.note_public_address()
             contacts = self.relay_contacts().get(relay_id, (code, []))[1]
             self._relay_subscribed_day.pop(relay_id, None)
             await self._subscribe(conn, contacts, current_day())
@@ -579,7 +625,14 @@ class RelayMixin:
             peer = self.trusted.get(hash_id)
             assert peer is not None
         own = self.own_relay_code() if getattr(self.config, "relay_enabled", True) else None
-        body = encode_payload({"v": 1, "c": peer.pair_own, "r": own.encode() if own else ""})
+        body = encode_payload(
+            {
+                "v": 1,
+                "c": peer.pair_own,
+                "r": own.encode() if own else "",
+                **self.rendezvous_addresses(),
+            }
+        )
         with contextlib.suppress(KeyError, OSError, RuntimeError, ConnectionError):
             packet = self._seal(link, MessageType.RENDEZVOUS, body)
             await self._send_raw(link.transport_peer_id, link.transport, packet)
@@ -589,6 +642,7 @@ class RelayMixin:
         if not peer or peer.blocked:
             return
         data = decode_payload(body)
+        self.store_peer_addresses(hash_id, data)  # current LAN/VPN/public addresses
         contrib = str(data.get("c", "")).lower()
         try:
             if len(bytes.fromhex(contrib)) != 32:
@@ -678,6 +732,8 @@ class RelayMixin:
             self._upgrades[hash_id] = (peer_id, kx, time.monotonic())
             log.info("Trying a direct path to %s at %s:%d", hash_id[:8], host, port)
             return
+        # No LAN/VPN path: try punching through the NATs between us.
+        await self.start_punch(hash_id)
 
     def upgrade_for_peer_id(self: MessagingBackend, peer_id: str) -> tuple[str, Any] | None:
         for hash_id, (pid, kx, _started) in self._upgrades.items():
