@@ -106,7 +106,9 @@ class AppSettings:
     hub_lan_host: str = ""
     hub_port: int = DEFAULT_TCP_PORT
     handshake_protocol: str = "identity"
-    call_stun_server: str = ""
+    call_stun_server: str = ""  # stun:/turn:/turns: URL (empty = direct only)
+    call_turn_username: str = ""
+    call_turn_password: str = ""
     version: str = "0.3.0"
 
     def resolved_incoming_dir(self) -> Path:

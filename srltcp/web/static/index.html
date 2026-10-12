@@ -229,10 +229,14 @@
 <small>Both peers must use the same protocol. Noise XX uses Noise_XX_25519_ChaChaPoly_SHA256.</small>
 </label>
 <label class="field">
-<span>Call STUN server (optional)</span>
-<input type="text" id="set-stun" placeholder="Leave empty for LAN-only calls" spellcheck="false" />
-<small>Calls connect directly between devices. A STUN server (e.g. <code>stun:stun.example.org:3478</code>) helps internet calls through NAT but reveals your IP address to that server.</small>
+<span>Call relay server (optional)</span>
+<input type="text" id="set-stun" placeholder="Empty = direct calls only (VPN / same network)" spellcheck="false" />
+<small>Calls connect directly over your VPN or network. Only for calls across mobile networks <em>without</em> a VPN: a TURN server such as <code>turn:vpn.example.com:3478</code> (e.g. coturn on your own server) relays the encrypted media. A STUN URL also works for simple NATs. The server sees your IP address, never the call content.</small>
 </label>
+<div class="field-row">
+<label class="field grow"><span>TURN username</span><input type="text" id="set-turn-user" autocomplete="off" spellcheck="false" /></label>
+<label class="field grow"><span>TURN password</span><input type="password" id="set-turn-pass" autocomplete="new-password" /></label>
+</div>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-wan-expose" />
 <span>I will port-forward TCP 7825 for direct WAN peers (advanced)</span>

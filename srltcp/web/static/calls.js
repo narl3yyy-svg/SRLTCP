@@ -34,8 +34,15 @@
   const app = () => window.srltcpApp || {};
 
   function iceServers() {
-    const stun = (app().getSettings?.()?.call_stun_server || "").trim();
-    return stun ? [{ urls: stun }] : [];
+    const st = app().getSettings?.() || {};
+    const url = (st.call_stun_server || "").trim();
+    if (!url) return [];
+    const server = { urls: url };
+    if (/^turns?:/.test(url) && st.call_turn_username) {
+      server.username = st.call_turn_username;
+      server.credential = st.call_turn_password || "";
+    }
+    return [server];
   }
 
   function newCallId() {
@@ -136,7 +143,7 @@
         startClock();
       } else if (st === "failed") {
         app().toast?.(
-          "Call could not connect. Calls work directly on the same network; for internet calls set a STUN server in Settings → Network.",
+          "Call could not connect. Calls work over WireGuard/VPN or the same network; across mobile networks without a VPN, set a TURN server in Settings → Network.",
           "error"
         );
         hangup("failed");

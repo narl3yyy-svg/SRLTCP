@@ -1692,3 +1692,9 @@ label.field > span {
 .find-ip { padding: 0.75rem; border-radius: 10px; background: var(--accent-soft); margin-bottom: 0.75rem; }
 .find-ip h4 { margin: 0 0 0.25rem; }
 .find-ip .field-row .action-btn { margin-bottom: 0.35rem; }
+.field-row .action-btn { width: auto; flex: none; }
+.find-ip .field-row .field.grow input { width: 100%; }
+@media (max-width: 600px) {
+  .find-ip .field-row { flex-direction: column; align-items: stretch; }
+  .find-ip .field-row .action-btn { width: 100%; }
+}
