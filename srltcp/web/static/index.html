@@ -175,59 +175,71 @@
 </label>
 </div>
 <div class="settings-panel" data-panel="network">
-<label class="field">
-<span>Web UI port (HTTPS)</span>
-<input type="number" id="set-web-port" min="1024" max="65535" />
-<small>Default 9876 — restart required</small>
-</label>
-<label class="field">
-<span>TCP peer port</span>
-<input type="number" id="set-tcp-port" min="1024" max="65535" />
-<small>Default 7825 — restart required; use the same on every peer</small>
-</label>
-<label class="field">
-<span>UDP discovery port</span>
-<input type="number" id="set-discovery-port" min="1024" max="65535" />
-<small>Default 7826 — restart required; use the same on every peer</small>
-</label>
-<label class="field checkbox-field">
-<input type="checkbox" id="set-strict-ports" checked />
-<span>Use exact ports (fail if busy instead of auto-incrementing)</span>
-</label>
-<label class="field">
-<span>Network interface / IP</span>
-<select id="set-lan-ip"></select>
-</label>
-<label class="field checkbox-field">
-<input type="checkbox" id="set-auto-announce" />
-<span>Auto-announce on startup (LAN only)</span>
-</label>
+<p class="hint">Most people never need to change anything here. SRLTCP picks the best path by itself: same Wi-Fi or VPN first, then a direct internet connection, then your relay.</p>
 <fieldset class="relay-settings">
-<legend>Internet relay</legend>
+<legend>Over the internet</legend>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-relay-enabled" />
-<span>Keep in touch over the internet when there's no direct connection (VPN off, different networks)</span>
+<span>Keep in touch over the internet when there's no LAN/VPN connection</span>
 </label>
 <label class="field">
 <span>Relay code</span>
 <input type="text" id="set-relay-code" placeholder="srltcp-relay://… (from the srltcp relay command)" autocomplete="off" spellcheck="false" />
-<small>Run <code>srltcp relay</code> on your server and paste the code on <strong>one</strong> phone — contacts get it automatically, inside the encrypted connection. Leave empty if a contact already has one.</small>
+<small>Run <code>srltcp relay</code> on a server you control and paste its code on <strong>one</strong> phone — contacts get it automatically, inside the encrypted connection. Leave empty if a contact already has one.</small>
+</label>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-direct-internet" />
+<span>Try direct internet connections (no port forwarding needed). Shares your public IP address with your contacts only, inside the encrypted connection. Off = relay only, contacts never see your IP.</span>
 </label>
 <div class="relay-status" id="relay-status" aria-live="polite"></div>
-<small class="field-hint">Direct LAN/VPN connections are always used when they work. The relay only forwards sealed, padded packets: it can't read messages, see names or who you talk to, or fake anything.</small>
+<small class="field-hint">The relay only forwards sealed, padded packets: it can't read messages, see names or who you talk to, or fake anything. See the Networking guide in the docs for details.</small>
 </fieldset>
+<fieldset class="relay-settings">
+<legend>Same Wi-Fi / VPN</legend>
+<label class="field">
+<span>Network interface / IP</span>
+<select id="set-lan-ip"></select>
+<small>Which of your addresses to advertise. "Auto" is right unless you have several networks.</small>
+</label>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-auto-announce" />
+<span>Announce myself when the app starts, so nearby devices see me right away</span>
+</label>
+</fieldset>
+<button type="button" class="action-btn" id="btn-network-viz">Network map</button>
+<details class="edit-advanced">
+<summary>Advanced (ports, protocol, call relay)</summary>
+<label class="field">
+<span>Web UI port (HTTPS)</span>
+<input type="number" id="set-web-port" min="1024" max="65535" />
+<small>Default 9876 — the local page this app shows. Restart required.</small>
+</label>
+<label class="field">
+<span>TCP peer port</span>
+<input type="number" id="set-tcp-port" min="1024" max="65535" />
+<small>Default 7825 — where contacts connect. Use the same on every device. Restart required. Direct internet connections use this port + 3.</small>
+</label>
+<label class="field">
+<span>UDP discovery port</span>
+<input type="number" id="set-discovery-port" min="1024" max="65535" />
+<small>Default 7826 — finding devices on the LAN/VPN. Use the same on every device. Restart required.</small>
+</label>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-strict-ports" checked />
+<span>Use exact ports (fail if busy instead of trying the next free one)</span>
+</label>
 <label class="field">
 <span>Handshake protocol</span>
 <select id="set-handshake-protocol">
 <option value="identity">Identity (Ed25519 + X25519) — default</option>
 <option value="noise_xx">Noise XX (experimental)</option>
 </select>
-<small>Both peers must use the same protocol. Noise XX uses Noise_XX_25519_ChaChaPoly_SHA256.</small>
+<small>Both devices must use the same protocol. Leave on the default.</small>
 </label>
 <label class="field">
-<span>External call relay (advanced, normally not needed)</span>
+<span>External call relay (normally not needed)</span>
 <input type="text" id="set-stun" placeholder="Leave empty" spellcheck="false" />
-<small>Calls are relayed through SRLTCP's own encrypted connection, so they work wherever messages do (LAN, VPN, internet relay). This is only a fallback if that relay is unavailable: a STUN/TURN URL such as <code>turn:host:3478</code>.</small>
+<small>Calls already travel inside SRLTCP's encrypted connection wherever messages do. Only a fallback: a STUN/TURN URL such as <code>turn:host:3478</code>.</small>
 </label>
 <div class="field-row">
 <label class="field grow"><span>TURN username</span><input type="text" id="set-turn-user" autocomplete="off" spellcheck="false" /></label>
@@ -235,9 +247,9 @@
 </div>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-wan-expose" />
-<span>I will port-forward TCP 7825 for direct WAN peers (advanced)</span>
+<span>I port-forward TCP 7825 on my router (old manual setup; not needed with the relay)</span>
 </label>
-<button type="button" class="action-btn" id="btn-network-viz">Network map</button>
+</details>
 </div>
 <div class="settings-panel" data-panel="serial">
 <label class="field checkbox-field">

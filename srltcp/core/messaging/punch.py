@@ -44,6 +44,7 @@ log = get_logger(__name__)
 PUNCH_WINDOW = 8.0  # seconds both sides keep dialing
 PUNCH_ATTEMPT_TIMEOUT = 1.5
 PUNCH_FOLLOWER_DELAY = 1.0  # the answering side starts dialing a moment later
+PUNCH_ANSWER_EVERY = 30.0  # a contact can start at most one round this often
 PUNCH_RETRY_EVERY = 120.0  # while on the relay
 PUNCH_BACKOFF = 300.0  # after a failed round
 MAX_CANDIDATES = 6
@@ -64,6 +65,29 @@ def acceptable_candidate(host: str, port: object) -> bool:
     )
 
 
+_NOT_PUNCHABLE = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",  # home/office LANs
+        "100.64.0.0/10",  # carrier NAT space (and Tailscale-style VPNs)
+        "0.0.0.0/8", "fc00::/7", "::/8",
+    )
+)
+
+
+def punchable_candidate(host: str, port: object) -> bool:
+    """A public address a contact may ask us to punch towards. LAN and
+    carrier-internal ranges are refused, so a contact can't make the phone
+    knock on devices in our own network (those are reached by a normal
+    dial to the addresses in RENDEZVOUS "a", on the peer port only)."""
+    if not acceptable_candidate(host, port):
+        return False
+    ip = ipaddress.ip_address(host)
+    if ip.version == 6 and ip.ipv4_mapped:
+        return False
+    return not any(ip in net for net in _NOT_PUNCHABLE if net.version == ip.version)
+
+
 def _clean_candidates(raw: object) -> list[tuple[str, int]]:
     out: list[tuple[str, int]] = []
     if not isinstance(raw, list):
@@ -72,7 +96,7 @@ def _clean_candidates(raw: object) -> list[tuple[str, int]]:
         if not (isinstance(item, list) and len(item) == 2):
             continue
         host, port = str(item[0])[:64], item[1]
-        if acceptable_candidate(host, port) and (host, port) not in out:
+        if punchable_candidate(host, port) and (host, port) not in out:
             out.append((host, int(port)))
     return out[:MAX_CANDIDATES]
 
@@ -84,6 +108,7 @@ class PunchMixin:
         self._peer_public: dict[str, list[tuple[str, int]]] = {}
         self._punch_next: dict[str, float] = {}
         self._punch_offered: dict[str, float] = {}
+        self._punch_answered: dict[str, float] = {}
         self._punching: set[str] = set()
         self._last_public: list[tuple[str, int]] = []
 
@@ -120,8 +145,9 @@ class PunchMixin:
             return []
         out: list[tuple[str, int]] = []
         for conn in self._relay_conns.values():
-            if conn.connected and conn.observed and conn.observed not in out:
-                out.append(conn.observed)
+            obs = conn.observed
+            if conn.connected and obs and obs not in out and punchable_candidate(*obs):
+                out.append(obs)
         from srltcp.utils.network import global_ipv6_addresses
 
         for ip in global_ipv6_addresses():
@@ -212,7 +238,15 @@ class PunchMixin:
         if phase == "o":
             if self._me_hash() < hash_id:
                 return  # offers come from the lower hash only
+            now = time.monotonic()
+            if now - self._punch_answered.get(hash_id, -PUNCH_ANSWER_EVERY) < PUNCH_ANSWER_EVERY:
+                return  # rounds are rare; a flood of offers gets no extra dialing
+            self._punch_answered[hash_id] = now
             mine = self.public_candidates()
+            if mine and theirs:
+                # Open our router towards them *before* answering: the leader
+                # dials as soon as the answer arrives.
+                await self._prime(theirs)
             await self._send_punch(hash_id, "a", mine)
             if mine and theirs:
                 asyncio.create_task(self._punch(hash_id, theirs, leader=False))
@@ -259,6 +293,13 @@ class PunchMixin:
         finally:
             self._punching.discard(hash_id)
 
+    async def _prime(self: MessagingBackend, targets: list[tuple[str, int]]) -> None:
+        port = self.punch_port()
+        if not port or not self.tcp_transport:
+            return
+        for host, rport in targets:
+            await self.tcp_transport.prime_from(host, rport, port)
+
     async def _race_dials(
         self: MessagingBackend, targets: list[tuple[str, int]], port: int, *, delay: float = 0.0
     ) -> str | None:
@@ -274,8 +315,7 @@ class PunchMixin:
         assert self.tcp_transport is not None
         transport = self.tcp_transport
         if delay:
-            for host, rport in targets:
-                await transport.prime_from(host, rport, port)
+            await self._prime(targets)  # again, in case the first expired
             await asyncio.sleep(delay)
         deadline = time.monotonic() + PUNCH_WINDOW
 
