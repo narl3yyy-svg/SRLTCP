@@ -78,7 +78,7 @@ Many networks let IPv6 through much more easily than IPv4 NAT.
 
 | Setting | What it does | Default |
 |---|---|---|
-| **Keep in touch over the internet** | Uses the relay when there's no direct path. Off means LAN/VPN only. | On |
+| **Use the internet when there's no LAN/VPN path** | Uses the relay when there's no direct path. Off means LAN/VPN only. | On |
 | **Relay code** | `srltcp-relay://host:port#…`, printed by `srltcp relay`. It contains the server address, the certificate fingerprint (so nobody can impersonate the relay) and the access key. Paste it on one phone; contacts receive it inside the encrypted session. Keep it private. | Empty |
 | **Try direct internet connections** | Hole punching, described above. Shares your public IP address **only with your contacts**, inside the encrypted session. Off: relay only, contacts never see your IP. | On |
 | **Status** | Which relays you're connected to, how many contacts use each one, and your public address as the relay sees it. This is shown only to you. | — |
@@ -88,10 +88,10 @@ Many networks let IPv6 through much more easily than IPv4 NAT.
 | Setting | What it does | Default |
 |---|---|---|
 | **Network interface / IP** | Which of your addresses to advertise on the local network. Leave on *Auto* unless the device has several networks and the wrong one is chosen. | Auto |
-| **Announce myself when the app starts** | Sends a signed "I'm here" message to the LAN/VPN at startup, so nearby devices see you without pressing *Announce*. It shares your name and ID with that network. | Off |
+| **Announce myself at startup** | Sends a signed "I'm here" message to the LAN/VPN at startup, so nearby devices see you without pressing *Announce*. It shares your name and ID with that network. | Off |
 | **Network map** | Picture of your devices, contacts and the path to each. | — |
 
-### Advanced
+### More network options
 
 Change these only if you know you need to.
 

@@ -16,6 +16,7 @@
 | **Dual transports** | TCP/IP networking + USB Serial (pyserial) |
 | **P2P mode** | Direct encrypted links between peers on LAN or serial cable |
 | **Internet relay** | Paired contacts keep talking with the VPN off or on different networks; automatic switching between direct and relay; the relay is blind (TLS + pinned cert, rotating mailboxes, second encryption layer, padding) |
+| **Direct across networks** | No port forwarding: one phone on the VPN and one on the home Wi-Fi connect directly, and two home networks connect directly through both routers (hole punching). Addresses are exchanged only inside the encrypted session; the relay steps in when a network doesn't allow it |
 | **Secure messaging** | Ed25519 identity + authenticated X25519 key exchange + AES-256-GCM with replay protection |
 | **Fast file transfer** | Chunked streaming (1 MiB TCP / 8 KiB serial), zstd on TCP, resume support |
 | **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
@@ -306,7 +307,11 @@ Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data has 
 
 1. **Pair locally** (same Wi-Fi, WireGuard, QR or NFC).
 2. **Internet relay** — run `srltcp relay` on a server with a public address (your WireGuard server is perfect) and paste the code it prints into *Settings → Network → Internet relay* on **one** phone. The other phone learns it automatically inside the encrypted connection.
-3. From then on the phones use a **direct** path whenever one works (LAN / VPN) and the **relay** otherwise — VPN off, different carriers, Wi-Fi to mobile data. Moving to the relay takes a few seconds (3 s in our test); when the VPN comes back they move back to direct within about a minute. Messages, files, voice and video calls all work over the relay. Contacts show **TCP** (direct) or **RELAY**.
+3. From then on the phones use a **direct** path whenever one works and the **relay** otherwise — VPN off, different carriers, Wi-Fi to mobile data. Moving to the relay takes a few seconds (3 s in our test); when a direct path comes back they move back within about a minute. Messages, files, voice and video calls all work over the relay. The chat header shows **DIRECT** or **RELAY**.
+
+**Direct without port forwarding.** One phone on the VPN and the other on the home Wi-Fi connect directly (the phones tell each other their LAN and VPN addresses inside the encrypted session). Two phones on *different home networks* also connect directly through both routers: with *Settings → Network → Try direct internet connections* on (default), they use the relay to agree on a moment and dial each other at once (hole punching) — in our simulation the direct connection was up 10 s after they met on the relay, with routers that ignore or reset unexpected connections alike. This shares your public IP address with your contacts only; turn it off to keep every internet connection on the relay. Carrier-grade NAT on mobile data usually prevents it; the relay then simply carries on.
+
+Every setting explained, plus common setups and troubleshooting: **[docs/NETWORKING.md](docs/NETWORKING.md)**.
 
 ### Pairing
 
