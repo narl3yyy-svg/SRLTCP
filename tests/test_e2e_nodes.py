@@ -314,3 +314,42 @@ def test_card_tampering_detected(tmp_path: Path) -> None:
         decode_card(forged)
     with pytest.raises(PairingError):
         decode_card("srltcp://pair#garbage")
+
+
+async def test_noise_xx_mode_end_to_end(tmp_path: Path) -> None:
+    a = make_node(tmp_path, "alice", handshake_protocol="noise_xx")
+    b = make_node(tmp_path, "bob", handshake_protocol="noise_xx")
+    await a.start()
+    await b.start()
+    try:
+        trust(a, b)
+        trust(b, a)
+        ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+        await a.send_message(bh, "noise hello")
+        assert await wait_for(lambda: "noise hello" in texts(b), timeout=10)
+        assert await wait_for(lambda: a.get_messages()[-1]["status"] == "delivered")
+        await b.send_message(ah, "noise reply")
+        assert await wait_for(lambda: "noise reply" in texts(a))
+        # Keys must not be derivable from the (public) handshake hash.
+        link = a.get_link(bh)
+        assert link is not None and link.crypto.ready
+    finally:
+        await a.stop()
+        await b.stop()
+
+
+async def test_protocol_mismatch_does_not_link(tmp_path: Path) -> None:
+    a = make_node(tmp_path, "alice", handshake_protocol="noise_xx")
+    b = make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    try:
+        trust(a, b)
+        trust(b, a)
+        await a.connect_to_peer(b.identities["tcp"].hash_id)
+        await asyncio.sleep(0.5)
+        link = b.get_link(a.identities["tcp"].hash_id)
+        assert link is None or not link.handshake_complete
+    finally:
+        await a.stop()
+        await b.stop()

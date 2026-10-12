@@ -41,7 +41,7 @@ bash scripts/build-android.sh
 Output:
 
 ```
-android/app/build/outputs/apk/debug/SRLTCP-0.1.57.apk
+android/app/build/outputs/apk/debug/SRLTCP-0.2.0.apk
 ```
 
 ### Manual steps
@@ -77,7 +77,7 @@ adb install -r android/app/build/outputs/apk/debug/SRLTCP-*.apk
 
 1. `SRLTCPApplication` starts the Chaquopy Python runtime.
 2. `MainActivity` starts `srltcp web` on a background thread.
-3. A `WebView` loads `https://127.0.0.1:<port>/` (self-signed localhost TLS).
+3. A `WebView` loads `https://127.0.0.1:<port>/?token=…` (self-signed localhost TLS, certificate pinned; the token keeps other apps out of the local API).
 4. `SRLTCPService` keeps the node alive in the background (foreground notification).
 
 Startup usually takes **5–30 seconds** on first launch while Python initializes.
@@ -96,6 +96,13 @@ The app reuses the same web UI as desktop, but `MainActivity` enables a **mobile
 On first launch the sidebar opens automatically so you can reach peers and settings immediately. Settings tabs, folder pickers, and other modals use the full screen height on Android.
 
 Incoming and shared files default to `Downloads/SRLTCP/` when storage access is granted (see storage permission prompt on first launch).
+
+## Pairing, NFC and calls
+
+- **Pair** (sidebar) shows your QR code; *Scan their QR code* opens the camera scanner.
+- **Tap phones (NFC)** — both phones open *Pair*, one presses *Tap phones*, hold them back to back. The phone showing the Pair screen answers as a contactless card (Host Card Emulation, AID `F053524C54435001`); the other reads its contact card and writes its own back in the same tap. NFC only answers while the Pair screen is open and the phone is unlocked.
+- **Calls** need the microphone (and camera for video) permission; Android asks the first time.
+- The app holds a Wi-Fi multicast lock while running so LAN discovery broadcasts are not dropped.
 
 ## Hub / network on Android
 

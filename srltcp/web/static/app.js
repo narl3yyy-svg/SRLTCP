@@ -2210,7 +2210,9 @@
         const isRequest = !!p.metadata?.contact_request;
         const trustBtn = state.peerTab === "discovered" && !trustedIds.has(p.hash_id)
           ? `<button type="button" class="contact-trust" data-trust="${p.hash_id}">${isRequest ? "Accept" : "Trust"}</button>` : "";
-        return `<button class="contact${active}" data-hash="${p.hash_id}" data-name="${escapeHtml(p.name)}">
+        // A div, not a <button>: the row contains its own Trust/Accept button and
+        // nested buttons are invalid HTML (the browser hoists them out of the row).
+        return `<div class="contact${active}" role="button" tabindex="0" data-hash="${p.hash_id}" data-name="${escapeHtml(p.name)}">
           <div class="avatar" style="background:${hashColor(p.hash_id)}22;color:${hashColor(p.hash_id)};border-color:${hashColor(p.hash_id)}44">
             ${initials(p.name)}
           </div>
@@ -2219,13 +2221,20 @@
             <div class="contact-preview">${meta}</div>
           </div>
           <div class="contact-meta">${trustBtn}${linked ? '<span class="contact-online" title="Connected">●</span>' : ""}${unreadCount(p.hash_id) ? `<span class="unread-badge">${unreadCount(p.hash_id) > 99 ? "99+" : unreadCount(p.hash_id)}</span>` : ""}</div>
-        </button>`;
+        </div>`;
       })
       .join("");
 
     el.querySelectorAll(".contact").forEach((btn) => {
       btn.addEventListener("click", (ev) => {
         if (ev.target.closest(".contact-trust")) return;
+        selectPeer(btn.dataset.hash, btn.dataset.name);
+        closeSidebarMobile();
+      });
+      btn.addEventListener("keydown", (ev) => {
+        if (ev.key !== "Enter" && ev.key !== " ") return;
+        if (ev.target !== btn) return;
+        ev.preventDefault();
         selectPeer(btn.dataset.hash, btn.dataset.name);
         closeSidebarMobile();
       });
@@ -3297,7 +3306,7 @@
     e.preventDefault();
     const port = parseInt($("#setup-web-port")?.value || "9876", 10);
     await saveSettings(settingsPayload("setup"), true);
-    if (port !== location.port) {
+    if (String(port) !== location.port) {
       toast(`Restart with --port ${port} to apply new HTTPS port`);
     }
   });

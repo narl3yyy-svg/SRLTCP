@@ -4,8 +4,8 @@
 
 | Version | Supported |
 | ------- | --------- |
-| 0.1.49+ | :white_check_mark: |
-| < 0.1.49 | :x: |
+| 0.2.0+ | :white_check_mark: |
+| < 0.2.0 | :x: (impersonation and Noise-mode key derivation flaws; upgrade) |
 
 Security fixes are released on `main` and tagged as `v*`. Use the latest release when possible.
 
@@ -29,13 +29,18 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 
 ### What is protected
 
-- **Message and file payloads** are encrypted with AES-256-GCM after an Ed25519-signed X25519 key exchange.
-- **Session keys** are derived via HKDF-SHA256 with explicit salt and direction labels (`srltcp-v2-send` / `srltcp-v2-recv`).
+- **Peer authentication** — every handshake proves possession of the Ed25519 key whose SHA-256 prefix is the peer's hash ID; pinned contact keys must match. Handshake signatures cover a timestamp and are checked against a replay cache.
+- **Message and file payloads** are encrypted with AES-256-GCM after an Ed25519-signed ephemeral X25519 key exchange (forward secret per session).
+- **Session keys** are derived via HKDF-SHA256 from the DH secret, salted with both ephemeral keys, with direction-specific labels.
+- **Replay / reordering** — 64-bit counter nonces with a sliding replay window; the message type and flags are authenticated as AAD. Unencrypted application messages are dropped.
+- **Trust gate** — only trusted contacts' messages, files and share requests are processed; others become contact requests.
+- **Calls** — WebRTC DTLS-SRTP between the devices; SDP (with DTLS fingerprints) is exchanged inside the authenticated session. No STUN/TURN unless you configure one.
+- **Pairing codes** — signed contact cards; a one-time token (15 min) lets the scanner be trusted back automatically.
 - **Hub forwarding** wraps opaque E2EE blobs. Hub servers never receive session keys and cannot decrypt chat or file content.
 - **Hub registration** is signed with the client's Ed25519 identity; the hub rejects unsigned or mismatched registrations.
 - **LAN UDP announces** (port 7826) are signed with the sender's Ed25519 identity key. Receiving peers verify the signature and `hash_id` ↔ `public_key` binding before displaying or trusting a discovered peer. Unsigned or invalid announces are dropped.
-- **Optional Noise XX handshake** — Settings → Network → Handshake protocol. Uses `Noise_XX_25519_ChaChaPoly_SHA256`; session keys are HKDF-derived from the Noise handshake hash. Both peers must select the same protocol.
-- **Web UI** is served over **HTTPS on localhost only** (self-signed cert generated locally).
+- **Optional Noise XX handshake** — Settings → Network → Handshake protocol. Uses `Noise_XX_25519_ChaChaPoly_SHA256`; session keys are HKDF-derived from the Noise cipher-state keys, and each side signs the handshake hash with its Ed25519 identity (versions before 0.2.0 derived keys from the public handshake hash — do not use them). Both peers must select the same protocol.
+- **Web UI** is served over **HTTPS on localhost only** (self-signed cert generated locally) and every request needs the per-install access token (`~/.srltcp/web_token`, mode 600) — so other apps/users on the device cannot use the API.
 - **Share sessions** use constant-time token comparison; path traversal is blocked on file APIs.
 
 ### What is not protected
@@ -47,7 +52,8 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 | Hub routing | Hub sees source/destination identity hash tokens and approximate packet sizes/timing |
 | WAN / hub TCP | Observers see connection endpoints, timing, and volume — not decrypted payloads |
 | Local disk | Settings, trusted-peer list, chat history, identities stored without extra encryption |
-| Android WebView | Accepts the localhost self-signed certificate by design |
+| Android WebView | Pins the app's own localhost certificate (SHA-256) |
+| NFC pairing | Contact cards (public data) are exchanged in the clear over a few centimetres |
 
 ### Connection modes
 
