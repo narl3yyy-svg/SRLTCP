@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import TYPE_CHECKING
 
@@ -298,19 +299,9 @@ class ConnectMixin:
             # With a relay to fall back on, don't wait long for a dead VPN/LAN path.
             relay_fallback = not host and self.relay_link_reachable(hash_id)
             timeout = 3.0 if relay_fallback else (8.0 if len(candidates) == 1 else 5.0)
-            for target_host, target_port in candidates:
-                try:
-                    peer_id = await self.tcp_transport.connect(
-                        target_host, target_port, timeout=timeout
-                    )
-                    break
-                except (OSError, TimeoutError, ConnectionError) as exc:
-                    log.warning(
-                        "TCP connect to %s:%s failed: %s",
-                        target_host,
-                        target_port,
-                        exc or type(exc).__name__,
-                    )
+            # All addresses at once (LAN, VPN, the other network's address learnt
+            # from the contact…), slightly staggered; the first to answer wins.
+            peer_id, target_host, target_port = await self._dial_first(candidates, timeout)
             if not peer_id:
                 if relay_fallback:
                     log.info("No direct path to %s — using the relay", hash_id[:8])
@@ -353,6 +344,41 @@ class ConnectMixin:
             return True
 
         return False
+
+    async def _dial_first(
+        self: MessagingBackend, candidates: list[tuple[str, int]], timeout: float
+    ) -> tuple[str, str, int]:
+        """Happy-eyeballs dial: start each candidate 0.25 s after the previous,
+        keep the first connection, close the rest. Returns (peer_id, host, port)."""
+        assert self.tcp_transport is not None
+        transport = self.tcp_transport
+
+        async def one(index: int, host: str, port: int) -> tuple[str, str, int]:
+            await asyncio.sleep(0.25 * index)
+            try:
+                return await transport.connect(host, port, timeout=timeout), host, port
+            except (OSError, TimeoutError, ConnectionError) as exc:
+                log.info("TCP connect to %s:%s failed: %s", host, port, exc or type(exc).__name__)
+                return "", host, port
+
+        tasks = [asyncio.create_task(one(i, h, p)) for i, (h, p) in enumerate(candidates)]
+        winner: tuple[str, str, int] = ("", *candidates[0])
+        try:
+            pending = set(tasks)
+            while pending and not winner[0]:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    if not winner[0] and task.result()[0]:
+                        winner = task.result()
+        finally:
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with contextlib.suppress(BaseException):
+                    extra = await task
+                    if extra[0] and extra[0] != winner[0]:
+                        await transport.disconnect(extra[0])
+        return winner
 
     async def wait_for_handshake(
         self: MessagingBackend, hash_id: str, *, timeout: float = 10.0

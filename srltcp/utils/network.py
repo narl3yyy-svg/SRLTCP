@@ -255,3 +255,58 @@ def _fallback_interfaces() -> list[dict[str, Any]]:
     if not ips:
         ips.add("127.0.0.1")
     return [{"interface": "default", "ip": ip, "prefix_len": 24, "label": ip} for ip in sorted(ips)]
+
+
+def global_ipv6_addresses() -> list[str]:
+    """This device's public (global unicast) IPv6 addresses.
+
+    IPv6 has no NAT: a phone on a carrier or a home network usually has one,
+    and two devices can open a direct connection between them by dialing each
+    other at the same time (see relay.py hole punching).
+    """
+    found: list[str] = []
+
+    def add(raw: str) -> None:
+        raw = raw.split("%", 1)[0]
+        try:
+            ip = ipaddress.IPv6Address(raw)
+        except ValueError:
+            return
+        if ip.is_global and not ip.ipv4_mapped and str(ip) not in found:
+            found.append(str(ip))
+
+    from srltcp.utils.platform import is_android
+
+    if is_android():
+        try:
+            from java.net import NetworkInterface
+
+            ifaces = NetworkInterface.getNetworkInterfaces()
+            while ifaces is not None and ifaces.hasMoreElements():
+                ni = ifaces.nextElement()
+                if not ni.isUp() or ni.isLoopback():
+                    continue
+                for ia in ni.getInterfaceAddresses():
+                    addr = ia.getAddress()
+                    if addr is not None and ":" in str(addr.getHostAddress()):
+                        add(str(addr.getHostAddress()))
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+    elif os.path.exists("/proc/net/if_inet6"):
+        try:
+            with open("/proc/net/if_inet6", encoding="ascii") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 6 and parts[5] != "lo":
+                        add(":".join(parts[0][i : i + 4] for i in range(0, 32, 4)))
+        except OSError:
+            pass
+    if not found:
+        try:  # which source address would reach the IPv6 internet (no packet sent)
+            s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            s.connect(("2001:db8::1", 9))
+            add(s.getsockname()[0])
+            s.close()
+        except OSError:
+            pass
+    return found[:4]
