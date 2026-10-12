@@ -84,10 +84,10 @@ class Node:
 NODES: dict[str, Node] = {}
 
 
-async def open_ui(browser, name: str, mobile: bool = False):  # type: ignore[no-untyped-def]
+async def open_ui(browser, name: str, mobile: bool = False, csp_bypass: bool = True):  # type: ignore[no-untyped-def]
     vp = {"width": 390, "height": 844} if mobile else {"width": 1280, "height": 800}
     ctx = await browser.new_context(
-        ignore_https_errors=True, bypass_csp=True, viewport=vp, is_mobile=mobile,
+        ignore_https_errors=True, bypass_csp=csp_bypass, viewport=vp, is_mobile=mobile,
         has_touch=mobile, permissions=["clipboard-read", "clipboard-write", "camera", "microphone"],
     )
     page = await ctx.new_page()
@@ -487,6 +487,33 @@ async def group_flow() -> None:
         await browser.close()
 
 
+async def csp_flow() -> None:
+    """Click through the main screens with the real Content-Security-Policy on
+    (the flows above bypass it because Playwright's helpers need eval)."""
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(**LAUNCH)
+        for mobile in (False, True):
+            before = len(errors)
+            page = await open_ui(browser, "alice", mobile=mobile, csp_bypass=False)
+            if mobile and not await page.is_visible("#contacts"):
+                await page.click("#btn-menu")
+            for tab in ("discovered", "trusted", "groups"):
+                await page.click(f".peer-tab[data-tab={tab}]")
+            await page.click("#group-new")
+            await page.click("#group-cancel")
+            await page.click(".peer-tab[data-tab=trusted]")
+            await page.click("#contacts .contact >> nth=0")
+            await page.click("#btn-pair") if not mobile else None
+            if not mobile:
+                await page.wait_for_selector("#pair-qr img", timeout=10000)
+                await page.click("#pair-close")
+            await page.wait_for_timeout(500)
+            csp = [e for e in errors[before:] if "Content Security Policy" in e or "Refused" in e]
+            assert not csp, csp
+        print("csp: no Content-Security-Policy violations on desktop and phone layouts")
+        await browser.close()
+
+
 async def main() -> int:
     global OUT
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -508,6 +535,7 @@ async def main() -> int:
         await features_flow()
         await mobile_flow()
         await group_flow()
+        await csp_flow()
     finally:
         for n in NODES.values():
             n.stop()

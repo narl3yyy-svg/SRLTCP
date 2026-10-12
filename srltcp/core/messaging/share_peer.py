@@ -497,9 +497,16 @@ class SharePeerMixin:
 
             if not grant.record_download():
                 log.warning("Share download limit reached for grant %s", grant_id[:8])
+                if send_path != target:
+                    send_path.unlink(missing_ok=True)
                 return
 
             transfer = await self.offer_file(hash_id, send_path, transport=link.transport)
+            if transfer and send_path != target:
+                # A zip made for this fetch: delete it when the transfer ends.
+                transfer.metadata["temp_zip_path"] = str(send_path)
+            elif not transfer and send_path != target:
+                send_path.unlink(missing_ok=True)
             if transfer:
                 log.info(
                     "Share file %s sent to %s (grant %s)",

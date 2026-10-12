@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import TYPE_CHECKING
 
 from srltcp.core.messaging.presence import HubPresenceRegistry
@@ -35,6 +36,8 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 HUB_SYNTHETIC_PREFIX = "hub-"
+# Clocks on phones can drift; registrations older than this are refused.
+HUB_REGISTER_MAX_AGE = 600.0
 
 
 def hub_synthetic_peer_id(hash_id: str) -> str:
@@ -197,11 +200,25 @@ class HubMixin:
             "public_key": identity.public_bytes().hex(),
             "transport": "hub",
             "via_hub": True,
+            # Signed time: the hub only accepts newer registrations per identity,
+            # so a copy of this body (other members receive it) can't be replayed.
+            "ts": time.time(),
         }
         body = encode_payload(payload)
         signature = sign_bytes(identity.private_key, body).hex()
         signed = encode_payload({**payload, "hub_signature": signature})
         return signed
+
+    def _fresh_hub_register(self: MessagingBackend, data: dict[str, object]) -> bool:
+        ts = data.get("ts")
+        if not isinstance(ts, int | float) or abs(time.time() - float(ts)) > HUB_REGISTER_MAX_AGE:
+            return False
+        last = self.__dict__.setdefault("_hub_register_ts", {})
+        hash_id = str(data["hash_id"])
+        if float(ts) <= last.get(hash_id, 0.0):
+            return False
+        last[hash_id] = float(ts)
+        return True
 
     @staticmethod
     def _verify_hub_register(body: bytes) -> dict[str, object] | None:
@@ -263,6 +280,9 @@ class HubMixin:
         self: MessagingBackend, conn_peer_id: str, body: bytes
     ) -> None:
         data = self._verify_hub_register(body)
+        if data and not self._fresh_hub_register(data):
+            log.warning("Rejected stale or replayed hub register from %s", conn_peer_id[:8])
+            data = None
         if not data:
             log.warning("Rejected invalid hub register from %s", conn_peer_id[:8])
             if self.tcp_transport:

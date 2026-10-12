@@ -50,6 +50,9 @@ log = get_logger(__name__)
 EventCallback = Callable[..., Awaitable[None]]
 
 MAX_TEXT_BYTES = 65536
+HANDSHAKE_DEADLINE = 30.0  # seconds a TCP connection may stay unauthenticated
+MAX_PENDING_CHUNKS = 32  # incoming file chunks buffered per peer before we stop reading
+MAX_CONTACT_REQUESTS = 50  # pending requests from strangers kept at once
 
 
 @dataclass
@@ -375,6 +378,8 @@ class MessagingBackend(
         link_name = ""
         if event.kind == "discovered" and event.data and event.peer:
             await self._handle_discovered(event.peer.address, "tcp", event.data)
+        elif event.kind == "connected" and event.peer and event.peer.transport == "tcp":
+            self._expire_if_unauthenticated(event.peer.peer_id)
         elif event.kind == "disconnected" and event.peer:
             if self.config.hub_mode:
                 await self._handle_hub_depart_server(event.peer.peer_id)
@@ -419,6 +424,25 @@ class MessagingBackend(
                     }
                 )
         self._on_hub_transport_event(event)
+
+    def _expire_if_unauthenticated(self, peer_id: str) -> None:
+        """Close TCP connections that never complete a handshake (or, on a hub,
+        never register), so idle or junk connections can't pile up."""
+
+        async def _check() -> None:
+            await asyncio.sleep(HANDSHAKE_DEADLINE)
+            if self.get_link_by_peer_id(peer_id) or peer_id == self._hub_peer_id:
+                return
+            if self.config.hub_mode and self._hub_presence.hash_for_conn(peer_id):
+                return
+            if self.tcp_transport:
+                log.info("Closing connection %s: no handshake in time", peer_id[:8])
+                await self.tcp_transport.disconnect(peer_id)
+
+        if self._running:
+            task = asyncio.create_task(_check())
+            self.__dict__.setdefault("_expiry_tasks", set()).add(task)
+            task.add_done_callback(self.__dict__["_expiry_tasks"].discard)
 
     async def _on_transport_frame(self, peer: TransportPeer, payload: bytes) -> None:
         try:
@@ -514,6 +538,11 @@ class MessagingBackend(
                 except Exception as exc:
                     log.warning("File chunk handler failed from %s: %s", hash_id[:8], exc)
 
+            # Back-pressure: if the disk can't keep up, stop reading from this
+            # peer until some chunks are written (TCP then slows the sender).
+            pending = self._pending_chunk_tasks.get(hash_id)
+            if pending and len(pending) >= MAX_PENDING_CHUNKS:
+                await asyncio.wait(set(pending), return_when=asyncio.FIRST_COMPLETED)
             task = asyncio.create_task(_process_chunk())
             self._track_chunk_task(hash_id, task)
         elif msg_type == MessageType.FILE_COMPLETE:
@@ -554,6 +583,12 @@ class MessagingBackend(
         self._contact_requests[hash_id] = now
         if self.trusted.get(hash_id) or hash_id in self._declined_requests:
             return  # already a contact, blocked, or declined this session
+        if (
+            sum(1 for p in self.discovery.list_peers() if p.metadata.get("contact_request"))
+            >= MAX_CONTACT_REQUESTS
+        ):
+            log.info("Too many pending contact requests; ignoring %s", hash_id[:8])
+            return
         self.discovery.upsert_contact_request(
             hash_id=hash_id,
             name=link.peer_name,
@@ -1002,9 +1037,20 @@ class MessagingBackend(
             self._messages, self.config.message_retention_hours
         )
 
-    def get_messages(self, *, limit: int = 200) -> list[dict[str, Any]]:
+    def get_messages(
+        self, *, limit: int = 200, peer: str = "", group: str = ""
+    ) -> list[dict[str, Any]]:
+        """Newest ``limit`` messages, optionally only one chat (a contact or a group)."""
         self._prune_messages()
-        return [m.to_dict() for m in self._messages[-limit:]]
+        msgs = self._messages
+        if group:
+            msgs = [m for m in msgs if m.metadata.get("group_id") == group]
+        elif peer:
+            msgs = [
+                m for m in msgs
+                if not m.metadata.get("group_id") and peer in (m.sender_hash, m.recipient_hash)
+            ]
+        return [m.to_dict() for m in msgs[-limit:]]
 
     def get_discovered_peers(self) -> list[dict[str, Any]]:
         own_hashes = {i.hash_id for i in self.identities.values()}

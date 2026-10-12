@@ -48,7 +48,7 @@ def register_ws_routes(app: web.Application, node: SRLTCPNode) -> None:
 async def broadcast_event(node: SRLTCPNode, event_type: str, data: dict[str, Any]) -> None:
     """Push event to all connected WebSocket clients."""
     dead: set[Any] = set()
-    for ws in node._ws_clients:
+    for ws in list(node._ws_clients):  # the set changes if a socket closes mid-send
         try:
             await ws.send_json({"type": event_type, "data": data})
         except Exception:

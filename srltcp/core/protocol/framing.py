@@ -64,21 +64,46 @@ class FrameReader:
         self._buffer = bytearray()
 
     def feed(self, data: bytes) -> list[bytes]:
+        """Return every complete frame in the buffer.
+
+        Parses in place (no per-frame copy of the whole buffer) and, on junk,
+        jumps straight to the next frame magic — a peer sending garbage must
+        not be able to pin the event loop.
+        """
         self._buffer.extend(data)
+        buf = self._buffer
+        view = memoryview(buf)
         frames: list[bytes] = []
-        while True:
-            try:
-                payload, remainder = unpack_frame(bytes(self._buffer))
-            except ValueError as exc:
-                if str(exc) == "incomplete":
-                    break
-                # Resync: drop one byte and retry
-                if self._buffer:
-                    self._buffer.pop(0)
+        pos = 0
+        min_size = HEADER_SIZE + CRC_SIZE
+        try:
+            while len(buf) - pos >= min_size:
+                if view[pos : pos + 4] != FRAME_MAGIC:
+                    nxt = buf.find(FRAME_MAGIC, pos + 1)
+                    if nxt < 0:
+                        # Keep a possible partial magic at the very end.
+                        pos = max(pos, len(buf) - (len(FRAME_MAGIC) - 1))
+                        break
+                    pos = nxt
                     continue
-                raise
-            frames.append(payload)
-            self._buffer = bytearray(remainder)
+                length = struct.unpack_from(">I", buf, pos + 4)[0]
+                if length > MAX_FRAME_SIZE:
+                    pos += 1
+                    continue
+                total = min_size + length
+                if len(buf) - pos < total:
+                    break
+                expected_crc = struct.unpack_from(">I", buf, pos + 8)[0]
+                payload = bytes(view[pos + 12 : pos + total])
+                if crc32(payload) != expected_crc:
+                    pos += 1
+                    continue
+                frames.append(payload)
+                pos += total
+        finally:
+            view.release()
+        if pos:
+            del buf[:pos]
         return frames
 
 
