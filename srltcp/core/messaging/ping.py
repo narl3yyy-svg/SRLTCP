@@ -34,7 +34,19 @@ class PingMixin:
     async def start_ping_loop(self: MessagingBackend) -> None:
         async def _loop() -> None:
             tick = 0
+            last_ips: set[str] = set()
             while self._running:
+                # Own address changed (network switch / VPN reconnect) while
+                # auto-announce is off: still tell VPN peers where we are now.
+                if not self.config.announce:
+                    try:
+                        ips = self._own_ips()
+                        if last_ips and ips != last_ips:
+                            log.info("Network address changed — notifying VPN peers")
+                            await self.sweep_vpn()
+                        last_ips = ips
+                    except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                        log.debug("Address change check failed: %s", exc)
                 for link in self.list_links():
                     hash_id = link.get("hash_id", "")
                     if link.get("handshake_complete") and not self.has_active_transfer_for(
