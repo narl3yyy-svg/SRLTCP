@@ -20,6 +20,7 @@ from srltcp.core.messaging.constants import COMPRESS_THRESHOLD, DISCOVERY_PORT
 from srltcp.core.messaging.hub import HubMixin
 from srltcp.core.messaging.links import PeerLink, PeerLinkMixin
 from srltcp.core.messaging.models import ChatMessage
+from srltcp.core.messaging.pairing import PairingMixin
 from srltcp.core.messaging.ping import PingMixin
 from srltcp.core.messaging.share_peer import SharePeerMixin
 from srltcp.core.messaging.store import MessageStore
@@ -79,6 +80,7 @@ class MessagingBackend(
     TransferMixin,
     SharePeerMixin,
     HubMixin,
+    PairingMixin,
 ):
     """Central messaging orchestrator."""
 
@@ -117,6 +119,7 @@ class MessagingBackend(
         self._init_transfer()
         self._init_share_peer()
         self._init_hub()
+        self._init_pairing()
 
     def set_callbacks(
         self,
@@ -170,8 +173,7 @@ class MessagingBackend(
 
         if self.tcp_transport:
             await self.tcp_transport.start()
-            if not self.config.strict_ports:
-                self.config.tcp_port = self.tcp_transport.port
+            self.config.tcp_port = self.tcp_transport.port
         if self.serial_transport:
             try:
                 await self.serial_transport.start()
@@ -474,6 +476,9 @@ class MessagingBackend(
         if msg_type == MessageType.RECEIPT:
             await self._handle_receipt(hash_id, body)
             return
+        if msg_type == MessageType.PAIR:
+            await self._handle_pair(link, body)
+            return
         if not self.is_trusted(hash_id):
             await self._handle_untrusted_message(link, msg_type, body)
             return
@@ -608,10 +613,21 @@ class MessagingBackend(
             packet = self._seal(link, MessageType.RECEIPT, body)
             await self._send_raw(link.transport_peer_id, link.transport, packet)
 
+    async def notify_contact_accepted(self, hash_id: str) -> None:
+        """Tell a peer we now trust them so it re-sends refused messages."""
+        link = self.get_link(hash_id)
+        if link and link.handshake_complete:
+            await self._send_receipt(link, "", "accepted")
+        self._contact_requests.pop(hash_id, None)
+
     async def _handle_receipt(self, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
         msg_id = str(data.get("id", ""))
         status = str(data.get("status", ""))
+        if status == "accepted":
+            # The peer just accepted our contact request: resend what they refused.
+            await self.flush_outbox(hash_id)
+            return
         if status not in ("delivered", "not_trusted"):
             return
         for msg in reversed(self._messages):

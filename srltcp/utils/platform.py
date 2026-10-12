@@ -17,6 +17,9 @@ def set_android_data_dir(path: str) -> None:
     """Called from Android MainActivity before starting the Python server."""
     global _android_data_dir
     _android_data_dir = path
+    # Mark the runtime as Android as early as possible so module-level
+    # decisions made before start_android_server() see the right platform.
+    os.environ["SRLTCP_ANDROID"] = "1"
 
 
 def data_dir() -> Path:

@@ -15,6 +15,7 @@ from srltcp.utils.logging import get_logger
 from srltcp.utils.ports import start_web_site
 from srltcp.utils.tls import create_ssl_context
 from srltcp.web.access_log import QuietAccessLogger
+from srltcp.web.auth import auth_middleware, load_or_create_token
 from srltcp.web.security import quiet_access_log, security_middleware
 
 log = get_logger(__name__)
@@ -23,11 +24,16 @@ STATIC_DIR = Path(__file__).parent / "static"
 STATIC_FILES = {
     "app.css": "text/css",
     "app.js": "application/javascript",
+    "qrcode.js": "application/javascript",
+    "calls.js": "application/javascript",
 }
 
 
-def create_app(node: SRLTCPNode) -> web.Application:
-    app = web.Application(middlewares=[security_middleware, quiet_access_log])
+def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application:
+    middlewares = [security_middleware, quiet_access_log]
+    if token:
+        middlewares.insert(1, auth_middleware(token))
+    app = web.Application(middlewares=middlewares)
 
     async def index(_request: web.Request) -> web.Response:
         index_path = STATIC_DIR / "index.html"
@@ -94,7 +100,14 @@ def create_app(node: SRLTCPNode) -> web.Application:
 
     async def on_event(data: dict) -> None:
         kind = data.get("kind", "")
-        if kind in ("share_offer", "share_listing", "share_revoked"):
+        if kind in (
+            "share_offer",
+            "share_listing",
+            "share_revoked",
+            "contact_request",
+            "paired",
+            "call_signal",
+        ):
             await broadcast_event(node, kind, data)
         else:
             await broadcast_event(node, "transport_event", data)
@@ -124,7 +137,7 @@ async def run_web_server(
         raise ValueError("SRLTCP web UI must bind to localhost only for security")
 
     ssl_ctx = create_ssl_context()
-    app = create_app(node)
+    app = create_app(node, token=load_or_create_token())
     runner = web.AppRunner(
         app,
         access_log_class=QuietAccessLogger,

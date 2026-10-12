@@ -29,6 +29,7 @@ class MessageType(IntEnum):
     SHARE_LIST = 0x40
     SHARE_REQUEST = 0x41
     RECEIPT = 0x21
+    PAIR = 0x22
     CALL_SIGNAL = 0x60
     RELAY_ENVELOPE = 0x50
     HUB_REGISTER = 0x52
@@ -50,6 +51,7 @@ SESSION_MESSAGE_TYPES = frozenset(
     {
         MessageType.TEXT,
         MessageType.RECEIPT,
+        MessageType.PAIR,
         MessageType.FILE_OFFER,
         MessageType.FILE_ACCEPT,
         MessageType.FILE_REJECT,

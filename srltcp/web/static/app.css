@@ -21,8 +21,9 @@
   --radius-sm: 10px;
   --radius-lg: 20px;
   --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-  --font: "DM Sans", system-ui, sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, monospace;
+  /* System fonts only: loading web fonts would contact a third party. */
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   --sidebar-w: 320px;
   --header-h: 64px;
   --composer-h: 72px;
@@ -449,6 +450,10 @@ body {
 .bubble-status.delivered::after { content: "✓✓"; }
 .bubble-status.pending { color: var(--warning); }
 .bubble-status.pending::after { content: "…"; }
+.bubble-status.not_trusted { color: var(--warning); }
+.bubble-status.not_trusted::after { content: "⚠ waiting for them to accept you"; font-size: 0.7rem; }
+.bubble-status.failed { color: var(--danger, #f07178); }
+.bubble-status.failed::after { content: "✕"; }
 .bubble.image { padding: 0.35rem; max-width: min(80%, 420px); }
 .file-bubble {
   display: flex;
@@ -1621,3 +1626,39 @@ label.field > span {
   font-size: 0.72rem;
   color: var(--text-muted);
 }
+
+
+/* ── Pairing ── */
+.action-btn.primary-action { background: var(--accent, #5b8def); color: #fff; border-color: transparent; }
+.pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin: 0.75rem 0; }
+.pair-section h4 { margin: 0 0 0.5rem; }
+.pair-qr { background: #fff; border-radius: 12px; padding: 10px; display: flex; justify-content: center; align-items: center; min-height: 220px; }
+.pair-qr img { width: 100%; max-width: 260px; height: auto; image-rendering: pixelated; }
+.pair-actions { justify-content: flex-start; flex-wrap: wrap; }
+.pair-fingerprint { font-size: 0.75rem; color: var(--text-muted, #8b93a8); word-break: break-all; }
+.pair-buttons { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.75rem; }
+.pair-nfc-status { font-size: 0.85rem; padding: 0.5rem 0.75rem; border-radius: 8px; background: rgba(91, 141, 239, 0.12); }
+.pair-camera { width: 100%; border-radius: 10px; margin-top: 0.5rem; background: #000; }
+#pair-code-input { width: 100%; font-family: var(--mono); font-size: 0.75rem; resize: vertical; }
+.contact-request-tag { font-size: 0.7rem; color: var(--warning, #f5a623); margin-left: 0.35rem; }
+@media (max-width: 760px) {
+  .pair-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Calls ── */
+.call-overlay { position: fixed; inset: 0; z-index: 900; background: radial-gradient(circle at 50% 30%, #1d2333, #07080c); display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: max(2rem, env(safe-area-inset-top)) 1rem max(2rem, env(safe-area-inset-bottom)); }
+.call-overlay.hidden { display: none; }
+.call-remote-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; background: #000; }
+.call-overlay.video .call-remote-video { display: block; }
+.call-local-video { position: absolute; right: 1rem; top: max(1rem, env(safe-area-inset-top)); width: 28vw; max-width: 180px; border-radius: 12px; border: 2px solid rgba(255,255,255,0.2); display: none; z-index: 2; transform: scaleX(-1); background: #111; }
+.call-overlay.video .call-local-video { display: block; }
+.call-info { position: relative; z-index: 2; text-align: center; margin-top: 3rem; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
+.call-peer-name { font-size: 1.6rem; font-weight: 600; }
+.call-status { color: #c6cbd8; margin-top: 0.35rem; }
+.call-actions { position: relative; z-index: 2; display: flex; gap: 1.5rem; }
+.call-actions.hidden { display: none; }
+.call-btn { width: 64px; height: 64px; border-radius: 50%; border: none; font-size: 1.5rem; background: rgba(255,255,255,0.14); color: #fff; cursor: pointer; }
+.call-btn.active { background: #fff; color: #111; }
+.call-btn.accept { background: #3ecf8e; }
+.call-btn.decline { background: #f0546a; }
+.call-btn.hidden { display: none; }

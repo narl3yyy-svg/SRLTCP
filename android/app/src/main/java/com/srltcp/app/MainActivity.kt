@@ -2,9 +2,16 @@ package com.srltcp.app
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.nfc.NfcAdapter
+import android.nfc.Tag
+import android.webkit.PermissionRequest
+import org.json.JSONObject
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.net.http.SslCertificate
 import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
@@ -27,6 +34,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewClientCompat
 import com.chaquo.python.Python
+import java.security.MessageDigest
 
 class MainActivity : AppCompatActivity() {
     private var webView: WebView? = null
@@ -54,6 +62,30 @@ class MainActivity : AppCompatActivity() {
             result.data
         )
         callback.onReceiveValue(uris)
+    }
+
+    private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
+        val text = result.contents ?: return@registerForActivityResult
+        deliverToWeb("onAndroidQrResult", JSONObject.quote(text))
+    }
+
+    private var pendingWebPermission: PermissionRequest? = null
+
+    private val requestMediaPermissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val request = pendingWebPermission ?: return@registerForActivityResult
+        pendingWebPermission = null
+        val allowed = request.resources.filter { res ->
+            when (res) {
+                PermissionRequest.RESOURCE_AUDIO_CAPTURE -> grants[Manifest.permission.RECORD_AUDIO] == true ||
+                    hasPermission(Manifest.permission.RECORD_AUDIO)
+                PermissionRequest.RESOURCE_VIDEO_CAPTURE -> grants[Manifest.permission.CAMERA] == true ||
+                    hasPermission(Manifest.permission.CAMERA)
+                else -> false
+            }
+        }
+        if (allowed.isEmpty()) request.deny() else request.grant(allowed.toTypedArray())
     }
 
     private val requestNotificationPermission = registerForActivityResult(
@@ -113,6 +145,33 @@ class MainActivity : AppCompatActivity() {
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             wv.addJavascriptInterface(SRLTCPBridge(this@MainActivity), "SRLTCPAndroid")
             wv.webChromeClient = object : WebChromeClient() {
+                override fun onPermissionRequest(request: PermissionRequest) {
+                    // Only our own local UI may use the camera/microphone (QR + calls).
+                    if (request.origin.host != "127.0.0.1") {
+                        request.deny()
+                        return
+                    }
+                    runOnUiThread {
+                        val needed = mutableListOf<String>()
+                        if (PermissionRequest.RESOURCE_AUDIO_CAPTURE in request.resources &&
+                            !hasPermission(Manifest.permission.RECORD_AUDIO)
+                        ) needed.add(Manifest.permission.RECORD_AUDIO)
+                        if (PermissionRequest.RESOURCE_VIDEO_CAPTURE in request.resources &&
+                            !hasPermission(Manifest.permission.CAMERA)
+                        ) needed.add(Manifest.permission.CAMERA)
+                        if (needed.isEmpty()) {
+                            request.grant(request.resources.filter {
+                                it == PermissionRequest.RESOURCE_AUDIO_CAPTURE ||
+                                    it == PermissionRequest.RESOURCE_VIDEO_CAPTURE
+                            }.toTypedArray())
+                        } else {
+                            pendingWebPermission?.deny()
+                            pendingWebPermission = request
+                            requestMediaPermissions.launch(needed.toTypedArray())
+                        }
+                    }
+                }
+
                 override fun onShowFileChooser(
                     webView: WebView,
                     filePathCallback: ValueCallback<Array<Uri>>,
@@ -132,7 +191,17 @@ class MainActivity : AppCompatActivity() {
             }
             wv.webViewClient = object : WebViewClientCompat() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    return false
+                    val uri = request.url
+                    if (uri.host == "127.0.0.1" && uri.scheme == "https") return false
+                    // Never load outside pages inside the privileged app WebView.
+                    if (uri.scheme == "http" || uri.scheme == "https") {
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, uri))
+                        } catch (e: Exception) {
+                            Log.w(TAG, "No app to open $uri", e)
+                        }
+                    }
+                    return true
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
@@ -157,9 +226,10 @@ class MainActivity : AppCompatActivity() {
                         return
                     }
                     val host = android.net.Uri.parse(error.url).host
-                    if (host == "127.0.0.1" || host == "localhost") {
+                    if ((host == "127.0.0.1" || host == "localhost") && isOurCertificate(error)) {
                         handler.proceed()
                     } else {
+                        Log.w(TAG, "Rejected TLS certificate for ${error.url}")
                         handler.cancel()
                     }
                 }
@@ -181,6 +251,7 @@ class MainActivity : AppCompatActivity() {
             root.addView(wv)
         }
         setContentView(root)
+        NfcPairing.listener = { result -> deliverToWeb("onAndroidNfcResult", JSONObject.quote(result)) }
 
         if (savedInstanceState != null) {
             webView?.restoreState(savedInstanceState)
@@ -280,6 +351,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startPythonServer() {
+        SRLTCPApplication.instance?.acquireNetworkLocks()
         if (serverThread?.isAlive == true) {
             try {
                 val py = Python.getInstance()
@@ -409,11 +481,105 @@ class MainActivity : AppCompatActivity() {
         pageLoaded = false
         handler.removeCallbacks(loadRetryRunnable)
         val port = resolvePort()
-        val url = "https://127.0.0.1:$port/"
-        Log.i(TAG, "Loading $url (attempt $loadAttempt)")
-        statusView?.text = "Connecting to $url …"
-        wv.loadUrl(url)
+        val base = "https://127.0.0.1:$port/"
+        val token = try {
+            Python.getInstance().getModule("srltcp.app").callAttr("get_android_web_token").toString()
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not read web token", e)
+            ""
+        }
+        Log.i(TAG, "Loading $base (attempt $loadAttempt)")
+        statusView?.text = "Connecting to $base …"
+        wv.loadUrl(if (token.isNotEmpty()) "$base?token=${Uri.encode(token)}" else base)
         handler.postDelayed(loadRetryRunnable, 5000)
+    }
+
+    private fun hasPermission(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+    /** Call a global JS callback in the UI with an already-encoded JS argument. */
+    private fun deliverToWeb(function: String, jsArg: String) {
+        runOnUiThread {
+            webView?.evaluateJavascript(
+                "window.$function && window.$function($jsArg);",
+                null
+            )
+        }
+    }
+
+    // ── Pairing: QR scanner, share sheet, NFC reader mode ──
+
+    fun launchQrScanner() {
+        val options = ScanOptions()
+            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            .setPrompt("Scan the SRLTCP pairing code on the other device")
+            .setBeepEnabled(false)
+            .setOrientationLocked(false)
+        try {
+            qrScanLauncher.launch(options)
+        } catch (e: Exception) {
+            Log.e(TAG, "QR scanner failed", e)
+        }
+    }
+
+    fun shareText(title: String, text: String) {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        startActivity(Intent.createChooser(send, title))
+    }
+
+    fun isNfcAvailable(): Boolean = NfcAdapter.getDefaultAdapter(this) != null
+
+    /** Enable reader mode; returns false when NFC is missing or switched off. */
+    fun startNfcReader(): Boolean {
+        val adapter = NfcAdapter.getDefaultAdapter(this) ?: return false
+        if (!adapter.isEnabled) return false
+        runOnUiThread {
+            adapter.enableReaderMode(
+                this,
+                { tag: Tag ->
+                    val result = NfcPairing.exchangeAsReader(tag)
+                    deliverToWeb("onAndroidNfcResult", JSONObject.quote(result))
+                    if (!result.contains("\"error\"")) {
+                        runOnUiThread { stopNfcReader() }
+                    }
+                },
+                NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_NFC_B or
+                    NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK or NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS,
+                null
+            )
+        }
+        return true
+    }
+
+    fun stopNfcReader() {
+        try {
+            NfcAdapter.getDefaultAdapter(this)?.disableReaderMode(this)
+        } catch (_: Exception) { /* ignore */ }
+    }
+
+    private var pinnedCertSha256: String? = null
+
+    /** Accept only the certificate generated by our own Python server. */
+    private fun isOurCertificate(error: SslError): Boolean {
+        return try {
+            val expected = pinnedCertSha256 ?: Python.getInstance()
+                .getModule("srltcp.app")
+                .callAttr("get_android_cert_sha256")
+                .toString()
+                .lowercase()
+                .also { pinnedCertSha256 = it }
+            val der = SslCertificate.saveState(error.certificate)
+                .getByteArray("x509-certificate") ?: return false
+            val actual = MessageDigest.getInstance("SHA-256").digest(der)
+                .joinToString("") { "%02x".format(it) }
+            actual == expected
+        } catch (e: Exception) {
+            Log.e(TAG, "Certificate pin check failed", e)
+            false
+        }
     }
 
     private fun resolvePort(): Int {
@@ -450,6 +616,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         isActivityResumed = false
+        stopNfcReader()
         super.onPause()
         webView?.onPause()
         if (isFinishing) {
@@ -520,6 +687,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        NfcPairing.listener = null
+        NfcPairing.card = null
         if (isFinishing) {
             prepareForClose()
         }
@@ -532,6 +701,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 stopService(Intent(this, SRLTCPService::class.java))
             } catch (_: Exception) { /* ignore */ }
+            SRLTCPApplication.instance?.releaseNetworkLocks()
         }
         super.onDestroy()
     }

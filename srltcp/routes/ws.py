@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
+from srltcp.web.security import _is_allowed_origin
+
 if TYPE_CHECKING:
     from srltcp.core.node import SRLTCPNode
 
@@ -16,7 +18,10 @@ def register_ws_routes(app: web.Application, node: SRLTCPNode) -> None:
         host = request.host.split(":")[0].lower()
         if host not in ("127.0.0.1", "localhost", "[::1]"):
             raise web.HTTPForbidden()
-        ws = web.WebSocketResponse()
+        origin = request.headers.get("Origin", "")
+        if origin and not _is_allowed_origin(origin):
+            raise web.HTTPForbidden(text="Invalid origin")
+        ws = web.WebSocketResponse(heartbeat=30.0, max_msg_size=1024 * 1024)
         await ws.prepare(request)
         node._ws_clients.add(ws)
 

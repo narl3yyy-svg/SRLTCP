@@ -49,6 +49,8 @@ async def start_tcp_server(
             server = await asyncio.start_server(
                 factory, host, try_port, reuse_address=True
             )
+            if try_port == 0 and server.sockets:
+                try_port = int(server.sockets[0].getsockname()[1])
             if offset:
                 log.warning(
                     "TCP port %d in use — bound to %d instead "
@@ -101,6 +103,8 @@ async def bind_udp_port(
                     protocol_factory,
                     local_addr=(host, try_port),
                 )
+            if try_port == 0:
+                try_port = int(transport.get_extra_info("sockname")[1])
             if offset:
                 log.warning("UDP discovery port %d in use — using %d", port, try_port)
             return transport, try_port

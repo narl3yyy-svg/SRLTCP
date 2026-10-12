@@ -4,19 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-import socket
 from pathlib import Path
 
 import pytest
 
 from srltcp.core.messaging.backend import MessagingBackend, NodeConfig
 from srltcp.core.trusted import TrustedPeer
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
 
 
 def make_node(tmp_path: Path, name: str, **cfg: object) -> MessagingBackend:
@@ -28,8 +21,8 @@ def make_node(tmp_path: Path, name: str, **cfg: object) -> MessagingBackend:
         config = NodeConfig(
             name=name,
             bind_host="127.0.0.1",
-            tcp_port=int(cfg.pop("tcp_port", _free_port())),  # type: ignore[call-overload]
-            discovery_port=_free_port(),
+            tcp_port=int(cfg.pop("tcp_port", 0)),  # type: ignore[call-overload]
+            discovery_port=0,
             strict_ports=True,
             incoming_dir=str(data / "incoming"),
             **cfg,  # type: ignore[arg-type]
@@ -193,7 +186,7 @@ async def test_untrusted_peer_messages_not_shown(tmp_path: Path) -> None:
         assert await wait_for(lambda: a.get_messages()[-1]["status"] == "not_trusted")
         # Bob accepts the request -> the queued message is delivered on retry.
         trust(b, a)
-        await a.flush_outbox(bh)
+        await b.notify_contact_accepted(a.identities["tcp"].hash_id)
         assert await wait_for(lambda: "let me in" in texts(b))
     finally:
         await a.stop()
@@ -263,3 +256,61 @@ async def test_hub_relay_end_to_end(tmp_path: Path) -> None:
         await a.stop()
         await b.stop()
         await hub.stop()
+
+
+async def test_qr_pairing_is_mutual(tmp_path: Path) -> None:
+    """Bob scans Alice's card; both sides end up trusting each other."""
+    a = make_node(tmp_path, "alice", lan_ip="127.0.0.1")
+    b = make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    events: list[dict] = []
+
+    async def on_event(evt: dict) -> None:
+        events.append(evt)
+
+    a.set_callbacks(on_event=on_event)
+    try:
+        ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+        # Cards only advertise non-loopback addresses; patch for loopback tests.
+        a._card_endpoints = lambda: [("127.0.0.1", a.config.tcp_port)]  # type: ignore[method-assign]
+        card = a.create_pairing_card()
+        peer = await b.import_pairing_card(card["uri"])
+        assert peer["hash_id"] == ah
+        assert b.is_trusted(ah)
+        assert await wait_for(lambda: a.is_trusted(bh), timeout=10)
+        assert any(e.get("kind") == "paired" for e in events)
+        await b.send_message(ah, "paired!")
+        assert await wait_for(lambda: "paired!" in texts(a))
+        # The token is single-use.
+        assert not a._pairing_tokens
+    finally:
+        await a.stop()
+        await b.stop()
+
+
+def test_card_tampering_detected(tmp_path: Path) -> None:
+    from srltcp.core.messaging.pairing import (
+        CARD_PREFIX,
+        PairingError,
+        _b64d,
+        _b64e,
+        decode_card,
+    )
+
+    a = make_node(tmp_path, "alice")
+    a.identities["tcp"] = a.identity_store.load_or_create("alice", "tcp")
+    a._card_endpoints = lambda: [("192.168.1.20", 7825)]  # type: ignore[method-assign]
+    uri = a.create_pairing_card()["uri"]
+    card = decode_card(uri)
+    assert card.hash_id == a.identities["tcp"].hash_id
+    assert card.endpoints == [("192.168.1.20", 7825)]
+    import json
+
+    fields = json.loads(_b64d(uri[len(CARD_PREFIX):]))
+    fields["a"] = [["6.6.6.6", 7825]]
+    forged = CARD_PREFIX + _b64e(json.dumps(fields).encode())
+    with pytest.raises(PairingError):
+        decode_card(forged)
+    with pytest.raises(PairingError):
+        decode_card("srltcp://pair#garbage")

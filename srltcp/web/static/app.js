@@ -620,6 +620,23 @@
             renderShareEntries();
           }
           break;
+        case "contact_request":
+          loadPeers();
+          notifyUser(
+            "Contact request",
+            `${data.name || data.hash_id?.slice(0, 8)} wants to chat — accept them in Discovered`,
+            { tag: `req-${data.hash_id}` }
+          );
+          logActivity(`Contact request: ${data.name || data.hash_id?.slice(0, 8)}`);
+          break;
+        case "paired":
+          loadPeers();
+          toast(`Paired with ${data.name || data.hash_id?.slice(0, 8)}`);
+          logActivity(`Paired with ${data.name || data.hash_id?.slice(0, 8)}`);
+          break;
+        case "call_signal":
+          if (typeof window.srltcpOnCallSignal === "function") window.srltcpOnCallSignal(data);
+          break;
         case "share_revoked":
           loadShareGrants()
             .then(() => {
@@ -760,6 +777,208 @@
       }
     }
   }
+
+  /* ── Pairing (QR code / link / NFC) ── */
+  function androidBridge() {
+    return window.SRLTCPAndroid || null;
+  }
+
+  function androidHas(method) {
+    const b = androidBridge();
+    return !!(b && typeof b[method] === "function");
+  }
+
+  function renderPairQr(uri) {
+    const box = $("#pair-qr");
+    if (!box) return;
+    box.innerHTML = "";
+    if (typeof window.qrcode !== "function") {
+      box.textContent = "QR unavailable — use Copy link";
+      return;
+    }
+    try {
+      const qr = window.qrcode(0, "M");
+      qr.addData(uri);
+      qr.make();
+      const img = document.createElement("img");
+      img.alt = "Pairing QR code";
+      img.src = qr.createDataURL(6, 2);
+      box.appendChild(img);
+    } catch (err) {
+      box.textContent = "Code too long for QR — use Copy link";
+    }
+  }
+
+  async function refreshPairCode() {
+    const { ok, data } = await apiGet("/api/pairing/card", { silent: false, fallback: null });
+    if (!ok || !data?.uri) {
+      toast(data?.error || "Could not create pairing code", "error");
+      return;
+    }
+    state.pairUri = data.uri;
+    renderPairQr(data.uri);
+    const hashEl = $("#pair-my-hash");
+    if (hashEl) hashEl.textContent = (data.hash_id || "").replace(/(.{4})/g, "$1 ").trim();
+    const hint = $("#pair-qr-hint");
+    if (hint && data.expires) {
+      const mins = Math.max(1, Math.round((data.expires * 1000 - Date.now()) / 60000));
+      hint.textContent = `Let the other person scan this. Valid for ${mins} minutes, works once.`;
+    }
+    if (androidHas("setPairingCard")) {
+      try { androidBridge().setPairingCard(data.uri); } catch (_) { /* ignore */ }
+    }
+  }
+
+  function setNfcStatus(text, kind = "info") {
+    const el = $("#pair-nfc-status");
+    if (!el) return;
+    el.textContent = text;
+    el.dataset.kind = kind;
+    el.classList.toggle("hidden", !text);
+  }
+
+  async function openPairModal() {
+    const modal = $("#pair-modal");
+    if (!modal) return;
+    setInputValue("pair-code-input", "");
+    setNfcStatus("");
+    $("#pair-share")?.classList.toggle("hidden", !androidHas("shareText") && !navigator.share);
+    $("#pair-scan")?.classList.toggle(
+      "hidden",
+      !androidHas("scanQrCode") && !("BarcodeDetector" in window && navigator.mediaDevices)
+    );
+    const nfcOk = androidHas("isNfcAvailable") && androidBridge().isNfcAvailable();
+    $("#pair-nfc")?.classList.toggle("hidden", !nfcOk);
+    openModal(modal);
+    await refreshPairCode();
+    if (nfcOk) {
+      setNfcStatus("NFC ready — hold the other phone against this one, and press “Tap phones” on one of them.");
+    }
+  }
+
+  function closePairModal() {
+    stopPairCamera();
+    if (androidHas("setPairingCard")) {
+      try { androidBridge().setPairingCard(""); } catch (_) { /* ignore */ }
+    }
+    if (androidHas("stopNfcScan")) {
+      try { androidBridge().stopNfcScan(); } catch (_) { /* ignore */ }
+    }
+    closeModal($("#pair-modal"));
+  }
+
+  async function importPairCode(code, { source = "link" } = {}) {
+    const text = (code || "").trim();
+    if (!text) {
+      toast("Paste or scan a pairing code first", "error");
+      return false;
+    }
+    const { ok, data } = await apiPost("/api/pairing/import", { code: text }, { silent: true });
+    if (!ok) {
+      toast(data?.error || "That pairing code did not work", "error");
+      return false;
+    }
+    toast(`Paired with ${data.name || data.hash_id?.slice(0, 8)}${source === "nfc" ? " via NFC" : ""}`);
+    logActivity(`Paired with ${data.name || data.hash_id?.slice(0, 8)} (${source})`);
+    state.peerTab = "trusted";
+    document.querySelectorAll(".peer-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === "trusted"));
+    await loadPeers();
+    closePairModal();
+    selectPeer(data.hash_id, data.name || data.hash_id.slice(0, 8));
+    return true;
+  }
+
+  async function copyPairLink() {
+    if (!state.pairUri) return;
+    try {
+      await navigator.clipboard.writeText(state.pairUri);
+      toast("Pairing link copied — send it over a channel you trust");
+    } catch (_) {
+      setInputValue("pair-code-input", state.pairUri);
+      toast("Copy failed — the link is in the text box", "error");
+    }
+  }
+
+  async function sharePairLink() {
+    if (!state.pairUri) return;
+    if (androidHas("shareText")) {
+      androidBridge().shareText("My SRLTCP pairing link", state.pairUri);
+    } else if (navigator.share) {
+      try { await navigator.share({ title: "SRLTCP pairing", text: state.pairUri }); } catch (_) { /* cancelled */ }
+    }
+  }
+
+  let pairCameraStream = null;
+  let pairCameraTimer = null;
+
+  function stopPairCamera() {
+    if (pairCameraTimer) clearInterval(pairCameraTimer);
+    pairCameraTimer = null;
+    if (pairCameraStream) pairCameraStream.getTracks().forEach((t) => t.stop());
+    pairCameraStream = null;
+    $("#pair-camera")?.classList.add("hidden");
+  }
+
+  async function scanPairQr() {
+    if (androidHas("scanQrCode")) {
+      androidBridge().scanQrCode();  // result arrives via window.onAndroidQrResult
+      return;
+    }
+    if (!("BarcodeDetector" in window)) {
+      toast("QR scanning is not supported in this browser — paste the link instead", "error");
+      return;
+    }
+    const video = $("#pair-camera");
+    try {
+      pairCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    } catch (_) {
+      toast("Camera permission denied", "error");
+      return;
+    }
+    video.srcObject = pairCameraStream;
+    video.classList.remove("hidden");
+    await video.play();
+    const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+    pairCameraTimer = setInterval(async () => {
+      try {
+        const codes = await detector.detect(video);
+        const hit = codes.find((c) => (c.rawValue || "").startsWith("srltcp://pair#"));
+        if (hit) {
+          stopPairCamera();
+          await importPairCode(hit.rawValue, { source: "qr" });
+        }
+      } catch (_) { /* keep scanning */ }
+    }, 400);
+  }
+
+  function startNfcScan() {
+    if (!androidHas("startNfcScan")) return;
+    const started = androidBridge().startNfcScan();
+    if (started === false) {
+      setNfcStatus("Turn on NFC in Android settings first.", "error");
+      return;
+    }
+    setNfcStatus("Scanning… hold the phones back to back. Keep the other phone on its Pair screen.");
+  }
+
+  // Called by the Android app (MainActivity) — see SRLTCPBridge.kt.
+  window.onAndroidQrResult = (text) => {
+    if (text) importPairCode(text, { source: "qr" });
+  };
+  window.onAndroidNfcResult = (result) => {
+    const r = typeof result === "string" ? JSON.parse(result) : result || {};
+    if (r.error) {
+      setNfcStatus(`NFC: ${r.error}`, "error");
+      return;
+    }
+    setNfcStatus(`Paired with ${r.name || "contact"} via NFC.`, "ok");
+    toast(`Paired with ${r.name || "contact"} via NFC`);
+    loadPeers();
+    if (r.hash_id) {
+      closePairModal();
+      selectPeer(r.hash_id, r.name || r.hash_id.slice(0, 8));
+    }
+  };
 
   async function deleteTrusted(hashId, name) {
     if (!confirm(`Remove ${name} from trusted contacts?`)) return;
@@ -1575,6 +1794,7 @@
     setCheckbox("set-show-clock", settings.show_clock !== false);
     setSelectValue("set-clock-source", settings.clock_source || "system");
     setInputValue("set-ntp-server", settings.ntp_server || "pool.ntp.org");
+    setInputValue("set-stun", settings.call_stun_server || "");
     toggleNtpField();
     applyClockVisibility();
     if (!$("#settings-window")?.classList.contains("hidden") || !state.interfacesLoaded) {
@@ -1987,14 +2207,15 @@
         const endpoint = peerEndpoint(p);
         const metricsStr = metrics.length ? ` · ${metrics.join(" · ")}` : "";
         const meta = `${transportBadge(p.transport)}<span class="contact-endpoint">${escapeHtml(endpoint)}${escapeHtml(metricsStr)}</span>`;
+        const isRequest = !!p.metadata?.contact_request;
         const trustBtn = state.peerTab === "discovered" && !trustedIds.has(p.hash_id)
-          ? `<button type="button" class="contact-trust" data-trust="${p.hash_id}">Trust</button>` : "";
+          ? `<button type="button" class="contact-trust" data-trust="${p.hash_id}">${isRequest ? "Accept" : "Trust"}</button>` : "";
         return `<button class="contact${active}" data-hash="${p.hash_id}" data-name="${escapeHtml(p.name)}">
           <div class="avatar" style="background:${hashColor(p.hash_id)}22;color:${hashColor(p.hash_id)};border-color:${hashColor(p.hash_id)}44">
             ${initials(p.name)}
           </div>
           <div class="contact-info">
-            <div class="contact-name">${escapeHtml(p.name)}</div>
+            <div class="contact-name">${escapeHtml(p.name)}${p.metadata?.contact_request ? '<span class="contact-request-tag">wants to chat</span>' : ""}</div>
             <div class="contact-preview">${meta}</div>
           </div>
           <div class="contact-meta">${trustBtn}${linked ? '<span class="contact-online" title="Connected">●</span>' : ""}${unreadCount(p.hash_id) ? `<span class="unread-badge">${unreadCount(p.hash_id) > 99 ? "99+" : unreadCount(p.hash_id)}</span>` : ""}</div>
@@ -2879,7 +3100,27 @@
   }
 
   /* ── Events ── */
+  window.srltcpApp = {
+    apiPost,
+    toast,
+    notifyUser,
+    peerByHash,
+    getSettings: () => state.settings,
+    getSelected: () => (state.selectedPeer
+      ? { hash: state.selectedPeer, name: state.selectedName || state.selectedPeer.slice(0, 8) }
+      : null),
+  };
+
   $("#btn-add-contact")?.addEventListener("click", openAddContactModal);
+  $("#btn-pair")?.addEventListener("click", () => { closeSidebarMobile(); openPairModal(); });
+  $("#pair-close")?.addEventListener("click", closePairModal);
+  $("#pair-copy")?.addEventListener("click", copyPairLink);
+  $("#pair-share")?.addEventListener("click", sharePairLink);
+  $("#pair-refresh")?.addEventListener("click", refreshPairCode);
+  $("#pair-import")?.addEventListener("click", () => importPairCode($("#pair-code-input")?.value));
+  $("#pair-scan")?.addEventListener("click", scanPairQr);
+  $("#pair-nfc")?.addEventListener("click", startNfcScan);
+  setupModalClose($("#pair-modal"), closePairModal);
   $("#add-contact-cancel")?.addEventListener("click", closeAddContactModal);
   $("#add-contact-save")?.addEventListener("click", saveManualContact);
   $("#add-contact-modal")?.addEventListener("click", (e) => {
@@ -3008,6 +3249,7 @@
       show_clock: $("#set-show-clock")?.checked !== false,
       clock_source: $("#set-clock-source")?.value || "system",
       ntp_server: $("#set-ntp-server")?.value.trim() || "pool.ntp.org",
+      call_stun_server: ($("#set-stun")?.value || "").trim(),
     };
   }
 

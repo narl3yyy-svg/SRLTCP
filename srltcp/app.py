@@ -26,6 +26,7 @@ log = get_logger(__name__)
 _android_web_port: dict[str, int] = {"port": WEB_PORT}
 _android_server_ready: bool = False
 _android_server_started: bool = False
+_running_node: dict[str, object] = {}
 
 
 def _android_port_open(port: int) -> bool:
@@ -91,6 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--log-level", default="WARNING")
 
     sub.add_parser("identity", help="Show local identity hashes")
+    url = sub.add_parser("url", help="Print the private web UI link (contains the access token)")
+    url.add_argument("--port", type=int, default=0, help="Web UI port (default from settings)")
 
     return parser
 
@@ -143,6 +146,8 @@ async def run_web(args: argparse.Namespace) -> None:
     node = SRLTCPNode(config, settings)
 
     shutdown = GracefulShutdown()
+    _running_node["node"] = node
+    _running_node["loop"] = asyncio.get_running_loop()
     web_holder: dict = {}
     port_holder = {"web": requested_web_port, "bound": requested_web_port}
 
@@ -172,7 +177,16 @@ async def run_web(args: argparse.Namespace) -> None:
     global _android_server_ready
     _android_server_ready = True
 
-    log.info("SRLTCP v%s running — https://127.0.0.1:%d", __version__, bound_port)
+    from srltcp.web.auth import load_or_create_token
+
+    log.info("SRLTCP v%s running", __version__)
+    if not is_android():
+        # Printed (not logged) so it does not end up in shared log files.
+        print(
+            "\n  Open SRLTCP in your browser (keep this link private):\n"
+            f"  https://127.0.0.1:{bound_port}/?token={load_or_create_token()}\n",
+            flush=True,
+        )
     if bound_port != requested_web_port:
         log.warning(
             "Configured web port %d was busy — bound %d instead. "
@@ -235,6 +249,56 @@ async def run_identity() -> None:
         print(f"  public_key: {identity.public_bytes().hex()[:32]}…")
 
 
+def run_url(args: argparse.Namespace) -> None:
+    from srltcp.web.auth import load_or_create_token
+
+    settings = SettingsStore().load()
+    port = args.port or settings.web_port or WEB_PORT
+    print(f"https://127.0.0.1:{port}/?token={load_or_create_token()}")
+
+
+def get_android_web_token() -> str:
+    """Access token the Android WebView uses for its first page load."""
+    from srltcp.web.auth import load_or_create_token
+
+    return load_or_create_token()
+
+
+def get_android_cert_sha256() -> str:
+    """SHA-256 of the localhost certificate (DER) so the WebView can pin it."""
+    from srltcp.utils.tls import localhost_cert_sha256
+
+    return localhost_cert_sha256()
+
+
+def android_import_pairing_card(uri: str) -> str:
+    """Import a contact card received over NFC (called from a Java thread).
+
+    Returns JSON for the web UI: the paired contact, or ``{"error": ...}``.
+    NFC requires physical proximity, so the card owner is trusted directly.
+    """
+    import json
+
+    from srltcp.core.messaging.pairing import PairingError
+
+    node = _running_node.get("node")
+    loop = _running_node.get("loop")
+    if node is None or not isinstance(loop, asyncio.AbstractEventLoop):
+        return json.dumps({"error": "SRLTCP is still starting"})
+    assert isinstance(node, SRLTCPNode)
+    future = asyncio.run_coroutine_threadsafe(
+        node.backend.import_pairing_card(uri), loop
+    )
+    try:
+        peer = future.result(timeout=10)
+    except PairingError as exc:
+        return json.dumps({"error": str(exc)})
+    except Exception as exc:  # noqa: BLE001 - surfaced to the UI
+        log.warning("NFC pairing import failed: %s", exc)
+        return json.dumps({"error": "pairing failed"})
+    return json.dumps({"hash_id": peer.get("hash_id"), "name": peer.get("name")})
+
+
 def get_android_web_port() -> int:
     """Return bound HTTPS port for Android WebView."""
     return _android_web_port["port"]
@@ -277,6 +341,7 @@ def start_android_server() -> None:
         logging.exception("Android server failed")
         raise
 
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -293,6 +358,8 @@ def main() -> None:
         asyncio.run(run_send(args))
     elif args.command == "identity":
         asyncio.run(run_identity())
+    elif args.command == "url":
+        run_url(args)
 
 
 if __name__ == "__main__":
