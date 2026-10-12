@@ -21,8 +21,10 @@ class SRLTCPService : Service() {
                 SRLTCPNotifier.NOTIFICATION_NODE,
                 SRLTCPNotifier.buildNodeNotification(this, "Running — messages and calls will arrive")
             )
+            running = true
         } catch (e: Exception) {
             Log.w(TAG, "startForeground failed", e)
+            running = false
             stopSelf()
         }
     }
@@ -41,10 +43,19 @@ class SRLTCPService : Service() {
         return START_STICKY
     }
 
+    override fun onDestroy() {
+        running = false
+        super.onDestroy()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
         private const val TAG = "SRLTCPService"
         const val ACTION_QUIT = "com.srltcp.app.QUIT"
+
+        /** True while the service is up in the foreground; lets MainActivity retry a failed start. */
+        @Volatile
+        var running = false
     }
 }

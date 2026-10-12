@@ -3,9 +3,9 @@
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">127.0.0.1</domain>
         <domain includeSubdomains="true">localhost</domain>
-        <trust-anchors>
-            <certificates src="system" />
-            <certificates src="user" />
-        </trust-anchors>
+        <!-- No trust anchors: the local server's self-signed certificate is
+             accepted only by the SHA-256 pin in MainActivity.onReceivedSslError,
+             so a user-installed CA cannot stand in for it. -->
+        <trust-anchors />
     </domain-config>
 </network-security-config>
