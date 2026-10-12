@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
 
-**Current version:** 0.3.0 (works with 0.2.x; not wire-compatible with 0.1.x)
+**Current version:** 0.3.1 (chat works with 0.2.x; calls need 0.3.1 on both devices; not wire-compatible with 0.1.x)
 
 ---
 
@@ -25,7 +25,7 @@
 | **Settings** | First-run wizard + persistent config (folders, retention, LAN IP) |
 | **System stats** | CPU usage & temperature in the web UI status bar |
 | **Pairing** | QR code, shareable link, or **NFC tap** (Android) — one scan pairs both sides |
-| **Voice & video calls** | WebRTC, E2EE, signalled over the encrypted session; no third-party servers by default |
+| **Voice & video calls** | WebRTC; signalling and media both travel inside the encrypted SRLTCP session (built-in relay), so calls work wherever chat works — no third-party servers |
 | **Offline delivery** | Messages queue while a contact is offline and deliver on reconnect, with ✓/✓✓ receipts |
 | **Works over WireGuard** | VPN-aware discovery (unicast sweep + replies), Find by IP, automatic address updates |
 | **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected |
@@ -101,7 +101,7 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 | **USB Serial** | Same framed protocol over serial | Yes — identical E2EE session |
 | **UDP discovery (7826)** | Signed peer announces (hash, name, endpoints, Ed25519 signature) | Metadata is plaintext on LAN; signatures prevent spoofing |
 | **Web UI (9876)** | Browser ↔ local node over HTTPS | Localhost TLS + access token; other local apps can't use the API |
-| **Calls** | WebRTC media directly between devices | Yes — DTLS-SRTP; keys authenticated through the E2EE session |
+| **Calls** | WebRTC media (DTLS-SRTP) carried inside the SRLTCP session via a local relay | Yes — double-encrypted: DTLS-SRTP inside the E2EE session |
 | **NFC pairing** | Contact cards (public key, name, LAN address) | Public data; requires phones a few cm apart |
 | **Hub (optional 7825)** | `RELAY_ENVELOPE` routing tokens + opaque blob | Hub sees hash routing tokens only, not content |
 
@@ -159,7 +159,7 @@ On first launch, the web UI shows a setup wizard. Settings persist in `~/.srltcp
 | Timezone | Region for the status clock (time shown at top of sidebar) |
 | Show clock | Toggle live clock in the UI |
 | Handshake protocol | Identity (default) or Noise XX — both peers must match |
-| Call STUN server | Optional `stun:host:port` for internet calls behind NAT (empty = direct/LAN only, no third party) |
+| Advanced: external call relay | Optional STUN/TURN server; only used if the built-in relay is unavailable (leave empty) |
 
 Change port from CLI: `./run.sh web --port 9999`
 
@@ -235,7 +235,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.3.0.apk`
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.3.1.apk`
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -243,7 +243,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.3.0.apk`
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.3.0.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.3.1.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -306,7 +306,7 @@ After that, addresses look after themselves: when a contact's IP changes (new Wi
 Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data has **no address another phone can connect to**, so no app can link two such phones without something reachable in the middle. SRLTCP gives you two private options — neither can read your messages:
 
 1. **WireGuard (recommended)** — put both phones on your WireGuard server. Everything works: discovery, chat, files and calls (calls go directly over the tunnel).
-2. **SRLTCP hub** — run `srltcp hub` on any machine with a public address (your WireGuard server works) and enable *Settings → Network → Connect via hub server* on both phones. Chat and files are relayed as end-to-end encrypted blobs. Calls need a direct media path, so for calls without a VPN also set a TURN server (e.g. coturn) under *Call relay server*.
+2. **SRLTCP hub** — run `srltcp hub` on any machine with a public address (your WireGuard server works) and enable *Settings → Network → Connect via hub server* on both phones. Chat, files and calls are relayed as end-to-end encrypted blobs — no TURN server needed.
 
 ### Pairing
 
@@ -316,6 +316,8 @@ Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data has 
 | **Link** | *Pair* → *Copy link* / *Share…*, send it over a channel you trust; the other side pastes it into *Pair* |
 | **NFC (Android)** | Open *Pair* on **both** phones and hold them back to back (NFC on, screens unlocked). The phones take turns reading each other and exchange contact cards automatically; you feel a short vibration when it worked |
 
+Pairing is always two-way. With QR, link and NFC both phones add each other. If you add someone from *Discovered* (or with an old code), their phone pops up **Contact request — Add them back?**; tapping *Accept* makes you contacts on both sides.
+
 A pairing code is a signed contact card (hash ID, public key, name, and every address the device has — VPN first). It works once and expires after 15 minutes. Compare the **safety number** (hash ID) shown on both screens if you want to be sure.
 
 ### Editing contacts
@@ -324,7 +326,7 @@ Tap the contact's name at the top of a chat, the **⋮** next to a contact, or l
 
 ### Calls
 
-Voice and video calls use WebRTC directly between the two devices; offer/answer/ICE are sent inside the encrypted SRLTCP session, so DTLS fingerprints are authenticated by the contact's identity key. No STUN/TURN server is used by default — calls work on the same network or over WireGuard/VPN. For calls across mobile networks **without** a VPN, set *Settings → Network → Call relay server* to your own TURN server (`turn:host:3478` + username/password); it relays encrypted media and sees only IP addresses.
+Voice and video calls use WebRTC. Offer/answer are sent inside the encrypted SRLTCP session, so DTLS fingerprints are authenticated by the contact's identity key. The media itself also goes through the session: each device runs a tiny TURN relay on localhost for its own browser/WebView, and the relay forwards the (already DTLS-SRTP encrypted) packets to the other phone as encrypted `CALL_MEDIA` messages. So **calls work wherever chat works** — same Wi-Fi, WireGuard/VPN, or through an SRLTCP hub across mobile carriers — with no STUN/TURN server and no firewall holes beyond TCP 7825.
 
 ### Running in the background (Android)
 
@@ -410,7 +412,7 @@ curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" https://127.0.0.1:9876/api/tran
 
 Transfers are **resumable** — if interrupted, the receiver's partial file offset is used on resume via `FILE_RESUME`.
 
-In the web UI, images and videos preview in chat during transfer. Click to enlarge in a lightbox; use **Download** to save the file. The transfer dock (progress bar above the composer) hides automatically when no transfers are active. **Drag files** from your file manager onto a contact in the sidebar to send. Both peers must run **v0.1.17+** for shared-folder limits, revoke, and WAN features.
+In the web UI, images and videos preview in chat during transfer. Click to enlarge in a lightbox; use **Download file** to save it — you are asked where to save (Android shows the system *Save as* screen; desktop Chrome/Edge show a save dialog, other browsers use their download folder). The transfer dock (progress bar above the composer) hides automatically when no transfers are active. **Drag files** from your file manager onto a contact in the sidebar to send. Both peers must run **v0.1.17+** for shared-folder limits, revoke, and WAN features.
 
 ### E2EE shared folder (recommended)
 
@@ -587,12 +589,17 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [x] Signed LAN announces — Ed25519 signatures on UDP discovery; reject unsigned/spoofed peers (v0.1.57)
 - [x] Noise XX handshake option — Settings → Network (experimental; both peers must match) (v0.1.57)
 
+**Done (v0.3.1)**
+
+- [x] Calls connect everywhere chat works (media through the encrypted session)
+- [x] Two-way pairing prompt, Save-as for downloads, Android back gesture
+
 **Done (v0.3.0)**
 
 - [x] Discovery over WireGuard/VPN (unicast sweep, announce replies, Find by IP)
 - [x] Edit contact; automatic contact address updates; dead-link detection
 - [x] NFC pairing works by just holding phones together
-- [x] Background operation on Android with notifications; TURN relay for calls
+- [x] Background operation on Android with notifications
 
 **Done (v0.2.0)**
 
@@ -605,7 +612,8 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 **Planned**
 
 - [ ] Group chats
-- [ ] Built-in call relay in the hub (no separate TURN server) and calls over serial/RF
+- [x] Built-in call relay (calls through the encrypted session, also via the hub)
+- [ ] Calls over serial/RF
 - [ ] Encrypted-at-rest chat history
 - [ ] Wi-Fi Direct / Bluetooth transport for phone-to-phone without a router
 

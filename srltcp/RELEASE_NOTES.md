@@ -1,5 +1,26 @@
 # SRLTCP Release Notes
 
+## v0.3.1 (2026-10-12)
+
+Update both phones — calls need 0.3.1 on each side.
+
+### Fixes
+- **Calls and video calls connect.** They used to ring and then hang on
+  "connecting" because the phones' browsers could not find a media path between
+  them. Call audio/video now travels inside the encrypted SRLTCP connection
+  through a small relay built into each device, so calls work everywhere chat
+  works: same Wi-Fi, WireGuard, or via the hub across carriers. No TURN server needed
+- **Pairing works both ways.** Adding someone now pops up *Contact request —
+  Add them back?* on their phone (also when they were offline at the time, and for
+  expired pairing codes). Accept and you are contacts on both sides
+- **Back gesture no longer closes the app.** On the Pair screen (and other
+  popups, settings, a chat) it goes back to the main screen; on the main screen
+  it sends the app to the background instead of quitting
+- **Downloading files works.** *Download file* asks where to save: Android
+  opens the system *Save as* screen, desktop Chrome/Edge show a save dialog
+- **Opens on Trusted** when you have contacts (Discovered when you have none)
+
+
 ## v0.3.0 (2026-10-12)
 
 Works with 0.2.x devices. Update both phones to get every fix.
