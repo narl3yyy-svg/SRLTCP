@@ -136,8 +136,9 @@ class MainActivity : AppCompatActivity() {
             wv.visibility = android.view.View.GONE
             wv.settings.javaScriptEnabled = true
             wv.settings.domStorageEnabled = true
-            wv.settings.allowFileAccess = true
-            wv.settings.allowContentAccess = true
+            // The UI is served over https://127.0.0.1; never load file:// URLs.
+            wv.settings.allowFileAccess = false
+            wv.settings.allowContentAccess = true  // file picker returns content:// URIs
             wv.settings.databaseEnabled = true
             wv.settings.useWideViewPort = true
             wv.settings.loadWithOverviewMode = true

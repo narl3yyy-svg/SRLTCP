@@ -20,6 +20,9 @@ SECURITY_HEADERS = {
         "default-src 'self'; "
         "script-src 'self'; "
         "style-src 'self'; "
+        # Inline style *attributes* (avatar colours, progress bars) only —
+        # no inline <style> blocks or scripts.
+        "style-src-attr 'unsafe-inline'; "
         "font-src 'self'; "
         "connect-src 'self' https://127.0.0.1:* wss://127.0.0.1:* "
         "https://localhost:* wss://localhost:*; "
