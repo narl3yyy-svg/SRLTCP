@@ -19,6 +19,10 @@ object NfcPairing {
     @Volatile
     var card: String? = null
 
+    /** True only while MainActivity is resumed; the card is not served otherwise. */
+    @Volatile
+    var active = false
+
     /** Receives the result JSON (paired peer or error) for the WebView. */
     @Volatile
     var listener: ((String) -> Unit)? = null

@@ -18,6 +18,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
@@ -43,11 +44,16 @@ class MainActivity : AppCompatActivity() {
     private var loadAttempt = 0
     private var pageLoaded = false
     private var uiRestored = false
-    private var serviceStarted = false
+    private var firstLaunch = false
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var isClosing = false
 
     var isActivityResumed = false
+        private set
+
+    /** True while the main frame is our own https://127.0.0.1 UI (checked by the JS bridge). */
+    @Volatile
+    var isTrustedPage = false
         private set
 
     private val fileChooserLauncher = registerForActivityResult(
@@ -77,6 +83,18 @@ class MainActivity : AppCompatActivity() {
         val source = pendingSavePath
         pendingSavePath = null
         val target = result.data?.data
+        if (source == null && result.resultCode == RESULT_OK && target != null) {
+            // Activity was recreated and the path lost: drop the empty document.
+            Thread {
+                try {
+                    DocumentsContract.deleteDocument(contentResolver, target)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not delete empty document", e)
+                }
+                deliverToWeb("onAndroidFileSaved", "false")
+            }.start()
+            return@registerForActivityResult
+        }
         if (source == null || result.resultCode != RESULT_OK || target == null) return@registerForActivityResult
         Thread {
             val ok = try {
@@ -115,6 +133,8 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { _ ->
         maybeStartForegroundService()
+        // Asked only now so the two system prompts do not stack.
+        requestStorageAccess()
     }
 
     private val requestStoragePermissions = registerForActivityResult(
@@ -127,13 +147,10 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
-        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
-            Log.e(TAG, "Uncaught on ${thread.name}", error)
-            showFatal("Crash: ${error.javaClass.simpleName}: ${error.message}")
-        }
-
         super.onCreate(savedInstanceState)
         SRLTCPNotifier.ensureChannels(this)
+        firstLaunch = savedInstanceState == null
+        pendingSavePath = savedInstanceState?.getString(STATE_PENDING_SAVE)
 
         SRLTCPApplication.pythonError?.let {
             showFatal("Python failed to start:\n$it")
@@ -235,7 +252,13 @@ class MainActivity : AppCompatActivity() {
                     return true
                 }
 
+                override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                    isTrustedPage = isOurUrl(url)
+                    super.onPageStarted(view, url, favicon)
+                }
+
                 override fun onPageFinished(view: WebView, url: String) {
+                    isTrustedPage = isOurUrl(url)
                     if (isClosing || isFinishing || url == "about:blank") return
                     pageLoaded = true
                     loadAttempt = 0
@@ -283,7 +306,10 @@ class MainActivity : AppCompatActivity() {
         }
         setContentView(root)
         NfcPairing.listener = { result ->
-            if (!result.contains("\"error\"")) vibrate(longArrayOf(0, 60, 80, 60))
+            if (!result.contains("\"error\"")) {
+                vibrate(longArrayOf(0, 60, 80, 60))
+                runOnUiThread { stopNfcReader() }
+            }
             deliverToWeb("onAndroidNfcResult", JSONObject.quote(result))
         }
 
@@ -321,8 +347,8 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
-        requestNotificationIfNeeded()
-        requestStorageAccessThenStart()
+        beginServerStartup()
+        if (!requestNotificationIfNeeded()) requestStorageAccess()
     }
 
     fun postAlertNotification(title: String, body: String, tag: String) {
@@ -339,16 +365,24 @@ class MainActivity : AppCompatActivity() {
         SRLTCPNotifier.postAlert(this, title, body, tag)
     }
 
-    private fun requestStorageAccessThenStart() {
-        beginServerStartup()
+    /** Optional storage access; asked on a fresh launch only, and the settings screen just once. */
+    private fun requestStorageAccess() {
+        if (!firstLaunch || isClosing) return
+        firstLaunch = false
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                requestAllFilesAccess.launch(
-                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                )
+            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+            if (!Environment.isExternalStorageManager() && !prefs.getBoolean(PREF_ALL_FILES_ASKED, false)) {
+                prefs.edit().putBoolean(PREF_ALL_FILES_ASKED, true).apply()
+                try {
+                    requestAllFilesAccess.launch(
+                        Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                            data = Uri.parse("package:$packageName")
+                        }
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "All files access screen unavailable", e)
+                }
             }
             return
         }
@@ -422,20 +456,23 @@ class MainActivity : AppCompatActivity() {
         }.apply { name = "srltcp-wait"; start() }
     }
 
-    private fun requestNotificationIfNeeded() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    /** Returns true if the prompt was shown (its callback continues startup). */
+    private fun requestNotificationIfNeeded(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
         if (ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.POST_NOTIFICATIONS
             ) != PackageManager.PERMISSION_GRANTED
         ) {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return true
         }
+        return false
     }
 
     private fun maybeStartForegroundService() {
-        if (serviceStarted) return
-        serviceStarted = true
+        // The service clears this if startForeground failed, so a later call retries.
+        if (SRLTCPService.running) return
         try {
             val serviceIntent = Intent(this, SRLTCPService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -445,7 +482,6 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Foreground service not started (UI still works)", e)
-            serviceStarted = false
         }
     }
 
@@ -614,6 +650,7 @@ class MainActivity : AppCompatActivity() {
     // (reader mode) and being read (host card emulation). Held back to back,
     // the phones line up within a second or two and swap contact cards.
     private var nfcAuto = false
+    private var nfcWanted = false  // the Pair screen asked for scanning; survives onPause
     @Volatile private var nfcExchanging = false
     private var nfcReaderOn = false
     private val nfcRandom = java.util.Random()
@@ -691,17 +728,28 @@ class MainActivity : AppCompatActivity() {
         val adapter = NfcAdapter.getDefaultAdapter(this) ?: return "missing"
         if (!adapter.isEnabled) return "off"
         runOnUiThread {
-            if (!nfcAuto) {
-                nfcAuto = true
-                handler.removeCallbacks(nfcCycle)
-                // Random start phase so two phones opened together do not stay in sync.
-                handler.postDelayed(nfcCycle, nfcRandom.nextInt(700).toLong())
-            }
+            nfcWanted = true
+            startNfcCycle()
         }
         return "ok"
     }
 
+    private fun startNfcCycle() {
+        if (nfcAuto) return
+        nfcAuto = true
+        handler.removeCallbacks(nfcCycle)
+        // Random start phase so two phones opened together do not stay in sync.
+        handler.postDelayed(nfcCycle, nfcRandom.nextInt(700).toLong())
+    }
+
+    /** Stop scanning for good (Pair screen closed or paired). */
     fun stopNfcReader() {
+        nfcWanted = false
+        pauseNfcReader()
+    }
+
+    /** Stop scanning but restart it in onResume if the Pair screen still wants it. */
+    private fun pauseNfcReader() {
         nfcAuto = false
         handler.removeCallbacks(nfcCycle)
         disableReader()
@@ -713,6 +761,11 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
             startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
         }
+    }
+
+    private fun isOurUrl(url: String?): Boolean {
+        val uri = Uri.parse(url ?: return false)
+        return uri.scheme == "https" && uri.host == "127.0.0.1"
     }
 
     private var pinnedCertSha256: String? = null
@@ -771,7 +824,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         isActivityResumed = false
-        stopNfcReader()
+        NfcPairing.active = false
+        pauseNfcReader()
         super.onPause()
         webView?.onPause()
         if (isFinishing) {
@@ -792,6 +846,8 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         isActivityResumed = true
         if (isClosing) return
+        NfcPairing.active = true
+        if (nfcWanted && NfcAdapter.getDefaultAdapter(this)?.isEnabled == true) startNfcCycle()
         webView?.onResume()
         webView?.evaluateJavascript("window.srltcpOnResume && window.srltcpOnResume();", null)
         startPythonServer()  // no-op while the node is running
@@ -817,6 +873,7 @@ class MainActivity : AppCompatActivity() {
     private fun prepareForClose() {
         if (isClosing) return
         isClosing = true
+        isTrustedPage = false
         pageLoaded = false
         handler.removeCallbacks(loadRetryRunnable)
         handler.removeCallbacksAndMessages(null)
@@ -833,28 +890,38 @@ class MainActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         webView?.saveState(outState)
+        pendingSavePath?.let { outState.putString(STATE_PENDING_SAVE, it) }
     }
 
     override fun onDestroy() {
         setCallAudio(false, false)
         NfcPairing.listener = null
         NfcPairing.card = null
+        NfcPairing.active = false
         if (isFinishing) {
             prepareForClose()
         }
+        isTrustedPage = false
         handler.removeCallbacksAndMessages(null)
-        if (isFinishing) {
+        // Destroy the WebView on recreation too, or the old one (and a call in
+        // it) keeps running. The node itself keeps running after the UI closes,
+        // like any messenger; quit from the notification to stop it.
+        webView?.let { wv ->
             try {
-                webView?.destroy()
+                wv.removeJavascriptInterface("SRLTCPAndroid")
+                wv.stopLoading()
+                (wv.parent as? FrameLayout)?.removeView(wv)
+                wv.destroy()
             } catch (_: Exception) { /* ignore */ }
-            webView = null
-            // Keep the node (and message delivery) running after the UI closes,
-            // like any messenger. Quit from the notification to stop it.
         }
+        webView = null
         super.onDestroy()
     }
 
     companion object {
         private const val TAG = "SRLTCP"
+        private const val PREFS = "srltcp_prefs"
+        private const val PREF_ALL_FILES_ASKED = "all_files_access_asked"
+        private const val STATE_PENDING_SAVE = "pending_save_path"
     }
 }

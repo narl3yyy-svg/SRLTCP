@@ -11,6 +11,12 @@ class SRLTCPApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // Log crashes, then let the default handler end the process as usual.
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            Log.e(TAG, "Uncaught on ${thread.name}", error)
+            prev?.uncaughtException(thread, error)
+        }
         try {
             if (!Python.isStarted()) {
                 Python.start(AndroidPlatform(this))
