@@ -414,6 +414,79 @@ async def mobile_flow() -> None:
         await browser.close()
 
 
+async def group_flow() -> None:
+    """Alice makes a group with Bob and Carol, who are not each other's contacts."""
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(**LAUNCH)
+        alice = await open_ui(browser, "alice")
+        bob = await open_ui(browser, "bob")
+        carol = await open_ui(browser, "carol", mobile=True)
+        # Alice and Bob pair again (Bob was deleted in the features flow)
+        await alice.click("#btn-pair")
+        await alice.wait_for_selector("#pair-qr img", timeout=10000)
+        await alice.click("#pair-copy")
+        link = await alice.evaluate("navigator.clipboard.readText()")
+        await alice.click("#pair-close")
+        await bob.click("#btn-pair")
+        await bob.fill("#pair-code-input", link)
+        await bob.click("#pair-import")
+        await bob.wait_for_selector("#chat-active:not(.hidden)", timeout=10000)
+        await alice.click(".peer-tab[data-tab=trusted]")
+        await alice.wait_for_selector("#contacts .contact[data-name='Bob']", timeout=15000)
+
+        await alice.click(".peer-tab[data-tab=groups]")
+        await alice.click("#group-new")
+        await alice.fill("#group-name", "Weekend plans")
+        await alice.check("#group-member-list label:has-text('Bob') input")
+        await alice.check("#group-member-list label:has-text('Carol') input")
+        await alice.click("#group-save")
+        await alice.wait_for_selector("#chat-active.group-chat", timeout=10000)
+        assert (await alice.text_content("#chat-peer-name")).strip() == "Weekend plans"
+        assert not await alice.is_visible("#btn-call-voice")
+        print("group: created by alice with bob and carol")
+
+        await bob.wait_for_selector("text=You were added to the group", timeout=15000)
+        await bob.click(".peer-tab[data-tab=groups]")
+        await bob.click("#contacts [data-group]")
+        await bob.fill("#msg-input", "Hi all, Bob here")
+        await bob.click("#send-btn")
+
+        if not await carol.is_visible("#contacts"):
+            await carol.click("#btn-menu")
+        await carol.click(".peer-tab[data-tab=groups]")
+        await carol.wait_for_selector("#contacts [data-group] .unread-badge", timeout=15000)
+        await carol.tap("#contacts [data-group]")
+        await carol.wait_for_selector(".bubble.in >> text=Hi all, Bob here", timeout=15000)
+        sender = await carol.text_content(".bubble.in .bubble-sender")
+        assert sender.strip() == "Bob", sender
+        print("group: carol got bob's message through alice, labelled 'Bob'")
+        await carol.fill("#msg-input", "Carol says hi")
+        await carol.tap("#send-btn")
+        await bob.wait_for_selector(".bubble.in >> text=Carol says hi", timeout=15000)
+        await alice.wait_for_selector(".bubble.in >> text=Carol says hi", timeout=15000)
+        # Group chat stays separate from the one-to-one chat with Carol
+        await alice.click(".peer-tab[data-tab=trusted]")
+        await alice.click("#contacts .contact[data-name='Carol']")
+        await alice.wait_for_selector("#chat-active:not(.group-chat)")
+        assert not await alice.is_visible("text=Carol says hi")
+        await carol.screenshot(path=f"{OUT}/20-carol-group-chat.png")
+        print("group: replies reach everyone; one-to-one chats unaffected")
+
+        # Bob leaves; Alice's member list updates
+        await bob.click("#chat-peer-name")
+        await bob.wait_for_selector("#group-modal.open")
+        bob.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
+        await bob.click("#group-leave")
+        await bob.wait_for_selector("text=You are no longer in this group", timeout=10000)
+        await alice.click(".peer-tab[data-tab=groups]")
+        await alice.wait_for_function(
+            "document.querySelector('#contacts [data-group] .contact-endpoint')?.textContent.startsWith('2 members')",
+            timeout=15000,
+        )
+        print("group: bob left, alice sees 2 members")
+        await browser.close()
+
+
 async def main() -> int:
     global OUT
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -434,6 +507,7 @@ async def main() -> int:
         await desktop_flow()
         await features_flow()
         await mobile_flow()
+        await group_flow()
     finally:
         for n in NODES.values():
             n.stop()

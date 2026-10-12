@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 from srltcp import __version__
+from srltcp.core.messaging.groups import GroupError, is_valid_group_id
 from srltcp.core.messaging.share_peer import SHARE_DOWNLOAD_LIMITS, SHARE_TTL_SECONDS
 from srltcp.core.protocol.messages import is_valid_transfer_id
 from srltcp.core.settings import AppSettings, SettingsStore
@@ -541,6 +542,75 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         except PairingError as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
+    # ── Group chats ──
+
+    def _group_id(request: web.Request) -> str:
+        gid = request.match_info.get("group_id", "").lower()
+        if not is_valid_group_id(gid):
+            raise web.HTTPBadRequest(text='{"error": "invalid group id"}',
+                                     content_type="application/json")
+        return gid
+
+    async def groups_list(_request: web.Request) -> web.Response:
+        return web.json_response(node.backend.list_groups())
+
+    async def groups_create(request: web.Request) -> web.Response:
+        data = await request.json()
+        members = data.get("members") or []
+        if not isinstance(members, list) or not all(isinstance(h, str) for h in members):
+            return web.json_response({"error": "members must be a list of contact ids"}, status=400)
+        if not all(is_valid_hash_id(h) for h in members):
+            return web.json_response({"error": "invalid contact id"}, status=400)
+        try:
+            group = await node.backend.create_group(str(data.get("name", "")), members)
+        except GroupError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(group)
+
+    async def groups_update(request: web.Request) -> web.Response:
+        gid = _group_id(request)
+        data = await request.json()
+        lists = {}
+        for key in ("add", "remove"):
+            value = data.get(key) or []
+            if not isinstance(value, list) or not all(
+                isinstance(h, str) and is_valid_hash_id(h) for h in value
+            ):
+                return web.json_response({"error": f"invalid {key} list"}, status=400)
+            lists[key] = value
+        name = data.get("name")
+        try:
+            group = await node.backend.update_group(
+                gid, name=str(name) if name is not None else None,
+                add=lists["add"], remove=lists["remove"],
+            )
+        except GroupError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(group)
+
+    async def groups_leave(request: web.Request) -> web.Response:
+        gid = _group_id(request)
+        try:
+            await node.backend.leave_group(gid)
+        except GroupError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(node.backend.get_group_view(gid) or {"ok": True})
+
+    async def groups_delete(request: web.Request) -> web.Response:
+        gid = _group_id(request)
+        if not await node.backend.delete_group(gid):
+            return web.json_response({"error": "group not found"}, status=404)
+        return web.json_response({"ok": True})
+
+    async def groups_send(request: web.Request) -> web.Response:
+        gid = _group_id(request)
+        data = await request.json()
+        try:
+            msg = await node.backend.send_group_message(gid, str(data.get("text", "")))
+        except GroupError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(msg.to_dict())
+
     async def contact_request_decline(request: web.Request) -> web.Response:
         hash_id = request.match_info.get("hash_id", "").lower()
         if not is_valid_hash_id(hash_id):
@@ -913,6 +983,12 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_get("/api/pairing/card", pairing_card)
     app.router.add_post("/api/pairing/import", pairing_import)
     app.router.add_post("/api/contact-requests/{hash_id}/decline", contact_request_decline)
+    app.router.add_get("/api/groups", groups_list)
+    app.router.add_post("/api/groups", groups_create)
+    app.router.add_post("/api/groups/{group_id}", groups_update)
+    app.router.add_post("/api/groups/{group_id}/leave", groups_leave)
+    app.router.add_delete("/api/groups/{group_id}", groups_delete)
+    app.router.add_post("/api/groups/{group_id}/messages", groups_send)
     app.router.add_post("/api/call/signal", call_signal)
     app.router.add_get("/api/call/ice", call_ice)
     app.router.add_post("/api/share/create", create_share)

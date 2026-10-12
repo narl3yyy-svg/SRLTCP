@@ -1726,3 +1726,21 @@ label.field > span {
 /* The app itself never pinch-zooms (it scales to the screen); the image viewer does. */
 html, body { touch-action: pan-x pan-y; }
 .media-lightbox-body { touch-action: none; }
+
+/* ── Group chats ── */
+#chat-active.group-chat #btn-call-voice,
+#chat-active.group-chat #btn-call-video,
+#chat-active.group-chat #btn-share-folder,
+#chat-active.group-chat #btn-send-folder-peer,
+#chat-active.group-chat #btn-file { display: none; }
+.bubble-sender { font-size: 0.72rem; font-weight: 600; margin-bottom: 0.15rem; opacity: 0.9; }
+.group-new-btn { width: 100%; margin: 0 0 0.5rem; display: flex; align-items: center; justify-content: center; gap: 0.4rem; }
+.group-new-btn svg { width: 16px; height: 16px; }
+.group-members-label { font-size: 0.8rem; color: var(--text-muted, #8b93a8); margin: 0.75rem 0 0.35rem; }
+.group-member-list { max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 0.25rem; }
+.group-member { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0.5rem; border-radius: 8px; background: rgba(255,255,255,0.03); }
+.group-member input { width: 18px; height: 18px; flex: none; }
+.group-member .member-note { margin-left: auto; font-size: 0.72rem; color: var(--text-muted, #8b93a8); }
+.danger-text { color: var(--danger, #f07178) !important; }
+.contact .group-avatar svg { width: 18px; height: 18px; }
+#chat-active.group-chat .status-dot { display: none; }

@@ -32,6 +32,9 @@ class MessageType(IntEnum):
     PAIR = 0x22
     CALL_SIGNAL = 0x60
     CALL_MEDIA = 0x61
+    GROUP_UPDATE = 0x70
+    GROUP_TEXT = 0x71
+    GROUP_LEAVE = 0x72
     RELAY_ENVELOPE = 0x50
     HUB_REGISTER = 0x52
     HUB_PRESENCE = 0x53
@@ -63,7 +66,16 @@ SESSION_MESSAGE_TYPES = frozenset(
         MessageType.SHARE_REQUEST,
         MessageType.CALL_SIGNAL,
         MessageType.CALL_MEDIA,
+        MessageType.GROUP_UPDATE,
+        MessageType.GROUP_TEXT,
+        MessageType.GROUP_LEAVE,
     }
+)
+
+# Group traffic is authorised by group membership (see groups.py), not by
+# the sender being one of our contacts.
+GROUP_MESSAGE_TYPES = frozenset(
+    {MessageType.GROUP_UPDATE, MessageType.GROUP_TEXT, MessageType.GROUP_LEAVE}
 )
 
 
