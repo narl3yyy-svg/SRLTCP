@@ -85,6 +85,8 @@ class SRLTCPNode:
         self.config.serial_baud = settings.serial_baud
         self.config.relay_enabled = settings.relay_enabled
         self.config.relay_code = settings.relay_code
+        direct_changed = self.config.direct_internet != settings.direct_internet
+        self.config.direct_internet = settings.direct_internet
         self.config.handshake_protocol = settings.handshake_protocol
         incoming = str(settings.resolved_incoming_dir())
         self.config.incoming_dir = incoming
@@ -98,6 +100,8 @@ class SRLTCPNode:
             await self.backend.set_auto_announce(settings.auto_announce)
         await self.backend.apply_serial_transport()
         await self.backend.apply_relay_settings()
+        if direct_changed:
+            await self.backend.addresses_changed()
         if settings.message_retention_hours == 0:
             self.backend.clear_messages()
 

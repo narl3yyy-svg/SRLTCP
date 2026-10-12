@@ -120,6 +120,7 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         strict_ports=settings.strict_ports,
         relay_enabled=settings.relay_enabled,
         relay_code=settings.relay_code,
+        direct_internet=settings.direct_internet,
         enable_tcp=not args.no_tcp,
         enable_serial=args.serial or settings.enable_serial,
         serial_port=args.serial_port or settings.serial_port or default_serial_port(),

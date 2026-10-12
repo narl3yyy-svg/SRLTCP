@@ -111,6 +111,20 @@ def test_fixture_peer_detection() -> None:
     assert is_fixture_peer(real) is False
 
 
+def test_contact_with_generic_name_and_pinned_key_survives_reload(tmp_path: Path) -> None:
+    # Regression: a contact added before its name was known ("peer", no LAN
+    # address) was deleted on the next start as if it were a test fixture.
+    from srltcp.core.identity import Identity
+
+    ident = Identity.generate("x", "tcp")
+    store = TrustedStore(tmp_path / "trusted.json")
+    key = ident.public_bytes().hex()
+    store.add(TrustedPeer(hash_id=ident.hash_id, name="peer", public_key=key))
+    store.update(ident.hash_id, pair_own="ab" * 32, pair_peer="cd" * 32)
+    reloaded = TrustedStore(tmp_path / "trusted.json")
+    assert reloaded.get(ident.hash_id) is not None
+
+
 def test_trusted_load_strips_fixture_peers(tmp_path: Path) -> None:
     path = tmp_path / "trusted.json"
     path.write_text(

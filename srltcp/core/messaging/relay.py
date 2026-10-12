@@ -171,8 +171,13 @@ class RelayConnection:
                 )
                 family, _t, _p, _c, addr = infos[0]
                 sock = bound_socket(family, local_port)
+                # Close with a reset, not TIME_WAIT: a restarted app can then
+                # reconnect from the same port to the same relay at once.
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
                 try:
-                    await loop.sock_connect(sock, addr)
+                    await asyncio.wait_for(
+                        loop.sock_connect(sock, addr), RELAY_CONNECT_TIMEOUT / 2
+                    )
                 except BaseException:
                     sock.close()
                     raise
@@ -182,7 +187,7 @@ class RelayConnection:
                     sock=sock, **{**kwargs, "server_hostname": kwargs["server_hostname"] or ""}
                 )
                 return reader, writer, True
-            except (OSError, IndexError) as exc:
+            except (OSError, IndexError, TimeoutError) as exc:
                 log.debug("Relay connection from the punch port failed (%s); retrying", exc)
         reader, writer = await asyncio.open_connection(self.code.host, self.code.port, **kwargs)
         return reader, writer, False
@@ -278,7 +283,6 @@ class RelayMixin:
         # every subscription (so old days' tokens don't pile up)
         self._relay_in_tokens: dict[str, dict[bytes, str]] = {}
         self._relay_out_tokens: dict[bytes, str] = {}  # token -> contact (mailboxes we send to)
-        self._relay_subscribed_day: dict[str, int] = {}
         self._pairboxes: dict[str, tuple[bytes, PairBox]] = {}
         self._relay_offline_until: dict[str, float] = {}
         self._relay_task: asyncio.Task[None] | None = None
@@ -384,6 +388,9 @@ class RelayMixin:
             "configured": own is not None,
             "address": own.display if own else "",
             "relays": relays,
+            "direct_internet": self.direct_internet_enabled(),
+            # Shown only on this device: where contacts can punch through to us.
+            "public": [f"{h}:{p}" for h, p in self.public_candidates()],
         }
 
     # ── Lifecycle ──
@@ -411,18 +418,15 @@ class RelayMixin:
                 await self.send_rendezvous(hash_id)
 
     async def _relay_loop(self: MessagingBackend) -> None:
-        tick = 0
         while self._running:
             try:
                 await self.sync_relays()
                 await self._ping_relays()
-                if tick % 3 == 0:
-                    await self.maintain_paths()
+                await self.maintain_paths()  # each contact is tried every UPGRADE_EVERY
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - keep the loop alive
                 log.warning("Relay maintenance failed: %s", exc)
-            tick += 1
             await asyncio.sleep(15.0)
 
     async def sync_relays(self: MessagingBackend) -> None:
@@ -457,7 +461,7 @@ class RelayMixin:
             log.info("Connected to relay %s", code.display)
             await self.note_public_address()
             contacts = self.relay_contacts().get(relay_id, (code, []))[1]
-            self._relay_subscribed_day.pop(relay_id, None)
+            self._relay_sub_state.pop(relay_id, None)
             await self._subscribe(conn, contacts, current_day())
             # Say hello to contacts we have no session with, so both sides see
             # each other online right away.
@@ -720,18 +724,17 @@ class RelayMixin:
     async def _try_direct_upgrade(self: MessagingBackend, hash_id: str) -> None:
         if not self.tcp_transport:
             return
-        for host, port in self._direct_candidates(hash_id):
-            try:
-                peer_id = await self.tcp_transport.connect(host, port, timeout=DIRECT_TIMEOUT)
-            except (OSError, TimeoutError, ConnectionError):
-                continue
-            kx = await self._send_upgrade_handshake(hash_id, peer_id)
-            if kx is None:
-                await self.tcp_transport.disconnect(peer_id)
+        candidates = self._direct_candidates(hash_id)
+        if candidates:
+            peer_id, host, port = await self._dial_first(candidates, DIRECT_TIMEOUT)
+            if peer_id:
+                kx = await self._send_upgrade_handshake(hash_id, peer_id)
+                if kx is None:
+                    await self.tcp_transport.disconnect(peer_id)
+                    return
+                self._upgrades[hash_id] = (peer_id, kx, time.monotonic())
+                log.info("Trying a direct path to %s at %s:%d", hash_id[:8], host, port)
                 return
-            self._upgrades[hash_id] = (peer_id, kx, time.monotonic())
-            log.info("Trying a direct path to %s at %s:%d", hash_id[:8], host, port)
-            return
         # No LAN/VPN path: try punching through the NATs between us.
         await self.start_punch(hash_id)
 

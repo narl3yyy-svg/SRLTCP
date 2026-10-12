@@ -714,6 +714,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         updated.tcp_port = max(1024, min(updated.tcp_port, 65535))
         updated.discovery_port = max(1024, min(updated.discovery_port, 65535))
         updated.relay_enabled = bool(updated.relay_enabled)
+        updated.direct_internet = bool(updated.direct_internet)
         relay_text = str(updated.relay_code or "").strip()
         if relay_text:
             try:

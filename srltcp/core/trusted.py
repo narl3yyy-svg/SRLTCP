@@ -27,7 +27,13 @@ _FIXTURE_HASHES = frozenset(
 
 
 def is_fixture_peer(peer: TrustedPeer) -> bool:
-    """Detect pytest/dev fixture peers that leaked into the live data dir."""
+    """Detect pytest/dev fixture peers that leaked into the live data dir.
+
+    A contact that ever completed a handshake has a pinned public key (and
+    usually pair secrets); those are never fixtures, whatever their name —
+    a real contact added before its name was known is still a contact."""
+    if peer.public_key or peer.pair_own or peer.pair_peer:
+        return False
     return peer.hash_id in _FIXTURE_HASHES or (
         peer.name.strip().lower() in _GENERIC_NAMES
         and peer.tcp_host in {"", "127.0.0.1", "10.0.0.5"}
