@@ -1,10 +1,10 @@
 /* SRLTCP voice & video calls.
  *
- * Media flows directly between the two devices over WebRTC (DTLS-SRTP).
- * Call setup (SDP offer/answer + ICE candidates) is relayed through the
- * existing end-to-end encrypted SRLTCP session, so the DTLS fingerprints are
- * authenticated by the contact's identity key — no third-party signalling
- * server, and by default no STUN/TURN server either (LAN / direct only).
+ * WebRTC (DTLS-SRTP). Call setup (SDP offer/answer + ICE candidates) is
+ * relayed through the existing end-to-end encrypted SRLTCP session, so the
+ * DTLS fingerprints are authenticated by the contact's identity key. The media
+ * goes through this node's local TURN relay, which carries it inside the same
+ * encrypted session — no third-party signalling or relay servers.
  */
 (() => {
   "use strict";
@@ -29,7 +29,17 @@
     clockTimer: null,
     muted: false,
     cameraOff: false,
+    speaker: false,
   };
+
+  // Android app: route call audio like a phone call (earpiece/speaker).
+  const nativeAudio = () => {
+    const b = window.SRLTCPAndroid;
+    return b && typeof b.setCallAudio === "function" ? b : null;
+  };
+  function routeAudio(active) {
+    try { nativeAudio()?.setCallAudio(!!active, !!call.speaker); } catch (_) { /* ignore */ }
+  }
 
   const app = () => window.srltcpApp || {};
 
@@ -83,13 +93,39 @@
     ov.dataset.mode = mode;
     ov.classList.toggle("video", call.video);
     $("#call-peer-name").textContent = call.peerName || "Contact";
+    const avatar = $("#call-avatar");
+    if (avatar) avatar.textContent = (call.peerName || "?").trim().charAt(0).toUpperCase() || "?";
     $("#call-incoming-actions")?.classList.toggle("hidden", mode !== "incoming");
     $("#call-active-actions")?.classList.toggle("hidden", mode === "incoming");
+    // A voice call can only be answered with voice; a video call offers both.
+    $("#call-accept-video")?.classList.toggle("hidden", !call.video);
     $("#call-toggle-camera")?.classList.toggle("hidden", !call.video);
+    $("#call-speaker")?.classList.toggle("hidden", !nativeAudio());
+    updateButtons();
+  }
+
+  function updateButtons() {
+    const set = (sel, off, label) => {
+      const b = $(sel);
+      if (!b) return;
+      b.classList.toggle("off", off);
+      b.setAttribute("aria-pressed", off ? "true" : "false");
+      if (label) b.setAttribute("aria-label", label);
+    };
+    set("#call-mute", call.muted, call.muted ? "Unmute microphone" : "Mute microphone");
+    set("#call-toggle-camera", call.cameraOff, call.cameraOff ? "Turn camera on" : "Turn camera off");
+    const spk = $("#call-speaker");
+    if (spk) {
+      spk.classList.toggle("active", call.speaker);
+      spk.setAttribute("aria-pressed", call.speaker ? "true" : "false");
+    }
   }
 
   function hideOverlay() {
     $("#call-overlay")?.classList.add("hidden");
+    $("#call-overlay")?.classList.remove("remote-playing", "local-on");
+    const ra = $("#call-remote-audio");
+    if (ra) ra.srcObject = null;
     const rv = $("#call-remote-video");
     const lv = $("#call-local-video");
     if (rv) rv.srcObject = null;
@@ -113,10 +149,10 @@
     Object.assign(call, {
       id: null, peer: null, peerName: "", video: false, pc: null, local: null,
       remote: null, role: null, state: "idle", pendingOffer: null, pendingIce: [],
-      ringTimer: null, muted: false, cameraOff: false,
+      ringTimer: null, muted: false, cameraOff: false, speaker: false,
     });
-    $("#call-mute")?.classList.remove("active");
-    $("#call-toggle-camera")?.classList.remove("active");
+    routeAudio(false);
+    updateButtons();
     hideOverlay();
   }
 
@@ -141,16 +177,27 @@
     pc.ontrack = (ev) => {
       if (!call.remote) call.remote = new MediaStream();
       call.remote.addTrack(ev.track);
+      // Sound comes from the <audio> element; the <video> stays muted so the
+      // voice isn't played twice. play() is explicit: autoplay alone is not
+      // enough on Android WebView (it showed a play button and no sound).
       const rv = $("#call-remote-video");
       const ra = $("#call-remote-audio");
-      if (rv) rv.srcObject = call.remote;
-      if (ra) ra.srcObject = call.remote;
+      if (rv && rv.srcObject !== call.remote) {
+        rv.muted = true;
+        rv.srcObject = call.remote;
+      }
+      if (ra && ra.srcObject !== call.remote) ra.srcObject = call.remote;
+      rv?.play?.().catch(() => {});
+      ra?.play?.().catch(() => {});
     };
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
       if (st === "connected") {
         call.state = "active";
         startClock();
+        routeAudio(true);
+        $("#call-remote-audio")?.play?.().catch(() => {});
+        $("#call-remote-video")?.play?.().catch(() => {});
       } else if (st === "failed") {
         app().toast?.(
           "Call could not connect — check that the contact is online (a text message should get ✓✓).",
@@ -166,6 +213,12 @@
 
   function attachLocal(stream) {
     call.local = stream;
+    // Calls always start with the microphone (and camera) on.
+    call.muted = false;
+    call.cameraOff = false;
+    stream.getTracks().forEach((t) => { t.enabled = true; });
+    $("#call-overlay")?.classList.add("local-on");
+    updateButtons();
     const lv = $("#call-local-video");
     if (lv) {
       lv.srcObject = stream;
@@ -190,6 +243,7 @@
     }
     Object.assign(call, {
       id: newCallId(), peer, peerName, video, role: "caller", state: "outgoing",
+      speaker: video,
     });
     showOverlay("outgoing");
     setStatus("Starting…");
@@ -249,6 +303,7 @@
     clearTimeout(call.ringTimer);
     call.state = "connecting";
     call.video = !!withVideo && call.video;
+    call.speaker = call.video;
     showOverlay("active");
     setStatus("Connecting…");
     try {
@@ -319,13 +374,19 @@
   function toggleMute() {
     call.muted = !call.muted;
     call.local?.getAudioTracks().forEach((t) => { t.enabled = !call.muted; });
-    $("#call-mute")?.classList.toggle("active", call.muted);
+    updateButtons();
   }
 
   function toggleCamera() {
     call.cameraOff = !call.cameraOff;
     call.local?.getVideoTracks().forEach((t) => { t.enabled = !call.cameraOff; });
-    $("#call-toggle-camera")?.classList.toggle("active", call.cameraOff);
+    updateButtons();
+  }
+
+  function toggleSpeaker() {
+    call.speaker = !call.speaker;
+    if (call.state === "active") routeAudio(true);
+    updateButtons();
   }
 
   window.srltcpOnCallSignal = onSignal;
@@ -352,6 +413,15 @@
     $("#call-hangup")?.addEventListener("click", () => hangup());
     $("#call-mute")?.addEventListener("click", toggleMute);
     $("#call-toggle-camera")?.addEventListener("click", toggleCamera);
+    $("#call-speaker")?.addEventListener("click", toggleSpeaker);
+    // Show the remote picture only once frames arrive (no empty player / play icon).
+    const rv = $("#call-remote-video");
+    const markPlaying = () => {
+      if (rv.videoWidth > 0) $("#call-overlay")?.classList.add("remote-playing");
+    };
+    rv?.addEventListener("playing", markPlaying);
+    rv?.addEventListener("resize", markPlaying);
+    rv?.addEventListener("loadeddata", markPlaying);
     window.addEventListener("beforeunload", () => {
       if (call.state !== "idle") hangup();
     });

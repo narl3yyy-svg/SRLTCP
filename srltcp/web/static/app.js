@@ -2474,6 +2474,7 @@
     if (!hashId) return;
     state.selectedPeer = hashId;
     state.selectedName = name;
+    state.stickBottom = true;
     clearUnread(hashId);
 
     $("#chat-empty")?.classList.add("hidden");
@@ -2631,8 +2632,24 @@
 
   function scrollMessagesToBottom() {
     const el = $("#messages");
+    state.stickBottom = true;
     if (el) el.scrollTop = el.scrollHeight;
   }
+
+  // Keep the chat pinned to the newest message unless the user scrolled up:
+  // survives images loading late, the keyboard opening and the app resuming.
+  (function pinMessagesToBottom() {
+    const el = $("#messages");
+    if (!el) return;
+    state.stickBottom = true;
+    const repin = () => { if (state.stickBottom) el.scrollTop = el.scrollHeight; };
+    el.addEventListener("scroll", () => {
+      if (el.clientHeight > 0) state.stickBottom = isNearBottom(el);
+    }, { passive: true });
+    el.addEventListener("load", repin, true);
+    el.addEventListener("loadedmetadata", repin, true);
+    if (window.ResizeObserver) new ResizeObserver(repin).observe(el);
+  })();
 
   function messageForTransfer(transferId) {
     return state.messageCache.find((m) => m.metadata?.transfer_id === transferId);
@@ -2745,10 +2762,19 @@
     }, 200);
   }
 
+  const STATUS_HINTS = {
+    pending: "Waiting to send — goes out automatically when they are reachable (same Wi-Fi, VPN or hub)",
+    sent: "Sent — not confirmed yet; resent automatically until they receive it",
+    delivered: "Delivered",
+    not_trusted: "They have not accepted you yet",
+    failed: "Not sent",
+  };
+
   function renderMessages(msgs, { preserveScroll = false, scrollToBottom = false } = {}) {
     const el = $("#messages");
     if (!el) return;
-    const wasAtBottom = scrollToBottom || (preserveScroll ? isNearBottom(el) : true);
+    if (scrollToBottom || !preserveScroll) state.stickBottom = true;
+    const wasAtBottom = state.stickBottom || (el.clientHeight > 0 && isNearBottom(el));
     state.messageCache = msgs;
     let lastDate = "";
     let html = "";
@@ -2776,7 +2802,7 @@
           ${body}
           <div class="bubble-meta">
             <span>${formatTime(m.timestamp)}</span>
-            <span class="bubble-status ${m.status}"></span>
+            <span class="bubble-status ${m.status}"${out ? ` title="${STATUS_HINTS[m.status] || ""}"` : ""}></span>
           </div>
         </div>
       </div>`;
@@ -2872,17 +2898,52 @@
     window.addEventListener("mousemove", (e) => moveDrag(e.clientX, e.clientY));
     window.addEventListener("mouseup", endDrag);
 
+    // Two-finger pinch zooms the image (the rest of the app does not zoom);
+    // one finger pans once zoomed; double-tap toggles 1x / 2.5x.
+    const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    let pinch = null;
+    let lastTap = 0;
     body.addEventListener("touchstart", (e) => {
+      if (e.touches.length === 2) {
+        endDrag();
+        pinch = { d: dist(e.touches), z: state.mediaZoom };
+        return;
+      }
       if (e.touches.length !== 1) return;
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        state.mediaZoom = state.mediaZoom > 1 ? 1 : 2.5;
+        if (state.mediaZoom === 1) state.mediaPan = { x: 0, y: 0 };
+        applyMediaZoom();
+        lastTap = 0;
+        return;
+      }
+      lastTap = now;
       startDrag(e.touches[0].clientX, e.touches[0].clientY);
     }, { passive: true });
     body.addEventListener("touchmove", (e) => {
+      if (pinch && e.touches.length === 2) {
+        e.preventDefault();
+        state.mediaZoom = Math.min(5, Math.max(1, pinch.z * (dist(e.touches) / pinch.d)));
+        if (state.mediaZoom === 1) state.mediaPan = { x: 0, y: 0 };
+        applyMediaZoom();
+        return;
+      }
       if (!state.mediaDragging || e.touches.length !== 1) return;
       e.preventDefault();
       moveDrag(e.touches[0].clientX, e.touches[0].clientY);
     }, { passive: false });
-    body.addEventListener("touchend", endDrag);
-    body.addEventListener("touchcancel", endDrag);
+    const endTouch = (e) => {
+      if (e.touches.length < 2) pinch = null;
+      if (e.touches.length === 0) endDrag();
+    };
+    body.addEventListener("touchend", endTouch);
+    body.addEventListener("touchcancel", endTouch);
+    body.addEventListener("wheel", (e) => {
+      if (!$("#media-lightbox")?.classList.contains("open")) return;
+      e.preventDefault();
+      setMediaZoom(e.deltaY < 0 ? 0.2 : -0.2);
+    }, { passive: false });
   }
 
   /* Save a transfer's file: system "Save as" picker on Android, file picker on desktop. */
@@ -2925,6 +2986,12 @@
   window.onAndroidFileSaved = (ok) => {
     toast(ok ? "File saved" : "Could not save the file", ok ? "info" : "error");
   };
+
+  // Phones have no hover: tapping a message's tick explains it.
+  document.addEventListener("click", (e) => {
+    const tick = e.target.closest?.(".bubble-status[title]");
+    if (tick?.title) toast(tick.title);
+  });
 
   document.addEventListener("click", (e) => {
     const link = e.target.closest?.("a.file-download, #media-lightbox-download");
@@ -3066,9 +3133,11 @@
       }
     }
 
+    // Your own message always jumps to the bottom; incoming ones only if you
+    // are already reading the latest messages.
     renderMessages(state.messageCache, {
-      preserveScroll: isOutgoing(m.sender_hash),
-      scrollToBottom: !isOutgoing(m.sender_hash),
+      preserveScroll: !isOutgoing(m.sender_hash),
+      scrollToBottom: isOutgoing(m.sender_hash),
     });
   }
 
@@ -3393,7 +3462,9 @@
     if (android) root.classList.add("android-app");
     if (android) {
       const saved = peekMobileSession();
-      if (saved?.selectedPeer && saved.androidView === "chat") {
+      if (state.selectedPeer) {
+        // Already showing a chat (e.g. the keyboard resized the window): keep it.
+      } else if (saved?.selectedPeer && saved.androidView === "chat") {
         state._restorePeer = saved;
       } else {
         setAndroidView("sidebar", { skipHistory: true });
@@ -3495,16 +3566,15 @@
     renderContacts();
   }, 200));
 
-  $("#send-btn")?.addEventListener("mousedown", (e) => {
-    if (isAndroidApp()) e.preventDefault();
-  });
-  $("#send-btn")?.addEventListener("touchstart", (e) => {
-    if (isAndroidApp()) e.preventDefault();
+  // Keep the keyboard open when tapping Send. Cancelling touchstart would also
+  // cancel the click (the old bug: the arrow did nothing on phones), so the tap
+  // is handled on touchend instead and the synthetic mouse events are dropped.
+  $("#send-btn")?.addEventListener("mousedown", (e) => e.preventDefault());
+  $("#send-btn")?.addEventListener("touchend", (e) => {
+    if (e.cancelable) e.preventDefault();
+    if (!e.currentTarget.disabled) sendMessage();
   }, { passive: false });
-  $("#send-btn")?.addEventListener("click", (e) => {
-    if (isAndroidApp()) e.preventDefault();
-    sendMessage();
-  });
+  $("#send-btn")?.addEventListener("click", () => sendMessage());
 
   $("#msg-input")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -3895,8 +3965,17 @@
     if (isAndroidApp()) androidNavigateBack();
   });
 
+  // Back from the background: show what arrived meanwhile, newest at the bottom.
+  function onAppResumed() {
+    if (!state.selectedPeer) return;
+    scrollMessagesToBottom();
+    loadMessages().then(() => requestAnimationFrame(scrollMessagesToBottom));
+  }
+  window.srltcpOnResume = onAppResumed;
+
   document.addEventListener("visibilitychange", () => {
     saveMobileSession();
+    if (!document.hidden) onAppResumed();
     if (!document.hidden && document.documentElement.classList.contains("android-app")) {
       try {
         if (window.Notification && Notification.permission === "default") {

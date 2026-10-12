@@ -113,4 +113,22 @@ api p1 POST /api/messages "{\"recipient_hash\":\"$H2\",\"text\":\"after ip chang
 start=$(date +%s)
 wait_for 90 got "after ip change" || fail "recovery after VPN address change"
 pass "message delivered $(( $(date +%s) - start ))s after phone2's VPN address changed"
+
+# VPN switched off on phone2 (like turning WireGuard off on the phone): messages
+# both ways wait in the outbox and go out by themselves once the VPN is back.
+ip -n p2 link set tun0 down
+sleep 2
+api p1 POST /api/messages "{\"recipient_hash\":\"$H2\",\"text\":\"sent while your vpn was off\"}" >/dev/null
+api p2 POST /api/messages "{\"recipient_hash\":\"$H1\",\"text\":\"written with my vpn off\"}" >/dev/null
+sleep 10
+got "sent while your vpn was off" && fail "delivered with no route (test setup broken)"
+status() { api p1 GET /api/messages | q "[m['status'] for m in d if m['text']=='sent while your vpn was off'][0]"; }
+echo "  while VPN is off, phone1 shows: $(status)"
+ip -n p2 link set tun0 up
+ip -n p2 route replace 10.0.100.0/24 dev tun0
+start=$(date +%s)
+got1() { api p1 GET /api/messages | q "[m['text'] for m in d]" | grep -q "$1"; }
+wait_for 120 got "sent while your vpn was off" || fail "queued message after VPN came back"
+wait_for 60 got1 "written with my vpn off" || fail "phone2's queued message after VPN came back"
+pass "both queued messages delivered $(( $(date +%s) - start ))s after the VPN came back"
 echo "All WireGuard checks passed."

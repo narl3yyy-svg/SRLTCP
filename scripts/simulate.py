@@ -180,6 +180,7 @@ async def desktop_flow() -> None:
         # --- Video call ---
         await bob.click("#btn-call-video")
         await alice.wait_for_selector("#call-overlay:not(.hidden)[data-mode=incoming]", timeout=10000)
+        assert await alice.is_visible("#call-accept-video") and await alice.is_visible("text=Video call")
         await shot(alice, "04-alice-incoming-call")
         await alice.click("#call-accept-video")
         await alice.wait_for_function("document.querySelector('#call-status').textContent.includes('encrypted')", timeout=20000)
@@ -187,6 +188,21 @@ async def desktop_flow() -> None:
         await asyncio.sleep(2)
         vw = await alice.evaluate("document.querySelector('#call-remote-video').videoWidth")
         print("call connected; alice receives remote video width", vw)
+        await alice.wait_for_selector("#call-overlay.remote-playing", timeout=10000)
+        playing = await alice.evaluate(
+            "(() => { const a = document.querySelector('#call-remote-audio');"
+            " return !a.paused && a.srcObject && a.srcObject.getAudioTracks().length > 0; })()"
+        )
+        assert playing, "remote audio is not playing"
+        assert await alice.evaluate("document.querySelector('#call-remote-video').muted")
+        # Mic starts on; mute turns the button red, unmute restores it
+        assert await alice.get_attribute("#call-mute", "aria-pressed") == "false"
+        await alice.click("#call-mute")
+        assert await alice.get_attribute("#call-mute", "aria-pressed") == "true"
+        bg = await alice.evaluate("getComputedStyle(document.querySelector('#call-mute')).backgroundColor")
+        assert bg == "rgb(240, 84, 106)", bg
+        await alice.click("#call-mute")
+        print("call: remote audio playing, picture shown, mic on by default, mute is red")
         await shot(alice, "05-alice-in-call")
         await bob.click("#call-hangup")
         await alice.wait_for_selector("#call-overlay", state="hidden", timeout=10000)
@@ -195,6 +211,8 @@ async def desktop_flow() -> None:
         # --- Voice call declined ---
         await alice.click("#btn-call-voice")
         await bob.wait_for_selector("#call-overlay:not(.hidden)[data-mode=incoming]", timeout=10000)
+        assert await bob.is_visible("text=Voice call") and not await bob.is_visible("#call-accept-video")
+        print("voice call: callee sees a voice call with a phone answer button only")
         await bob.click("#call-decline")
         await alice.wait_for_selector("#call-overlay", state="hidden", timeout=10000)
         print("declined call handled")
@@ -355,7 +373,7 @@ async def mobile_flow() -> None:
         await carol.click("#contacts .contact[data-name='Alice']")
         await carol.wait_for_function("!document.querySelector('#msg-input').disabled")
         await carol.fill("#msg-input", "Hi Alice, it's Carol from the LAN")
-        await carol.click("#send-btn")
+        await carol.tap("#send-btn")  # a real finger tap on the arrow
         await carol.wait_for_selector(".bubble-status.not_trusted", timeout=15000)
         print("carol sees 'waiting for them to accept you'")
         await carol.screenshot(path=f"{OUT}/12-carol-waiting-accept.png")
