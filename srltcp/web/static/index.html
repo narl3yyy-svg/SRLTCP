@@ -202,25 +202,20 @@
 <input type="checkbox" id="set-auto-announce" />
 <span>Auto-announce on startup (LAN only)</span>
 </label>
+<fieldset class="relay-settings">
+<legend>Internet relay</legend>
 <label class="field checkbox-field">
-<input type="checkbox" id="set-hub-enabled" />
-<span>Connect via hub server (no port-forward needed)</span>
+<input type="checkbox" id="set-relay-enabled" />
+<span>Keep in touch over the internet when there's no direct connection (VPN off, different networks)</span>
 </label>
 <label class="field">
-<span>Hub server host</span>
-<input type="text" id="set-hub-host" placeholder="hub.example.com or 203.0.113.10" />
-<small>Public address for remote clients — port-forward TCP on the hub host</small>
+<span>Relay code</span>
+<input type="text" id="set-relay-code" placeholder="srltcp-relay://… (from the srltcp relay command)" autocomplete="off" spellcheck="false" />
+<small>Run <code>srltcp relay</code> on your server and paste the code on <strong>one</strong> phone — contacts get it automatically, inside the encrypted connection. Leave empty if a contact already has one.</small>
 </label>
-<label class="field">
-<span>Hub LAN address (optional)</span>
-<input type="text" id="set-hub-lan-host" placeholder="192.168.1.50" />
-<small>Hub machine local IP — use when you are on the same network as the hub (tried before public host)</small>
-</label>
-<label class="field">
-<span>Hub server port</span>
-<input type="number" id="set-hub-port" min="1024" max="65535" value="7825" />
-<small>Default 7825 — must match the hub server's listen port</small>
-</label>
+<div class="relay-status" id="relay-status" aria-live="polite"></div>
+<small class="field-hint">Direct LAN/VPN connections are always used when they work. The relay only forwards sealed, padded packets: it can't read messages, see names or who you talk to, or fake anything.</small>
+</fieldset>
 <label class="field">
 <span>Handshake protocol</span>
 <select id="set-handshake-protocol">
@@ -232,7 +227,7 @@
 <label class="field">
 <span>External call relay (advanced, normally not needed)</span>
 <input type="text" id="set-stun" placeholder="Leave empty" spellcheck="false" />
-<small>Calls are relayed through SRLTCP's own encrypted connection, so they work wherever messages do (LAN, VPN, hub). This is only a fallback if that relay is unavailable: a STUN/TURN URL such as <code>turn:host:3478</code>.</small>
+<small>Calls are relayed through SRLTCP's own encrypted connection, so they work wherever messages do (LAN, VPN, internet relay). This is only a fallback if that relay is unavailable: a STUN/TURN URL such as <code>turn:host:3478</code>.</small>
 </label>
 <div class="field-row">
 <label class="field grow"><span>TURN username</span><input type="text" id="set-turn-user" autocomplete="off" spellcheck="false" /></label>
@@ -242,7 +237,6 @@
 <input type="checkbox" id="set-wan-expose" />
 <span>I will port-forward TCP 7825 for direct WAN peers (advanced)</span>
 </label>
-<p class="field-hint">With a hub configured, click <strong>Announce</strong> to register on the hub and discover other hub users. All traffic remains E2EE — the hub cannot read messages.</p>
 <button type="button" class="action-btn" id="btn-network-viz">Network map</button>
 </div>
 <div class="settings-panel" data-panel="serial">

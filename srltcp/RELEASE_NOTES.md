@@ -1,5 +1,46 @@
 # SRLTCP Release Notes
 
+## v0.5.0 (2026-10-12)
+
+**Update both phones** (and replace any old hub with the new relay): 0.5 uses a
+new handshake and doesn't talk to 0.4.x.
+
+### Talk over the internet, automatically
+- Pair once on the same Wi-Fi or VPN; after that the phones keep talking with
+  the VPN off, on different carriers, on Wi-Fi or mobile data
+- They use a **direct** path whenever one works and your own **internet relay**
+  otherwise, switching by themselves: the relay takes over within seconds when
+  the VPN goes off (3 s in our test) and they move back to direct when it
+  returns (18 s). Messages, files, voice and video calls all work over the relay
+- Set up: run `srltcp relay --public-host YOUR.SERVER.IP` on your server (the
+  WireGuard server is ideal), paste the code it prints into *Settings → Network
+  → Internet relay* on **one** phone. The other phone gets it automatically.
+  Guide: docs/INTERNET_RELAY.md (includes a sandboxed systemd service)
+- Contacts show **TCP** (direct) or **RELAY**
+
+### Private by design — the relay is treated as untrusted
+- TLS 1.3 to the relay with its certificate pinned (no impersonation) and an
+  access key (strangers can't use it)
+- No names, identities or keys reach the relay: phones listen on mailboxes
+  derived from a secret only the two contacts share, rotating daily
+- Every relayed packet is sealed again with that pair key, padded to fixed sizes
+  and replay-checked: the relay can't read message types, inject or replay
+  packets, and stores nothing
+- Replaces the old hub, which saw identity hashes and names
+
+### Security
+- Handshake v4: the signature names the intended recipient, so a captured
+  handshake can't be replayed to another device (fixes the known limitation)
+- Penetration tested: `scripts/pentest/pentest_local.py` (web API, peer port,
+  file transfers, discovery, pairing, call relay) and
+  `scripts/pentest/pentest_relay.py` (relay server, clients, rendezvous,
+  privacy). Findings and fixes: docs/SECURITY_AUDIT.md
+- Fixed: discovery announce floods could grow memory without limit (now
+  bounded); frames limited to 4 MiB (was 64 MiB) so unauthenticated
+  connections can't make the app buffer much; malformed requests get 400
+- Contact secrets are stored owner-only and never shown to the web UI
+
+
 ## v0.4.1 (2026-10-12)
 
 - **Swipe to stop.** Swiping the "SRLTCP — Running" notification away now stops

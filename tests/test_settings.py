@@ -11,7 +11,7 @@ def test_settings_defaults(tmp_path: Path) -> None:
     store = SettingsStore(path=tmp_path / "settings.json")
     settings = store.load()
     assert settings.auto_announce is True
-    assert settings.version == "0.4.1"
+    assert settings.version == "0.5.0"
     assert settings.tcp_port == 7825
     assert settings.discovery_port == 7826
     assert settings.strict_ports is True
@@ -38,19 +38,17 @@ def test_settings_persist(tmp_path: Path) -> None:
     assert loaded.message_retention_hours == 24
 
 
-def test_hub_settings_persist(tmp_path: Path) -> None:
-    store = SettingsStore(path=tmp_path / "settings.json")
+def test_relay_settings_persist_and_old_hub_keys_are_ignored(tmp_path: Path) -> None:
+    import json
+
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"hub_enabled": True, "hub_host": "old.example.com"}))
+    store = SettingsStore(path=path)
     settings = store.load()
-    settings.hub_enabled = True
-    settings.hub_host = "hub.example.com"
-    settings.hub_lan_host = "192.168.1.50"
-    settings.hub_port = 7825
+    assert not hasattr(settings, "hub_host")
+    settings.relay_code = "srltcp-relay://relay.example.com:443#x.y"
     store.save(settings)
-    loaded = store.load()
-    assert loaded.hub_enabled is True
-    assert loaded.hub_host == "hub.example.com"
-    assert loaded.hub_lan_host == "192.168.1.50"
-    assert loaded.hub_port == 7825
+    assert store.load().relay_code == settings.relay_code
 
 
 def test_handshake_protocol_persist(tmp_path: Path) -> None:

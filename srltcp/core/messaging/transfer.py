@@ -15,6 +15,7 @@ from srltcp.core.messaging.constants import (
     CHUNK_SIZE,
     COMPRESS_THRESHOLD,
     PROGRESS_EMIT_INTERVAL,
+    RELAY_CHUNK_SIZE,
     SERIAL_CHUNK_DELAY,
     SERIAL_CHUNK_SIZE,
     TRANSFER_COOLDOWN,
@@ -109,6 +110,8 @@ class TransferMixin:
     def _chunk_params(self: MessagingBackend, transport: str) -> tuple[int, float]:
         if transport == "serial":
             return SERIAL_CHUNK_SIZE, SERIAL_CHUNK_DELAY
+        if transport == "relay":
+            return RELAY_CHUNK_SIZE, CHUNK_SEND_DELAY  # fits the relay's frame limit
         return CHUNK_SIZE, CHUNK_SEND_DELAY
 
     async def _emit_transfer_progress(
@@ -358,6 +361,8 @@ class TransferMixin:
                             transfer.state = TransferState.PAUSED
                             await self._emit_transfer_progress(transfer, force=True)
                             return
+                    # The path can change mid-transfer (direct <-> relay).
+                    chunk_size, chunk_delay = self._chunk_params(link.transport)
                     chunk = await f.read(chunk_size)
                     if not chunk:
                         break

@@ -1744,3 +1744,10 @@ html, body { touch-action: pan-x pan-y; }
 .danger-text { color: var(--danger, #f07178) !important; }
 .contact .group-avatar svg { width: 18px; height: 18px; }
 #chat-active.group-chat .status-dot { display: none; }
+
+/* ── Internet relay settings ── */
+.relay-settings { border: 1px solid var(--border, rgba(255,255,255,0.08)); border-radius: 10px; padding: 0.75rem 0.9rem; margin: 0.75rem 0; }
+.relay-settings legend { padding: 0 0.35rem; font-weight: 600; }
+.relay-status { white-space: pre-line; font-size: 0.8rem; color: var(--text-muted, #8b93a8); margin: 0.25rem 0 0.5rem; overflow-wrap: anywhere; }
+.relay-status.ok { color: var(--success, #3ecf8e); }
+.transport-badge.relay { background: rgba(176, 132, 255, 0.15); color: #b084ff; }

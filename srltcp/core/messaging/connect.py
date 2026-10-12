@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from srltcp.core.messaging.hub import HUB_SYNTHETIC_PREFIX, hub_synthetic_peer_id
 from srltcp.core.messaging.links import PeerLink
+from srltcp.core.messaging.relay import RELAY_PEER_PREFIX, relay_peer_hash
 from srltcp.core.protocol.crypto import HANDSHAKE_MAX_SKEW, KeyExchange
 from srltcp.core.protocol.messages import MessageType, build_header, decode_payload, encode_payload
 from srltcp.core.protocol.noise_handshake import (
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 PENDING_HANDSHAKE_TTL = 15.0
+HANDSHAKE_VERSION = 4  # v4: signature names the recipient (no cross-node replay)
 
 
 class ConnectMixin:
@@ -150,9 +151,7 @@ class ConnectMixin:
         peer_id = link.transport_peer_id
         transport = link.transport
         self.remove_link(hash_id)
-        if transport == "hub":
-            pass
-        elif transport == "tcp" and self.tcp_transport:
+        if transport == "tcp" and self.tcp_transport:
             await self.tcp_transport.disconnect(peer_id)
 
     async def connect_to_peer(
@@ -177,26 +176,22 @@ class ConnectMixin:
         discovered = self.discovery.get(hash_id, requested) or self.discovery.get(
             hash_id
         )
-        if discovered:
+        if discovered and discovered.transport in ("tcp", "serial"):
             return discovered.transport
         trusted = self.trusted.get(hash_id)
+        # Direct (LAN / VPN / port-forward) first; the relay when that's all we have.
+        # A failed direct dial also falls back to the relay (see below).
+        if trusted and (trusted.tcp_host or trusted.wan_host or trusted.alt_hosts):
+            return "tcp"
+        if self.relay_link_reachable(hash_id):
+            return "relay"
         if trusted:
-            # Prefer a direct address (LAN/VPN) when we have one; use the hub
-            # for contacts we can only reach through it.
-            if self._hub_enabled() and not (trusted.tcp_host or trusted.wan_host):
-                return "hub"
-            return trusted.transport
-        if self._hub_enabled():
-            return "hub"
+            return trusted.transport if trusted.transport in ("tcp", "serial") else "tcp"
         return requested
 
     def _is_link_reachable(self: MessagingBackend, link: PeerLink) -> bool:
-        if link.transport == "hub":
-            return bool(
-                self._hub_peer_id
-                and self.tcp_transport
-                and self.tcp_transport.has_peer(self._hub_peer_id)
-            )
+        if link.transport == "relay":
+            return self.relay_link_reachable(link.hash_id)
         if link.transport == "tcp" and self.tcp_transport:
             return self.tcp_transport.has_peer(link.transport_peer_id)
         if link.transport == "serial" and self.serial_transport:
@@ -204,8 +199,8 @@ class ConnectMixin:
         return False
 
     def _infer_transport(self: MessagingBackend, peer_id: str) -> str:
-        if peer_id.startswith(HUB_SYNTHETIC_PREFIX):
-            return "hub"
+        if peer_id.startswith(RELAY_PEER_PREFIX):
+            return "relay"
         if self.serial_transport and self.serial_transport.has_peer(peer_id):
             return "serial"
         if self.tcp_transport and self.tcp_transport.has_peer(peer_id):
@@ -235,7 +230,9 @@ class ConnectMixin:
 
         existing = self.get_link(hash_id)
         if existing and existing.handshake_complete and not force:
-            if existing.transport == transport and self._is_link_reachable(existing):
+            if self._is_link_reachable(existing):
+                # Working session (direct or relay): keep it. Moving from the
+                # relay back to a direct path is done by maintain_paths().
                 await self.ping_peer(hash_id)
                 return True
             await self._teardown_link(hash_id)
@@ -274,26 +271,8 @@ class ConnectMixin:
         )
         pub_bytes = bytes.fromhex(pub_hex) if pub_hex else b"\x00" * 32
 
-        if transport == "hub":
-            if not self._hub_enabled():
-                log.warning("Hub transport requested but hub is not configured")
-                return False
-            hub_conn = await self._ensure_hub_connection()
-            if not hub_conn:
-                log.warning("Cannot connect to %s — hub unreachable", hash_id[:8])
-                return False
-            synthetic = hub_synthetic_peer_id(hash_id)
-            link = PeerLink(
-                hash_id=hash_id,
-                transport_peer_id=synthetic,
-                transport="hub",
-                address=f"hub:{self.config.hub_host}",
-                public_key=pub_bytes,
-                peer_name=peer_name,
-            )
-            self.register_link(link)
-            await self._initiate_handshake(hash_id)
-            return True
+        if transport == "relay":
+            return await self.open_relay_link(hash_id)
 
         if transport == "tcp" and self.tcp_transport:
             endpoint = self._resolve_tcp_endpoint(
@@ -304,6 +283,8 @@ class ConnectMixin:
                 trusted=trusted,
             )
             if not endpoint:
+                if not host and self.relay_link_reachable(hash_id):
+                    return await self.open_relay_link(hash_id)
                 log.warning("No host for peer %s", hash_id[:8])
                 return False
             candidates = [endpoint]
@@ -314,10 +295,13 @@ class ConnectMixin:
                         candidates.append(cand)
             peer_id = ""
             target_host, target_port = endpoint
+            # With a relay to fall back on, don't wait long for a dead VPN/LAN path.
+            relay_fallback = not host and self.relay_link_reachable(hash_id)
+            timeout = 3.0 if relay_fallback else (8.0 if len(candidates) == 1 else 5.0)
             for target_host, target_port in candidates:
                 try:
                     peer_id = await self.tcp_transport.connect(
-                        target_host, target_port, timeout=8.0 if len(candidates) == 1 else 5.0
+                        target_host, target_port, timeout=timeout
                     )
                     break
                 except (OSError, TimeoutError, ConnectionError) as exc:
@@ -328,6 +312,9 @@ class ConnectMixin:
                         exc or type(exc).__name__,
                     )
             if not peer_id:
+                if relay_fallback:
+                    log.info("No direct path to %s — using the relay", hash_id[:8])
+                    return await self.open_relay_link(hash_id)
                 return False
             if trusted and isinstance(trusted, TrustedPeer) and target_host != trusted.tcp_host:
                 # Remember the address that worked so the next dial is instant.
@@ -505,11 +492,7 @@ class ConnectMixin:
         link = self.get_link_by_peer_id(peer_id)
         if link and link.handshake_complete:
             return
-        if (
-            self.tcp_transport
-            and peer_id != self._hub_peer_id
-            and self.tcp_transport.has_peer(peer_id)
-        ):
+        if self.tcp_transport and self.tcp_transport.has_peer(peer_id):
             await self.tcp_transport.disconnect(peer_id)
 
     async def _bind_link(
@@ -520,6 +503,11 @@ class ConnectMixin:
         remote_name: str,
     ) -> PeerLink | None:
         """Attach a verified identity to a transport connection."""
+        relay_hash = relay_peer_hash(peer_id)
+        if peer_id.startswith(RELAY_PEER_PREFIX) and relay_hash != remote_hash:
+            # A relay mailbox belongs to one contact; nobody else may use it.
+            log.warning("Identity %s arrived on %s's relay mailbox", remote_hash[:8], peer_id[6:14])
+            return None
         link = self.get_link_by_peer_id(peer_id)
         if link and link.hash_id != remote_hash:
             log.warning(
@@ -540,17 +528,14 @@ class ConnectMixin:
             self._pending_handshakes.pop(remote_hash, None)
             self._pending_noise_handshakes.pop(remote_hash, None)
             self._noise_awaiting_confirm.pop(remote_hash, None)
-            if (
-                old_transport == "tcp"
-                and self.tcp_transport
-                and old_peer != self._hub_peer_id
-            ):
+            if old_transport == "tcp" and self.tcp_transport:
                 await self.tcp_transport.disconnect(old_peer)
         if link is None:
             transport = self._infer_transport(peer_id)
             address = ""
-            if transport == "hub":
-                address = f"hub:{self.config.hub_host or self.config.hub_lan_host}"
+            if transport == "relay":
+                code = self.pair_relay(remote_hash)
+                address = f"relay {code.display}" if code else "relay"
             elif self.tcp_transport and transport == "tcp":
                 for p in self.tcp_transport.peers():
                     if p.peer_id == peer_id:
@@ -592,21 +577,46 @@ class ConnectMixin:
         identity = self._identity_for_transport(link.transport)
         kx = KeyExchange(identity.private_key)
         self._pending_handshakes[hash_id] = kx
+        packet = self._identity_hello(MessageType.HANDSHAKE, kx, link.transport, hash_id)
+        await self._send_raw(link.transport_peer_id, link.transport, packet)
+
+    def _identity_hello(
+        self: MessagingBackend, kind: MessageType, kx: KeyExchange, transport: str, peer_hash: str
+    ) -> bytes:
+        identity = self._identity_for_transport(transport)
         body = encode_payload(
             {
                 "protocol": "identity",
-                "version": 3,
-                **self._identity_fields(link.transport),
+                "version": HANDSHAKE_VERSION,
+                **self._identity_fields(transport),
                 "ephemeral": kx.ephemeral_public.hex(),
                 "timestamp": kx.timestamp,
-                "signature": kx.sign_ephemeral().hex(),
+                "signature": kx.sign_ephemeral(identity.hash_id, peer_hash).hex(),
             }
         )
-        packet = build_header(MessageType.HANDSHAKE, body=body)
-        await self._send_raw(link.transport_peer_id, link.transport, packet)
+        return build_header(kind, body=body)
+
+    async def _send_upgrade_handshake(
+        self: MessagingBackend, hash_id: str, peer_id: str
+    ) -> KeyExchange | None:
+        """Open a session on a new direct connection while the relay session
+        keeps working; it replaces the relay link only once it's proven."""
+        identity = self._identity_for_transport("tcp")
+        kx = KeyExchange(identity.private_key)
+        try:
+            await self._send_raw(
+                peer_id, "tcp", self._identity_hello(MessageType.HANDSHAKE, kx, "tcp", hash_id)
+            )
+        except (KeyError, OSError, ConnectionError) as exc:
+            log.debug("Direct upgrade to %s failed: %s", hash_id[:8], exc)
+            return None
+        return kx
 
     @staticmethod
     def _parse_identity_kx(data: dict[str, object]) -> tuple[bytes, bytes, int] | None:
+        if data.get("version") != HANDSHAKE_VERSION:
+            log.warning("Handshake from an older SRLTCP version — both devices must be updated")
+            return None
         try:
             eph = bytes.fromhex(str(data["ephemeral"]))
             sig = bytes.fromhex(str(data["signature"]))
@@ -652,7 +662,10 @@ class ConnectMixin:
         identity = self._identity_for_transport(transport)
         kx = KeyExchange(identity.private_key)
         try:
-            keys = kx.complete(eph, sig, ed_pub, peer_timestamp=ts)
+            keys = kx.complete(
+                eph, sig, ed_pub, peer_timestamp=ts,
+                own_hash=identity.hash_id, peer_hash=remote_hash,
+            )
         except Exception as exc:
             log.warning("Handshake verification failed from %s: %s", remote_hash[:8], exc)
             await self._reject_connection(peer_id)
@@ -663,17 +676,7 @@ class ConnectMixin:
         link = await self._bind_link(peer_id, remote_hash, remote_pub, remote_name)
         if not link:
             return
-        ack_body = encode_payload(
-            {
-                "protocol": "identity",
-                "version": 3,
-                **self._identity_fields(link.transport),
-                "ephemeral": kx.ephemeral_public.hex(),
-                "timestamp": kx.timestamp,
-                "signature": kx.sign_ephemeral().hex(),
-            }
-        )
-        ack = build_header(MessageType.HANDSHAKE_ACK, body=ack_body)
+        ack = self._identity_hello(MessageType.HANDSHAKE_ACK, kx, link.transport, remote_hash)
         await self._send_raw(peer_id, link.transport, ack)
         self.set_link_keys(remote_hash, keys)
         await self._complete_handshake(remote_hash, remote_name)
@@ -693,13 +696,20 @@ class ConnectMixin:
         remote_hash, remote_pub, ed_pub = ident
         eph, sig, ts = parsed
         remote_name = str(data.get("name", ""))[:64]
+        upgrade = self.upgrade_for_peer_id(peer_id)
+        if upgrade is not None:
+            await self._finish_upgrade(peer_id, upgrade, data, remote_hash, remote_pub, ed_pub)
+            return
         kx = self._pending_handshakes.get(remote_hash)
         link = self.get_link(remote_hash)
         if not kx or not link or link.transport_peer_id != peer_id:
             log.warning("Unexpected handshake ack from %s", peer_id[:8])
             return
+        own = self._identity_for_transport(link.transport).hash_id
         try:
-            keys = kx.complete(eph, sig, ed_pub, peer_timestamp=ts)
+            keys = kx.complete(
+                eph, sig, ed_pub, peer_timestamp=ts, own_hash=own, peer_hash=remote_hash
+            )
         except Exception as exc:
             log.warning("Handshake ack verification failed from %s: %s", remote_hash[:8], exc)
             return
@@ -709,6 +719,52 @@ class ConnectMixin:
         link.public_key = remote_pub
         link.peer_name = remote_name or link.peer_name
         self.set_link_keys(remote_hash, keys)
+        await self._complete_handshake(remote_hash, link.peer_name, from_ack=True)
+
+    async def _finish_upgrade(
+        self: MessagingBackend,
+        peer_id: str,
+        upgrade: tuple[str, KeyExchange],
+        data: dict[str, object],
+        remote_hash: str,
+        remote_pub: bytes,
+        ed_pub: Ed25519PublicKey,
+    ) -> None:
+        expected, kx = upgrade
+        self._upgrades.pop(expected, None)
+        parsed = self._parse_identity_kx(data)
+        own = self._identity_for_transport("tcp").hash_id
+        try:
+            if remote_hash != expected or parsed is None:
+                raise ValueError("wrong identity on the direct path")
+            eph, sig, ts = parsed
+            keys = kx.complete(
+                eph, sig, ed_pub, peer_timestamp=ts, own_hash=own, peer_hash=remote_hash
+            )
+            if not self._handshake_is_fresh(eph, ts):
+                raise ValueError("stale handshake")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Direct path to %s rejected: %s", expected[:8], exc)
+            if self.tcp_transport:
+                await self.tcp_transport.disconnect(peer_id)
+            return
+        old = self.get_link(remote_hash)
+        address = ""
+        if self.tcp_transport:
+            for p in self.tcp_transport.peers():
+                if p.peer_id == peer_id:
+                    address = p.address
+        link = PeerLink(
+            hash_id=remote_hash,
+            transport_peer_id=peer_id,
+            transport="tcp",
+            address=address,
+            public_key=remote_pub,
+            peer_name=str(data.get("name", ""))[:64] or (old.peer_name if old else ""),
+        )
+        self.register_link(link)  # replaces the relay link
+        self.set_link_keys(remote_hash, keys)
+        log.info("Switched %s from the relay to a direct path (%s)", remote_hash[:8], address)
         await self._complete_handshake(remote_hash, link.peer_name, from_ack=True)
 
     # ------------------------------------------------------------------

@@ -26,11 +26,11 @@ We will acknowledge valid reports, work on a fix, and coordinate disclosure once
 
 ## Security Model
 
-SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over TCP, USB serial, and optional **hub relay** paths.
+SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over TCP (LAN, VPN, WAN), USB serial, and an optional self-hosted **internet relay**.
 
 ### What is protected
 
-- **Peer authentication** — every handshake proves possession of the Ed25519 key whose SHA-256 prefix is the peer's hash ID; pinned contact keys must match. Handshake signatures cover a timestamp and are checked against a replay cache.
+- **Peer authentication** — every handshake proves possession of the Ed25519 key whose SHA-256 prefix is the peer's hash ID; pinned contact keys must match. Handshake signatures (v4) cover the ephemeral key, a timestamp, the sender **and the intended recipient**, and are checked against a replay cache — a handshake can't be replayed to another node.
 - **Message and file payloads** are encrypted with AES-256-GCM after an Ed25519-signed ephemeral X25519 key exchange (forward secret per session).
 - **Session keys** are derived via HKDF-SHA256 from the DH secret, salted with both ephemeral keys, with direction-specific labels.
 - **Replay / reordering** — 64-bit counter nonces with a sliding replay window; the message type and flags are authenticated as AAD. Unencrypted application messages are dropped.
@@ -39,8 +39,8 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 - **Address updates** — a contact's stored address is only changed by a fresh (≤ 5 min old) announce signed by that contact's key and newer than any announce seen from it; replayed announces are ignored.
 - **Group chats** — no group key or server: every group message is signed by its author (Ed25519) and sent over the pairwise sessions; the creator relays to members who aren't each other's contacts but cannot alter or forge messages. Member lists are versioned and only accepted from the creator; invites only from trusted contacts; group traffic only from current members. The creator (and every member) sees all group messages and the member list, including members' public keys and names.
 - **Pairing codes** — signed contact cards; a one-time token (15 min) lets the scanner be trusted back automatically.
-- **Hub forwarding** wraps opaque E2EE blobs. Hub servers never receive session keys and cannot decrypt chat or file content.
-- **Hub registration** is signed with the client's Ed25519 identity and time-stamped; the hub rejects unsigned, mismatched, stale or replayed registrations (each must be newer than the last one for that identity).
+- **Internet relay** (self-hosted, untrusted): TLS 1.3 with the certificate pinned by the relay code and an access key; phones subscribe to daily-rotating mailbox tokens derived from a per-contact secret (exchanged inside the E2EE session), so the relay never learns names, identity hashes or keys; every relayed packet is sealed again with the pair key (ChaCha20-Poly1305, per-direction keys, replay window) and padded to 256 B / 4 KiB buckets. A relay mailbox accepts only the contact it belongs to. The relay stores nothing. Details: docs/INTERNET_RELAY.md.
+- **Pair secrets** live in `trusted.json`, written atomically with owner-only permissions, and are never returned by the local API.
 - **Unauthenticated connections** — TCP connections that don't complete a handshake within 30 s are closed, open connections are capped, and frame parsing is linear in the input, so junk traffic can't stall the node.
 - **LAN UDP announces** (port 7826) are signed with the sender's Ed25519 identity key. Receiving peers verify the signature and `hash_id` ↔ `public_key` binding before displaying or trusting a discovered peer. Unsigned or invalid announces are dropped.
 - **Optional Noise XX handshake** — Settings → Network → Handshake protocol. Uses `Noise_XX_25519_ChaChaPoly_SHA256`; session keys are HKDF-derived from the Noise cipher-state keys, and each side signs the handshake hash with its Ed25519 identity (versions before 0.2.0 derived keys from the public handshake hash — do not use them). Both peers must select the same protocol.
@@ -52,10 +52,9 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 | Data | Visibility |
 |------|------------|
 | LAN UDP discovery (7826) | Plaintext names, IPs, ports on the local network — **signed** (Ed25519) since v0.1.57; spoofing without the private key is rejected |
-| Hub presence | Hub operator sees who registered (hash ID prefix, display name) and when |
-| Hub routing | Hub sees source/destination identity hash tokens and approximate packet sizes/timing |
-| WAN / hub TCP | Observers see connection endpoints, timing, and volume — not decrypted payloads |
-| Known limitation | In the default (identity) handshake the signature does not name the recipient, so someone who saw a handshake could replay it to a third node within 10 minutes and disrupt (not read) that node's session with the original sender until it reconnects. Noise XX mode is not affected; a fix needs a protocol change planned for a later version |
+| Internet relay | The relay operator sees your IP address, when you're connected, and roughly how much you send and when; it can delay or drop traffic. It can't see names, identities, who you talk to (beyond guessing from timing), content or message types |
+| WAN / relay TCP | Observers see connection endpoints, timing, and volume — not decrypted payloads |
+| Relay code | Contains the access key: anyone with it can use your relay's bandwidth (but can't read or join anyone's conversations). Rotate by deleting `access.key` |
 | Local disk | Settings, trusted-peer list, chat history, identities stored without extra encryption |
 | Android WebView | Pins the app's own localhost certificate (SHA-256); user-installed CAs are not trusted for it; the JavaScript bridge only answers the app's own page |
 | NFC pairing | Contact cards (public data) are exchanged in the clear over a few centimetres |
@@ -64,31 +63,19 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 
 ### Connection modes
 
-| Mode | When to use | Client port-forward? |
-|------|-------------|----------------------|
-| **LAN P2P** | Same network | No |
-| **Hub** | Internet users without router access | No (clients dial out to hub) |
-| **Direct WAN** | You control port-forward on TCP 7825 | Yes, on the reachable peer |
-
-Hub mode is recommended for non-technical users. Direct WAN remains available for advanced setups.
-
-### Hub operator trust
-
-Running a hub means you can observe:
-
-- Which identity hashes are online
-- When peers connect and disconnect
-- Encrypted traffic volume and timing between registered clients
-
-You **cannot** read message or file content. Users should only use hubs they trust for availability and metadata privacy, the same way they trust any network relay.
+| Mode | When it's used | Port-forward? |
+|------|----------------|---------------|
+| **LAN / VPN direct** | Whenever it works (always tried first) | No |
+| **Internet relay** | Automatically when there's no direct path | Only on the relay server (TCP 7827) |
+| **Direct WAN** | Advanced: you forward TCP 7825 | Yes, on the reachable peer |
 
 ### Threat assumptions
 
 - Peers on the same LAN or serial bus may observe traffic patterns.
 - Users must **verify peer identity** (32-char hash ID) out-of-band before trusting a contact.
 - LAN announce signatures authenticate discovery metadata but do **not** encrypt it — anyone on the LAN can still observe that you exist and read names/endpoints.
-- Hub presence signatures reduce spoofing but do not replace out-of-band identity verification before trusting.
-- Blocked peers are rejected at the application layer but may still appear in discovery or hub presence until TTL expires.
+- Pair locally (or compare the hash ID out of band); the relay is only used between contacts that are already paired.
+- Blocked peers are rejected at the application layer but may still appear in discovery until the entry expires.
 - Noise XX is experimental; mismatched handshake protocols between peers cause connection failure by design.
 
 ## Hardening Guidelines for Operators
@@ -101,25 +88,17 @@ You **cannot** read message or file content. Users should only use hubs they tru
 - File chunks use the same session keys as chat — larger TCP chunks do not reduce encryption strength.
 - Shared-folder grants are recipient-bound and time-limited; use E2EE peer share for sensitive folders.
 
-### Hub server (Bob)
+### Internet relay server
 
-- Forward only **TCP 7825** (or your chosen hub port) to the hub machine.
-- Run the hub on a host you control; keep the OS and Python runtime patched.
-- Do not modify hub code to log `RELAY_ENVELOPE` bodies — they are opaque by design, but logging metadata still harms user privacy.
-- Use a stable DNS name and TLS-terminated reverse proxy only if you understand the trade-offs; native SRLTCP hub traffic is already E2EE inside envelopes.
-
-### Hub clients (Alice, John)
-
-- Configure **Settings → Network → Connect via hub server** with Bob's public host and port.
-- Click **Announce** after connecting to register presence on the hub.
-- You only see other peers registered on the **same** hub.
-- No router port-forward is required on client devices.
+- Open only the relay port (TCP 7827, or 443) on the server; never port 9876.
+- Run it as an unprivileged user with the sandboxed systemd unit in `scripts/srltcp-relay.service`; keep the OS and Python patched.
+- Keep the relay code private (it has the access key); rotate it by deleting `access.key` and restarting.
+- Don't add logging of tokens or packet sizes — the relay only logs counters by design.
 
 ### Direct WAN (advanced)
 
 - Forward only **TCP 7825** on the machine that receives inbound connections.
 - Verify peer hash IDs before trusting manual WAN endpoints.
-- WAN dials are rate-limited (1/s per endpoint) to reduce connection storms.
 
 ### Android
 

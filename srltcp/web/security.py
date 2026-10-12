@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from urllib.parse import urlparse
 
 from aiohttp import web
@@ -73,7 +74,10 @@ async def security_middleware(request: web.Request, handler):  # type: ignore[no
         if referer and not _is_allowed_origin(referer):
             raise web.HTTPForbidden(text="Invalid referer")
 
-    response = await handler(request)
+    try:
+        response = await handler(request)
+    except json.JSONDecodeError:
+        response = web.json_response({"error": "invalid JSON"}, status=400)
     for key, value in SECURITY_HEADERS.items():
         response.headers[key] = value
     return response

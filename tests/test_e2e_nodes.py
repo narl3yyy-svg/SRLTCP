@@ -265,31 +265,6 @@ async def test_peer_cannot_overwrite_outgoing_file(pair, tmp_path: Path) -> None
     assert src.read_bytes() == b"original contents"
 
 
-async def test_hub_relay_end_to_end(tmp_path: Path) -> None:
-    hub = make_node(tmp_path, "hub", hub_mode=True)
-    await hub.start()
-    hub_port = hub.config.tcp_port
-    a = make_node(tmp_path, "alice", hub_enabled=True, hub_host="127.0.0.1", hub_port=hub_port)
-    b = make_node(tmp_path, "bob", hub_enabled=True, hub_host="127.0.0.1", hub_port=hub_port)
-    await a.start()
-    await b.start()
-    try:
-        ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
-        # Presence is registered automatically on connect.
-        assert await wait_for(lambda: a.discovery.get(bh, "hub") is not None)
-        assert await wait_for(lambda: b.discovery.get(ah, "hub") is not None)
-        trust(a, b)
-        trust(b, a)
-        await a.send_message(bh, "via hub")
-        assert await wait_for(lambda: "via hub" in texts(b), timeout=10)
-        assert a.get_link(bh).transport == "hub"
-        assert await wait_for(lambda: a.get_messages()[-1]["status"] == "delivered")
-    finally:
-        await a.stop()
-        await b.stop()
-        await hub.stop()
-
-
 async def test_qr_pairing_is_mutual(tmp_path: Path) -> None:
     """Bob scans Alice's card; both sides end up trusting each other."""
     a = make_node(tmp_path, "alice", lan_ip="127.0.0.1")

@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import sys
 
 from srltcp import __version__
 from srltcp.core.messaging.backend import NodeConfig
 from srltcp.core.messaging.constants import (
-    DEFAULT_HUB_PORT,
     DEFAULT_TCP_PORT,
     DISCOVERY_PORT,
     WEB_PORT,
 )
 from srltcp.core.node import SRLTCPNode
+from srltcp.core.relay_proto import DEFAULT_RELAY_PORT
 from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.utils.logging import get_logger, setup_logging
 from srltcp.utils.platform import default_serial_port
@@ -77,11 +78,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Verbose debug logging (all backend activity)",
     )
 
-    hub = sub.add_parser("hub", help="Start headless connection hub server")
-    hub.add_argument("--name", default="srltcp-hub", help="Hub display name (logs only)")
-    hub.add_argument("--bind", default="0.0.0.0", help="Bind address")
-    hub.add_argument("--port", type=int, default=DEFAULT_HUB_PORT, help="Hub TCP port")
-    hub.add_argument("--log-level", default="INFO", help="Log level")
+    for name in ("relay", "hub"):  # "hub" kept as an alias for older docs
+        relay = sub.add_parser(
+            name,
+            help="Run an internet relay (on a server with a public address)"
+            if name == "relay"
+            else "Alias for 'relay'",
+        )
+        relay.add_argument("--bind", default="0.0.0.0", help="Bind address (:: for IPv6 too)")
+        relay.add_argument("--port", type=int, default=DEFAULT_RELAY_PORT, help="TCP port")
+        relay.add_argument(
+            "--public-host", default="", help="Public IP or hostname to put in the relay code"
+        )
+        relay.add_argument("--data-dir", default="", help="Where the relay keeps its keys")
+        relay.add_argument("--log-level", default="INFO", help="Log level")
 
     send = sub.add_parser("send", help="Send a message (CLI)")
     send.add_argument("--recipient", required=True, help="Recipient hash ID")
@@ -108,10 +118,8 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         tcp_port=tcp_port,
         discovery_port=discovery_port,
         strict_ports=settings.strict_ports,
-        hub_enabled=settings.hub_enabled,
-        hub_host=settings.hub_host,
-        hub_lan_host=settings.hub_lan_host,
-        hub_port=settings.hub_port or DEFAULT_HUB_PORT,
+        relay_enabled=settings.relay_enabled,
+        relay_code=settings.relay_code,
         enable_tcp=not args.no_tcp,
         enable_serial=args.serial or settings.enable_serial,
         serial_port=args.serial_port or settings.serial_port or default_serial_port(),
@@ -225,25 +233,10 @@ def migrate_settings(settings: AppSettings, *, android: bool) -> bool:
     return changed
 
 
-async def run_hub(args: argparse.Namespace) -> None:
-    config = NodeConfig(
-        name=args.name,
-        bind_host=args.bind,
-        tcp_port=args.port,
-        hub_mode=True,
-        enable_tcp=True,
-        enable_serial=False,
-        announce=False,
-    )
-    settings = AppSettings(display_name=args.name, setup_complete=True)
-    node = SRLTCPNode(config, settings)
-    shutdown = GracefulShutdown()
-    shutdown.add_hook(node.stop)
+async def run_relay_command(args: argparse.Namespace) -> None:
+    from srltcp.core.relay_server import run_relay
 
-    await node.start()
-    log.info("Headless hub listening on %s:%d (Ctrl+C to stop)", args.bind, args.port)
-    await shutdown.wait()
-    await shutdown.run_cleanup()
+    await run_relay(args.bind, args.port, args.public_host, args.data_dir or None)
 
 
 async def run_send(args: argparse.Namespace) -> None:
@@ -416,8 +409,9 @@ def main() -> None:
 
     if args.command == "web":
         asyncio.run(run_web(args))
-    elif args.command == "hub":
-        asyncio.run(run_hub(args))
+    elif args.command in ("relay", "hub"):
+        with contextlib.suppress(KeyboardInterrupt):
+            asyncio.run(run_relay_command(args))
     elif args.command == "send":
         asyncio.run(run_send(args))
     elif args.command == "identity":

@@ -19,11 +19,11 @@ from srltcp.core.messaging.announce import AnnounceMixin
 from srltcp.core.messaging.connect import ConnectMixin
 from srltcp.core.messaging.constants import COMPRESS_THRESHOLD, DISCOVERY_PORT
 from srltcp.core.messaging.groups import GroupMixin
-from srltcp.core.messaging.hub import HubMixin
 from srltcp.core.messaging.links import PeerLink, PeerLinkMixin
 from srltcp.core.messaging.models import ChatMessage
 from srltcp.core.messaging.pairing import PairingMixin
 from srltcp.core.messaging.ping import PingMixin
+from srltcp.core.messaging.relay import RelayMixin, relay_peer_hash
 from srltcp.core.messaging.share_peer import SharePeerMixin
 from srltcp.core.messaging.store import MessageStore
 from srltcp.core.messaging.transfer import TransferMixin
@@ -62,11 +62,8 @@ class NodeConfig:
     tcp_port: int = 7825
     discovery_port: int = DISCOVERY_PORT
     strict_ports: bool = True
-    hub_mode: bool = False
-    hub_enabled: bool = False
-    hub_host: str = ""
-    hub_lan_host: str = ""
-    hub_port: int = 7825
+    relay_enabled: bool = True
+    relay_code: str = ""
     enable_tcp: bool = True
     enable_serial: bool = False
     serial_port: str = ""
@@ -85,7 +82,7 @@ class MessagingBackend(
     PingMixin,
     TransferMixin,
     SharePeerMixin,
-    HubMixin,
+    RelayMixin,
     PairingMixin,
     GroupMixin,
 ):
@@ -127,7 +124,7 @@ class MessagingBackend(
         self._init_ping()
         self._init_transfer()
         self._init_share_peer()
-        self._init_hub()
+        self._init_relay()
         self._init_pairing()
         self._init_groups()
 
@@ -161,10 +158,7 @@ class MessagingBackend(
         self.load_message_history()
 
         if self.config.enable_tcp:
-            if not self.config.hub_mode:
-                self.identities["tcp"] = self.identity_store.load_or_create(
-                    self.config.name, "tcp"
-                )
+            self.identities["tcp"] = self.identity_store.load_or_create(self.config.name, "tcp")
             self.tcp_transport = TCPTransport(
                 host=self.config.bind_host,
                 port=self.config.tcp_port,
@@ -192,22 +186,19 @@ class MessagingBackend(
                 self._record_serial_failure(self.serial_transport.port, exc)
                 self.serial_transport = None
 
-        if self.config.announce and not self.config.hub_mode:
+        if self.config.announce:
             await self.start_announce_loop()
-        if not self.config.hub_mode:
-            await self.start_ping_loop()
-        if self._hub_enabled():
-            await self.start_hub_client()
-        if not self.config.hub_mode:
-            await self.start_call_relay()
-            self.connect_known_contacts()
+        await self.start_ping_loop()
+        await self.start_call_relay()
+        if self.tcp_transport:
+            await self.start_relay_client()
+        self.connect_known_contacts()
 
         log.info(
-            "MessagingBackend started (tcp=%s, serial=%s, hub_mode=%s, hub_client=%s)",
+            "MessagingBackend started (tcp=%s, serial=%s, relay=%s)",
             bool(self.tcp_transport),
             bool(self.serial_transport),
-            self.config.hub_mode,
-            self._hub_enabled(),
+            bool(self.own_relay_code()),
         )
 
     async def stop(self) -> None:
@@ -219,7 +210,7 @@ class MessagingBackend(
         for task in list(self._dial_tasks.values()):
             task.cancel()
         self._dial_tasks.clear()
-        await self.stop_hub_client()
+        await self.stop_relay_client()
         await self.stop_announce_loop()
         await self.stop_ping_loop()
         for task in list(self._reconnect_tasks.values()):
@@ -381,8 +372,6 @@ class MessagingBackend(
         elif event.kind == "connected" and event.peer and event.peer.transport == "tcp":
             self._expire_if_unauthenticated(event.peer.peer_id)
         elif event.kind == "disconnected" and event.peer:
-            if self.config.hub_mode:
-                await self._handle_hub_depart_server(event.peer.peer_id)
             stale = self.get_link_by_peer_id(event.peer.peer_id)
             link_name = stale.peer_name if stale else ""
             link_hash = self.remove_link_for_peer(event.peer.peer_id)
@@ -423,17 +412,17 @@ class MessagingBackend(
                         "error": event.error,
                     }
                 )
-        self._on_hub_transport_event(event)
 
     def _expire_if_unauthenticated(self, peer_id: str) -> None:
-        """Close TCP connections that never complete a handshake (or, on a hub,
-        never register), so idle or junk connections can't pile up."""
+        """Close TCP connections that never complete a handshake, so idle or
+        junk connections can't pile up."""
 
         async def _check() -> None:
             await asyncio.sleep(HANDSHAKE_DEADLINE)
-            if self.get_link_by_peer_id(peer_id) or peer_id == self._hub_peer_id:
+            link = self.get_link_by_peer_id(peer_id)
+            if link and link.handshake_complete:
                 return
-            if self.config.hub_mode and self._hub_presence.hash_for_conn(peer_id):
+            if self.upgrade_for_peer_id(peer_id):
                 return
             if self.tcp_transport:
                 log.info("Closing connection %s: no handshake in time", peer_id[:8])
@@ -452,16 +441,11 @@ class MessagingBackend(
             return
 
         try:
-            if self.config.hub_mode:
-                if msg_type == MessageType.HUB_REGISTER:
-                    await self._handle_hub_register_server(peer.peer_id, body)
-                elif msg_type == MessageType.RELAY_ENVELOPE:
-                    await self._handle_hub_relay_server(peer.peer_id, body)
-                return
-
             if msg_type in SESSION_MESSAGE_TYPES:
                 await self._dispatch_session_message(peer, msg_type, flags, body)
             elif msg_type == MessageType.ANNOUNCE:
+                if peer.transport == "relay":
+                    return  # addresses only come from the local network
                 if peer.transport == "serial":
                     log.info("Serial ANNOUNCE received on %s", peer.address)
                 await self._handle_discovered(peer.address, peer.transport, body)
@@ -475,14 +459,6 @@ class MessagingBackend(
                 await self._reply_pong_with_rtt(peer, body)
             elif msg_type == MessageType.PONG:
                 await self._handle_pong(peer.peer_id, body)
-            elif peer.peer_id == self._hub_peer_id:
-                # Only our own hub connection may send hub control messages.
-                if msg_type == MessageType.HUB_PRESENCE:
-                    await self._handle_hub_presence_client(body)
-                elif msg_type == MessageType.HUB_DEPART:
-                    await self._handle_hub_depart_client(body)
-                elif msg_type == MessageType.RELAY_ENVELOPE:
-                    await self._handle_hub_relay_client(body)
         except Exception as exc:
             log.warning(
                 "Handler failed for msg_type=%s from %s: %s",
@@ -557,6 +533,8 @@ class MessagingBackend(
             await self._handle_call_signal(hash_id, body)
         elif msg_type == MessageType.CALL_MEDIA:
             self._handle_call_media(hash_id, body)
+        elif msg_type == MessageType.RENDEZVOUS:
+            await self._handle_rendezvous(hash_id, body)
 
     async def _handle_untrusted_message(
         self, link: PeerLink, msg_type: MessageType, body: bytes
@@ -680,6 +658,7 @@ class MessagingBackend(
         link = self.get_link(hash_id)
         if link and link.handshake_complete and self.is_trusted(hash_id):
             await self._send_receipt(link, "", "accepted")
+            await self.send_rendezvous(hash_id)
 
     def decline_contact_request(self, hash_id: str) -> None:
         """Dismiss a contact request until the app restarts."""
@@ -814,8 +793,8 @@ class MessagingBackend(
             link = self.get_link(peer.hash_id)
             if link and link.handshake_complete:
                 continue
-            if peer.tcp_host or peer.wan_host or self._hub_enabled():
-                self._kick_connect(peer.hash_id, peer.transport)
+            if peer.tcp_host or peer.wan_host or self.relay_available_for(peer.hash_id):
+                self._kick_connect(peer.hash_id)
 
     async def reap_dead_links(self, max_silence: float) -> list[str]:
         """Drop sessions whose peer stopped answering pings (network switch,
@@ -939,9 +918,11 @@ class MessagingBackend(
         await self._on_event({"kind": "call_signal", "hash_id": hash_id, "signal": data})
 
     async def _send_raw(self, peer_id: str, transport: str, packet: bytes) -> None:
-        if transport == "hub":
-            dest_hash = self._peer_id_to_hash.get(peer_id) or peer_id.removeprefix("hub-")
-            await self._send_via_hub(dest_hash, packet)
+        if transport == "relay":
+            dest_hash = relay_peer_hash(peer_id)
+            if not dest_hash:
+                raise KeyError("bad relay peer")
+            await self.send_via_relay(dest_hash, packet)
         elif transport == "tcp" and self.tcp_transport:
             await self.tcp_transport.send(peer_id, packet)
         elif transport == "serial" and self.serial_transport:
@@ -984,8 +965,7 @@ class MessagingBackend(
                 "baud": self.config.serial_baud,
                 "error": self._serial_error,
             }
-        if self._hub_enabled() or self.config.hub_mode:
-            status["hub"] = self.hub_status()
+        status["relay"] = self.relay_status()
         return status
 
     def _history_enabled(self) -> bool:
@@ -1089,9 +1069,14 @@ class MessagingBackend(
                     name = discovered.name
                 elif p.hash_id in self._links:
                     name = f"Peer {p.hash_id[:8]}"
-            d = p.to_dict()
+            d = p.public_dict()
             d["name"] = name
             link = self.get_link(p.hash_id)
+            d["path"] = (
+                ("relay" if link.transport == "relay" else "direct")
+                if link and link.handshake_complete
+                else ""
+            )
             if link:
                 if link.rtt_ms is not None:
                     d["rtt_ms"] = link.rtt_ms

@@ -3,9 +3,9 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-**SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
+**SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN/VPN, and keeps paired contacts in touch over the internet through your own **relay server**, switching automatically. The relay forwards sealed, padded packets: it can't read messages, see names or tell who talks to whom.
 
-**Current version:** 0.4.1 (chat works with 0.2.x; calls need 0.3.1+ and group chats 0.4.0 on every device; a hub must run 0.4.0 for 0.4.0 phones; not wire-compatible with 0.1.x)
+**Current version:** 0.5.0 — update every device: 0.5 uses a new handshake (v4) and the new internet relay, and doesn't talk to 0.4.x or older.
 
 ---
 
@@ -15,7 +15,7 @@
 |---------|-------------|
 | **Dual transports** | TCP/IP networking + USB Serial (pyserial) |
 | **P2P mode** | Direct encrypted links between peers on LAN or serial cable |
-| **Hub server** | Optional headless hub — clients dial out, discover each other, E2EE via hub |
+| **Internet relay** | Paired contacts keep talking with the VPN off or on different networks; automatic switching between direct and relay; the relay is blind (TLS + pinned cert, rotating mailboxes, second encryption layer, padding) |
 | **Secure messaging** | Ed25519 identity + authenticated X25519 key exchange + AES-256-GCM with replay protection |
 | **Fast file transfer** | Chunked streaming (1 MiB TCP / 8 KiB serial), zstd on TCP, resume support |
 | **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
@@ -64,8 +64,7 @@ srltcp/
       pairing.py            # Contact cards (QR / link / NFC) + mutual pairing
       store.py              # On-disk chat history
       transfer.py           # Chunked file transfer
-      hub.py                # Hub client + server forwarding
-      presence.py           # Hub presence registry
+      relay.py              # Internet relay client + direct/relay path switching
   transports/
     tcp.py                  # TCP listener + UDP discovery
     serial.py               # USB serial (pyserial)
@@ -104,31 +103,31 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 | **Web UI (9876)** | Browser ↔ local node over HTTPS | Localhost TLS + access token; other local apps can't use the API |
 | **Calls** | WebRTC media (DTLS-SRTP) carried inside the SRLTCP session via a local relay | Yes — double-encrypted: DTLS-SRTP inside the E2EE session |
 | **NFC pairing** | Contact cards (public key, name, LAN address) | Public data; requires phones a few cm apart |
-| **Hub (optional 7825)** | `RELAY_ENVELOPE` routing tokens + opaque blob | Hub sees hash routing tokens only, not content |
+| **Internet relay (7827, TLS)** | Rotating mailbox tokens + padded blobs sealed with the pair key, inside the E2EE session | Yes — three layers; the relay sees only IPs, timing and rough volume |
 
 **File transfer flow:** upload to local staging → `FILE_OFFER` (encrypted JSON) → `FILE_ACCEPT` → encrypted `FILE_CHUNK` stream → `FILE_COMPLETE` with SHA-256 verify. The receiver writes to your configured incoming folder; the Web UI serves completed files from disk for preview/download.
 
 **WAN use:** Forward **TCP 7825** to your node. Traffic after handshake is E2EE. An observer on the internet can still see connection timing, packet sizes, and your public IP — verify peer hash IDs out-of-band before trusting. Set WAN host/port per contact (Add contact or contact menu → WAN).
 
-### Hub privacy
+### Internet relay privacy
 
-When using a hub, the server forwards `RELAY_ENVELOPE` packets containing only:
+Over the internet, paired phones meet at a relay you run (`srltcp relay`). It is treated as untrusted:
 
-- 16-byte binary routing tokens (destination and source identity hashes)
-- An opaque encrypted blob (handshake, chat, file chunks — all E2EE)
-
-The hub **never receives session keys** and cannot decrypt message or file content. Hub registration is signed with your Ed25519 identity to reduce presence spoofing.
+- **TLS 1.3 with a pinned certificate.** The relay code contains the certificate's SHA-256, so nobody can impersonate the relay, and the network only sees TLS. An access key in the code keeps strangers from using it.
+- **No identities.** Phones subscribe to *mailboxes*: random-looking tokens derived from a secret shared only by the two contacts, rotating daily. The relay never learns names, identity hashes or keys, and can't tell which contacts talk to each other except through IP addresses and timing.
+- **Second encryption layer.** Every relayed packet is sealed again with a key only the two contacts have (ChaCha20-Poly1305, one key per direction), padded to 256-byte / 4 KiB buckets, and checked against replays. The relay sees opaque, similar-sized blobs and can't read message types, inject packets or replay them.
+- **Inside:** the normal SRLTCP session (signed handshake with forward secrecy, AES-GCM).
+- Nothing is stored on the relay. See [docs/INTERNET_RELAY.md](docs/INTERNET_RELAY.md).
 
 ### What is not encrypted
 
 - LAN/UDP discovery announces (names, IPs, ports — signed but not encrypted)
-- Hub presence (who is online on a hub — names and hash IDs)
-- Hub routing metadata (identity hash tokens, timing, approximate sizes)
+- Relay metadata: the relay operator sees your IP address, when you are connected and roughly how much you send
 - Connection metadata (who talks to whom, when)
 - Local settings, trusted-peer list, and chat history on disk (owner-only permissions, not encrypted at rest)
 - Self-signed localhost HTTPS certificate (browser trust is manual; the Android app pins it)
 
-See [SECURITY.md](SECURITY.md) for vulnerability reporting, hub operator guidance, and hardening.
+See [SECURITY.md](SECURITY.md) for vulnerability reporting, the threat model and hardening; the latest penetration test is in [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md).
 
 ### Web UI hardening
 
@@ -153,9 +152,8 @@ On first launch, the web UI shows a setup wizard. Settings persist in `~/.srltcp
 | Incoming files folder | Where received files are saved |
 | Shared folder | Default folder for browse/share |
 | LAN IP | Pinned interface for discovery & announce |
-| Auto-announce | Broadcast presence every 5 seconds (LAN only; hub clients re-register on hub when enabled) |
-| Connect via hub | Enable outbound connection to a shared hub server (no client port-forward) |
-| Hub host / port | Public address of the headless hub (default port **7825**) |
+| Auto-announce | Broadcast presence every 5 seconds (LAN/VPN only) |
+| Internet relay | On by default. Paste the code from `srltcp relay` on one phone; contacts get it automatically |
 | WAN port-forward | Advanced: acknowledge you will forward TCP **7825** for direct WAN peers |
 | Timezone | Region for the status clock (time shown at top of sidebar) |
 | Show clock | Toggle live clock in the UI |
@@ -236,7 +234,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.4.1.apk`
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.5.0.apk`
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -244,7 +242,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.4.1.apk`
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.4.1.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.5.0.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -255,7 +253,7 @@ adb logcat -c                               # clear old logs
 adb logcat -s SRLTCP:* python.stderr:*      # follow SRLTCP + Python output
 ```
 
-**On the phone:** tap **☰** for contacts, **⚙** for Settings (full-screen). Default folders: `Downloads/SRLTCP/Incoming` and `Downloads/SRLTCP/Shared` (grant storage access when prompted). Serial/USB is disabled; TCP and hub work over Wi‑Fi.
+**On the phone:** tap **☰** for contacts, **⚙** for Settings (full-screen). Default folders: `Downloads/SRLTCP/Incoming` and `Downloads/SRLTCP/Shared` (grant storage access when prompted). Serial/USB is disabled; TCP works over Wi‑Fi, mobile data and VPN; the internet relay covers the rest.
 
 | Symptom | What to do |
 |---------|------------|
@@ -302,12 +300,13 @@ After that, addresses look after themselves: when a contact's IP changes (new Wi
 - Allow UDP **7826** (discovery) and TCP **7825** (connections) between peers. Port 9876 is local-only and never needs opening.
 - Test from phone A's browser: `https://10.0.100.5:9876` should show a certificate warning or "SRLTCP is locked" — that proves the phones can reach each other.
 
-### Phones on different mobile carriers
+### Phones on different mobile carriers / without the VPN
 
-Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data has **no address another phone can connect to**, so no app can link two such phones without something reachable in the middle. SRLTCP gives you two private options — neither can read your messages:
+Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data has **no address another phone can connect to**, so something reachable has to sit in the middle. SRLTCP uses your own server for that, and switches by itself:
 
-1. **WireGuard (recommended)** — put both phones on your WireGuard server. Everything works: discovery, chat, files and calls (calls go directly over the tunnel).
-2. **SRLTCP hub** — run `srltcp hub` on any machine with a public address (your WireGuard server works) and enable *Settings → Network → Connect via hub server* on both phones. Chat, files and calls are relayed as end-to-end encrypted blobs — no TURN server needed.
+1. **Pair locally** (same Wi-Fi, WireGuard, QR or NFC).
+2. **Internet relay** — run `srltcp relay` on a server with a public address (your WireGuard server is perfect) and paste the code it prints into *Settings → Network → Internet relay* on **one** phone. The other phone learns it automatically inside the encrypted connection.
+3. From then on the phones use a **direct** path whenever one works (LAN / VPN) and the **relay** otherwise — VPN off, different carriers, Wi-Fi to mobile data. Moving to the relay takes a few seconds (3 s in our test); when the VPN comes back they move back to direct within about a minute. Messages, files, voice and video calls all work over the relay. Contacts show **TCP** (direct) or **RELAY**.
 
 ### Pairing
 
@@ -327,7 +326,7 @@ Tap the contact's name at the top of a chat, the **⋮** next to a contact, or l
 
 ### Calls
 
-Voice and video calls use WebRTC. Offer/answer are sent inside the encrypted SRLTCP session, so DTLS fingerprints are authenticated by the contact's identity key. The media itself also goes through the session: each device runs a tiny TURN relay on localhost for its own browser/WebView, and the relay forwards the (already DTLS-SRTP encrypted) packets to the other phone as encrypted `CALL_MEDIA` messages. So **calls work wherever chat works** — same Wi-Fi, WireGuard/VPN, or through an SRLTCP hub across mobile carriers — with no STUN/TURN server and no firewall holes beyond TCP 7825.
+Voice and video calls use WebRTC. Offer/answer are sent inside the encrypted SRLTCP session, so DTLS fingerprints are authenticated by the contact's identity key. The media itself also goes through the session: each device runs a tiny TURN relay on localhost for its own browser/WebView, and the relay forwards the (already DTLS-SRTP encrypted) packets to the other phone as encrypted `CALL_MEDIA` messages. So **calls work wherever chat works** — same Wi-Fi, WireGuard/VPN, or over the internet relay across mobile carriers — with no STUN/TURN server.
 
 ### Group chats
 
@@ -341,51 +340,28 @@ Voice and video calls use WebRTC. Offer/answer are sent inside the encrypted SRL
 
 ### When the VPN is off
 
-Phones on different mobile carriers can only reach each other through something in the middle: your WireGuard server or an SRLTCP hub. With the VPN switched off (and no hub), a message waits on your phone (tap its tick: *Waiting to send*) and goes out by itself a few seconds after the VPN is back on — nothing is lost. To keep messaging without the VPN, run `srltcp hub` on a machine with a public address and turn on *Settings → Network → Connect via hub server* on both phones.
+With an internet relay set up (see above), nothing changes: messages and calls go through the relay. Without one, phones on different networks can't reach each other: a message waits on your phone (tap its tick: *Waiting to send*) and goes out by itself a few seconds after a path is back — nothing is lost.
 
 ### Running in the background (Android)
 
 SRLTCP keeps running after you close it, like any messenger, so messages, calls and contact requests arrive as notifications. To stop it completely, **swipe the SRLTCP notification away** (Android 14 and newer) or tap **Quit** on it (any version — older Android keeps that notification pinned). Opening the app starts it again.
 
-### Hub server (recommended for internet users)
+### Internet relay server
 
-Bob runs a headless hub on a machine with a public IP (home PC with port-forward, or a VPS). **Only Bob** needs to forward **TCP 7825** on his router.
-
-```bash
-# Bob — always-on hub (default port 7825)
-./run.sh hub --bind 0.0.0.0 --port 7825
-
-# Custom port (update router forward and client settings to match)
-./run.sh hub --bind 0.0.0.0 --port 9000
-```
-
-Alice and John run normal clients — **no port-forward on their routers**:
+On a Linux server with a public address (the WireGuard server works well):
 
 ```bash
-./run.sh web --name "alice"
-./run.sh web --name "john"
+git clone https://github.com/narl3yyy-svg/SRLTCP.git && cd SRLTCP
+python3 -m venv .venv && .venv/bin/pip install -e .
+.venv/bin/srltcp relay --public-host YOUR.SERVER.IP     # default port 7827
 ```
 
-In each client: **Settings → Network**
-
-1. Enable **Connect via hub server**
-2. Enter Bob's public host (`hub.bob.example.com` or IP) and port (`7825`)
-3. Save settings
-
-Then click **Announce** (TCP button). Each client registers on Bob's hub. Alice sees John in **Discovered** (and vice versa) only when both use the **same** hub. Trust the peer, open chat, and message — traffic is tunneled through the hub but remains end-to-end encrypted.
+It prints a relay code (`srltcp-relay://…`). Paste it into *Settings → Network → Internet relay* on one phone. Open **TCP 7827** in the server's firewall (or use `--port 443` if nothing else uses it — it then looks like ordinary HTTPS). Keep the code private: it contains the access key. Running it as a service, updating, and what the relay can and can't see: [docs/INTERNET_RELAY.md](docs/INTERNET_RELAY.md).
 
 ```
-Alice (home)                    Bob's hub (port 7825)              John (home)
-   |---- outbound TCP ---------->|                                |
-   |                             |<--------- outbound TCP --------|
-   |<======== RELAY_ENVELOPE (opaque E2EE) =======================>|
+phone A ──TLS──▶ relay (sees: IPs, timing, sealed padded blobs) ◀──TLS── phone B
+        └────────────── E2EE session inside, pair-key sealed ───────────────┘
 ```
-
-**Security notes:**
-
-- Verify peer **hash IDs** out-of-band before trusting
-- Do **not** port-forward port **9876** (web UI stays localhost-only)
-- Hub operator sees who is online and approximate traffic timing/sizes, not message content
 
 ### USB Serial P2P
 
@@ -487,7 +463,7 @@ curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" "https://127.0.0.1:9876/api/sha
 
 ### WAN / manual peer connections (internet)
 
-> **Tip:** If you do not want to port-forward on every device, use **hub mode** (see above) instead. Direct WAN is for advanced users who control router settings.
+> **Tip:** If you do not want to port-forward, use the **internet relay** (see above). Direct WAN is for advanced users who control router settings.
 
 SRLTCP does **not** broadcast your node to the public internet. WAN connectivity is **opt-in and manual** per trusted contact.
 
@@ -542,9 +518,9 @@ SRLTCP listens on **TCP 7825** by default for encrypted P2P messaging (handshake
 **Tips for maximum speed:**
 
 - Use wired Ethernet or USB 3 serial adapters at 115200+ baud
-- Prefer direct LAN P2P when on the same network (one less hop than hub)
+- Direct LAN/VPN paths are used automatically whenever they work (one less hop than the relay)
 - Disable compression for pre-compressed archives (future: per-file flag)
-- Run the hub on a low-latency host close to your users
+- Run the relay on a low-latency host close to your users (calls go through it when there's no direct path)
 
 ---
 
@@ -558,7 +534,7 @@ pip install -e ".[dev]"
 # Tests use SRLTCP_DATA_DIR automatically — do not run pytest against ~/.srltcp
 
 ./run.sh web                    # HTTPS web UI + P2P node (open the ?token= link it prints)
-./run.sh hub                    # headless hub on TCP 7825
+./run.sh relay --public-host IP  # internet relay on TCP 7827
 bash scripts/check.sh           # ruff + mypy + pytest (run before tagging)
 pytest tests/ -v
 ```
@@ -566,7 +542,7 @@ pytest tests/ -v
 | Command | Description |
 |---------|-------------|
 | `srltcp web` | Web UI + P2P node |
-| `srltcp hub` | Headless connection hub server |
+| `srltcp relay` | Internet relay server (`hub` still works as an alias) |
 | `srltcp send` | One-shot CLI message |
 | `srltcp identity` | Show local hash IDs |
 | `srltcp url` | Print the private web UI link (with access token) |
@@ -604,6 +580,11 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [x] Signed LAN announces — Ed25519 signatures on UDP discovery; reject unsigned/spoofed peers (v0.1.57)
 - [x] Noise XX handshake option — Settings → Network (experimental; both peers must match) (v0.1.57)
 
+**Done (v0.5.0)**
+
+- [x] Internet relay v2: paired contacts stay in touch without the VPN, automatic direct/relay switching, blind relay (TLS pinned, rotating mailboxes, pair-key sealing, padding)
+- [x] Handshake v4 (signature names the recipient), penetration test with automated harnesses (`scripts/pentest/`)
+
 **Done (v0.4.1)**
 
 - [x] Swipe the background notification away to stop SRLTCP completely
@@ -637,12 +618,12 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 **Planned**
 
 - [ ] Files and voice/video calls in group chats
-- [x] Built-in call relay (calls through the encrypted session, also via the hub)
+- [x] Built-in call relay (calls through the encrypted session, also via the internet relay)
 - [ ] Calls over serial/RF
 - [ ] Encrypted-at-rest chat history
 - [ ] Wi-Fi Direct / Bluetooth transport for phone-to-phone without a router
 
-- [ ] Multi-hop hub chains with source routing and loop prevention
+- [ ] Several relays per contact (failover) and multi-hop relaying
 - [ ] Android USB serial Chaquopy shim (full OTG support)
 - [ ] Folder sync (bidirectional, incremental)
 - [ ] Contact book with pinned peer hashes

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from srltcp.core.protocol.messages import decode_payload
-from srltcp.core.protocol.signed import verify_identity_binding, verify_signed_payload
+from srltcp.core.protocol.signed import verify_signed_payload
 from srltcp.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -46,6 +46,10 @@ class DiscoveredPeer:
 class DiscoveryRegistry:
     """Track discovered peers with TTL expiry."""
 
+    # Anyone can make a fresh identity and sign announces for it, so the
+    # registry is bounded: an announce flood can't exhaust memory.
+    MAX_PEERS = 1024
+
     def __init__(self, ttl: float = 120.0) -> None:
         self._peers: dict[str, DiscoveredPeer] = {}
         self.ttl = ttl
@@ -64,26 +68,13 @@ class DiscoveryRegistry:
             if not verify_signed_payload(data):
                 log.debug("Rejected unsigned or invalid announce signature")
                 return None, False
-        elif ann_type == "hub_register":
-            # Hub forwards the member's own signed registration.
-            if not verify_signed_payload(data, signature_field="hub_signature"):
-                log.debug("Rejected hub presence with invalid signature")
-                return None, False
-        elif ann_type == "hub_presence":
-            # Legacy hubs strip the signature; at least require hash/key binding.
-            if not verify_identity_binding(
-                str(data.get("hash_id", "")), str(data.get("public_key", ""))
-            ):
-                return None, False
         else:
             return None, False
         hash_id = str(data.get("hash_id", "")).lower()
         if not hash_id:
             return None, False
         ann_transport = str(data.get("transport", transport))
-        if data.get("via_hub") or ann_type in ("hub_presence", "hub_register"):
-            ann_transport = "hub"
-        if ann_transport not in ("tcp", "serial", "hub"):
+        if ann_transport not in ("tcp", "serial"):
             ann_transport = transport
         try:
             tcp_port = int(data.get("tcp_port", 7825))
@@ -120,7 +111,25 @@ class DiscoveryRegistry:
             },
         )
         self._peers[peer_key] = peer
+        if len(self._peers) > self.MAX_PEERS:
+            self._evict(keep=peer_key)
         return peer, is_new
+
+    def _evict(self, keep: str) -> None:
+        """Drop expired entries, then the stalest ones (contact requests last)."""
+        now = time.time()
+        for key in [k for k, p in self._peers.items() if now - p.last_seen > self._ttl_for(p)]:
+            if key != keep:
+                del self._peers[key]
+        if len(self._peers) <= self.MAX_PEERS:
+            return
+        order = sorted(
+            (k for k in self._peers if k != keep),
+            key=lambda k: (bool(self._peers[k].metadata.get("contact_request")),
+                           self._peers[k].last_seen),
+        )
+        for key in order[: len(self._peers) - self.MAX_PEERS]:
+            del self._peers[key]
 
     def upsert_contact_request(
         self,
