@@ -115,6 +115,8 @@ class DiscoveryRegistry:
             metadata={
                 "type": ann_type,
                 "discovery_port": data.get("discovery_port"),
+                "reply": bool(data.get("reply")),
+                "ts": data.get("ts") if isinstance(data.get("ts"), int | float) else 0,
             },
         )
         self._peers[peer_key] = peer

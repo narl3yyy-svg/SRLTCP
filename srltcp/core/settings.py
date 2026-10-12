@@ -90,7 +90,7 @@ class AppSettings:
     message_retention_preset: str = "1w"
     incoming_files_dir: str = ""
     shared_folder: str = ""
-    auto_announce: bool = False
+    auto_announce: bool = True
     enable_serial: bool = False
     serial_port: str = ""
     serial_baud: int = 57600

@@ -304,17 +304,35 @@ class ConnectMixin:
             if not endpoint:
                 log.warning("No host for peer %s", hash_id[:8])
                 return False
+            candidates = [endpoint]
+            if not host and trusted and isinstance(trusted, TrustedPeer):
+                for alt in trusted.alt_hosts:
+                    cand = (alt, endpoint[1])
+                    if cand not in candidates:
+                        candidates.append(cand)
+            peer_id = ""
             target_host, target_port = endpoint
-            try:
-                peer_id = await self.tcp_transport.connect(target_host, target_port)
-            except (OSError, TimeoutError, ConnectionError) as exc:
-                log.warning(
-                    "TCP connect to %s:%s failed: %s",
-                    target_host,
-                    target_port,
-                    exc,
-                )
+            for target_host, target_port in candidates:
+                try:
+                    peer_id = await self.tcp_transport.connect(
+                        target_host, target_port, timeout=8.0 if len(candidates) == 1 else 5.0
+                    )
+                    break
+                except (OSError, TimeoutError, ConnectionError) as exc:
+                    log.warning(
+                        "TCP connect to %s:%s failed: %s",
+                        target_host,
+                        target_port,
+                        exc or type(exc).__name__,
+                    )
+            if not peer_id:
                 return False
+            if trusted and isinstance(trusted, TrustedPeer) and target_host != trusted.tcp_host:
+                # Remember the address that worked so the next dial is instant.
+                others = [
+                    h for h in [trusted.tcp_host, *trusted.alt_hosts] if h and h != target_host
+                ]
+                self.trusted.update(hash_id, tcp_host=target_host, alt_hosts=others)
             link = PeerLink(
                 hash_id=hash_id,
                 transport_peer_id=peer_id,

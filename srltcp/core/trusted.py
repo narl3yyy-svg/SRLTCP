@@ -50,6 +50,8 @@ class TrustedPeer:
     connection_mode: str = "auto"  # auto | lan | wan
     blocked: bool = False
     added_at: float = field(default_factory=time.time)
+    # Other addresses from the contact card (e.g. Wi-Fi + WireGuard), tried in order.
+    alt_hosts: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -145,6 +147,7 @@ class TrustedStore:
         wan_port: int | None = None,
         wan_enabled: bool | None = None,
         connection_mode: str | None = None,
+        alt_hosts: list[str] | None = None,
     ) -> TrustedPeer | None:
         peer = self._peers.get(hash_id)
         if not peer:
@@ -165,5 +168,7 @@ class TrustedStore:
             peer.wan_enabled = wan_enabled
         if connection_mode is not None and connection_mode in ("auto", "lan", "wan"):
             peer.connection_mode = connection_mode
+        if alt_hosts is not None:
+            peer.alt_hosts = [h.strip() for h in alt_hosts if h.strip()][:4]
         self.save()
         return peer

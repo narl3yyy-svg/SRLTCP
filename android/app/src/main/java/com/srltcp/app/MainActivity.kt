@@ -252,7 +252,10 @@ class MainActivity : AppCompatActivity() {
             root.addView(wv)
         }
         setContentView(root)
-        NfcPairing.listener = { result -> deliverToWeb("onAndroidNfcResult", JSONObject.quote(result)) }
+        NfcPairing.listener = { result ->
+            if (!result.contains("\"error\"")) vibrate(longArrayOf(0, 60, 80, 60))
+            deliverToWeb("onAndroidNfcResult", JSONObject.quote(result))
+        }
 
         if (savedInstanceState != null) {
             webView?.restoreState(savedInstanceState)
@@ -533,32 +536,110 @@ class MainActivity : AppCompatActivity() {
 
     fun isNfcAvailable(): Boolean = NfcAdapter.getDefaultAdapter(this) != null
 
-    /** Enable reader mode; returns false when NFC is missing or switched off. */
-    fun startNfcReader(): Boolean {
-        val adapter = NfcAdapter.getDefaultAdapter(this) ?: return false
-        if (!adapter.isEnabled) return false
-        runOnUiThread {
+    // NFC tap-to-pair. Two phones cannot both be readers at once, so while the
+    // Pair screen is open each phone randomly alternates between reading
+    // (reader mode) and being read (host card emulation). Held back to back,
+    // the phones line up within a second or two and swap contact cards.
+    private var nfcAuto = false
+    @Volatile private var nfcExchanging = false
+    private var nfcReaderOn = false
+    private val nfcRandom = java.util.Random()
+    private val nfcCycle = object : Runnable {
+        override fun run() {
+            if (!nfcAuto) return
+            if (!nfcExchanging) {
+                if (nfcReaderOn) disableReader() else enableReader()
+            }
+            handler.postDelayed(this, 500L + nfcRandom.nextInt(600))
+        }
+    }
+
+    private fun enableReader() {
+        val adapter = NfcAdapter.getDefaultAdapter(this) ?: return
+        try {
             adapter.enableReaderMode(
                 this,
-                { tag: Tag ->
-                    val result = NfcPairing.exchangeAsReader(tag)
-                    deliverToWeb("onAndroidNfcResult", JSONObject.quote(result))
-                    if (!result.contains("\"error\"")) {
-                        runOnUiThread { stopNfcReader() }
-                    }
-                },
+                { tag: Tag -> onNfcTag(tag) },
                 NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_NFC_B or
                     NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK or NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS,
                 null
             )
+            nfcReaderOn = true
+        } catch (e: Exception) {
+            Log.w(TAG, "enableReaderMode failed", e)
         }
-        return true
     }
 
-    fun stopNfcReader() {
+    private fun disableReader() {
         try {
             NfcAdapter.getDefaultAdapter(this)?.disableReaderMode(this)
         } catch (_: Exception) { /* ignore */ }
+        nfcReaderOn = false
+    }
+
+    private fun onNfcTag(tag: Tag) {
+        nfcExchanging = true
+        try {
+            val result = NfcPairing.exchangeAsReader(tag)
+            val json = try { JSONObject(result) } catch (_: Exception) { JSONObject() }
+            if (json.optBoolean("retry", false) && nfcAuto) return  // keep cycling quietly
+            if (!json.has("error")) {
+                vibrate(longArrayOf(0, 60, 80, 60))
+                runOnUiThread { stopNfcReader() }
+            }
+            deliverToWeb("onAndroidNfcResult", JSONObject.quote(result))
+        } finally {
+            nfcExchanging = false
+        }
+    }
+
+    fun vibrate(pattern: LongArray) {
+        try {
+            val vib = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (getSystemService(android.os.VibratorManager::class.java))?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vib?.vibrate(android.os.VibrationEffect.createWaveform(pattern, -1))
+            } else {
+                @Suppress("DEPRECATION")
+                vib?.vibrate(pattern, -1)
+            }
+        } catch (_: Exception) { /* no vibrator */ }
+    }
+
+    /**
+     * Start automatic NFC pairing. Returns "ok", "off" (NFC disabled) or
+     * "missing" (no NFC hardware).
+     */
+    fun startNfcReader(): String {
+        val adapter = NfcAdapter.getDefaultAdapter(this) ?: return "missing"
+        if (!adapter.isEnabled) return "off"
+        runOnUiThread {
+            if (!nfcAuto) {
+                nfcAuto = true
+                handler.removeCallbacks(nfcCycle)
+                // Random start phase so two phones opened together do not stay in sync.
+                handler.postDelayed(nfcCycle, nfcRandom.nextInt(700).toLong())
+            }
+        }
+        return "ok"
+    }
+
+    fun stopNfcReader() {
+        nfcAuto = false
+        handler.removeCallbacks(nfcCycle)
+        disableReader()
+    }
+
+    fun openNfcSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_NFC_SETTINGS))
+        } catch (_: Exception) {
+            startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+        }
     }
 
     private var pinnedCertSha256: String? = null

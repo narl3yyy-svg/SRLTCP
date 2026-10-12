@@ -1678,3 +1678,17 @@ label.field > span {
   .chat-peer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #chat-peer-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
+
+/* ── Edit contact ── */
+.field-row { display: flex; gap: 0.6rem; align-items: flex-end; }
+.field-row .field.grow { flex: 1; min-width: 0; }
+.field-row .field.port { width: 6.5rem; flex: none; }
+.edit-advanced { margin: 0.5rem 0; }
+.edit-advanced summary { cursor: pointer; color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.5rem; }
+.modal-actions .spacer { flex: 1; }
+.contact-more { background: none; border: none; color: var(--text-muted); font-size: 1.15rem; line-height: 1; padding: 0.25rem 0.45rem; border-radius: 6px; cursor: pointer; }
+.contact-more:hover { background: var(--surface-hover); color: var(--text); }
+#chat-peer-name, #peer-avatar { cursor: pointer; }
+.find-ip { padding: 0.75rem; border-radius: 10px; background: var(--accent-soft); margin-bottom: 0.75rem; }
+.find-ip h4 { margin: 0 0 0.25rem; }
+.find-ip .field-row .action-btn { margin-bottom: 0.35rem; }

@@ -109,8 +109,11 @@ class TCPTransport(Transport):
         if conn:
             await conn.close()
 
-    async def connect(self, host: str, port: int) -> str:
-        reader, writer = await asyncio.open_connection(host, port)
+    async def connect(self, host: str, port: int, *, timeout: float = 8.0) -> str:
+        # Without a timeout an unreachable VPN/LAN host blocks for ~2 minutes.
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=timeout
+        )
         peer_id = str(uuid.uuid4())
         address = f"{host}:{port}"
         peer = TransportPeer(peer_id=peer_id, address=address, transport="tcp")
@@ -158,8 +161,32 @@ class TCPTransport(Transport):
         dest_ports = {DISCOVERY_PORT, self.discovery_port}
         for target in broadcast_targets():
             for port in sorted(dest_ports):
-                self._discovery_transport.sendto(payload, (target, port))
+                try:
+                    self._discovery_transport.sendto(payload, (target, port))
+                except OSError as exc:
+                    # e.g. ENETUNREACH on an interface that just went away
+                    log.debug("Broadcast to %s:%d failed: %s", target, port, exc)
         return True
+
+
+    async def unicast_discovery(
+        self, payload: bytes, hosts: list[str], ports: set[int] | None = None
+    ) -> int:
+        """Send a discovery packet to specific addresses (VPNs carry no broadcast)."""
+        if not self._discovery_transport or not hosts:
+            return 0
+        dest_ports = sorted(ports or {DISCOVERY_PORT, self.discovery_port})
+        sent = 0
+        for i, host in enumerate(hosts):
+            for port in dest_ports:
+                try:
+                    self._discovery_transport.sendto(payload, (host, port))
+                    sent += 1
+                except OSError:
+                    continue
+            if i % 64 == 63:
+                await asyncio.sleep(0.02)  # pace large sweeps so the socket buffer keeps up
+        return sent
 
 
 class _DiscoveryProtocol(asyncio.DatagramProtocol):
@@ -167,6 +194,8 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
         self._tcp = transport
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        if len(data) > 8192:  # announces are ~400 bytes; ignore junk
+            return
         peer = TransportPeer(
             peer_id=f"discovered-{addr[0]}:{addr[1]}",
             address=f"{addr[0]}:{addr[1]}",

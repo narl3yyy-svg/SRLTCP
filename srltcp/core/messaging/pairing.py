@@ -157,12 +157,21 @@ class PairingMixin:
         self._outgoing_pair_tokens: dict[str, str] = {}
 
     def _card_endpoints(self: MessagingBackend) -> list[tuple[str, int]]:
-        endpoints: list[tuple[str, int]] = []
-        if self.tcp_transport:
-            ip = self._lan_ip()
-            if ip and not ip.startswith("127."):
-                endpoints.append((ip, self.config.tcp_port))
-        return endpoints
+        """Every address we can be reached on — VPN first, then LAN/mobile."""
+        from srltcp.utils.network import is_vpn_interface, list_interfaces
+
+        if not self.tcp_transport:
+            return []
+        port = self.config.tcp_port
+        ifaces = sorted(list_interfaces(), key=lambda i: 0 if is_vpn_interface(i) else 1)
+        ips: list[str] = []
+        if self.config.lan_ip:
+            ips.append(self.config.lan_ip)
+        for iface in ifaces:
+            ip = str(iface.get("ip", ""))
+            if ip and not ip.startswith("127.") and ip not in ips:
+                ips.append(ip)
+        return [(ip, port) for ip in ips[:4]]
 
     def create_pairing_card(self: MessagingBackend, *, one_time: bool = True) -> dict[str, Any]:
         identity = self.identities.get("tcp") or next(iter(self.identities.values()), None)
@@ -193,6 +202,7 @@ class PairingMixin:
             raise PairingError("that is your own pairing code")
         existing = self.trusted.get(card.hash_id)
         host, port = card.endpoints[0] if card.endpoints else ("", 7825)
+        alts = [h for h, _p in card.endpoints[1:]]
         if existing:
             if existing.public_key and existing.public_key != card.public_key_hex:
                 raise PairingError("contact key changed — remove the old contact first")
@@ -202,6 +212,7 @@ class PairingMixin:
                 blocked=False,
                 tcp_host=host or None,
                 tcp_port=port if host else None,
+                alt_hosts=alts if host else None,
             )
             self.trusted.set_public_key(card.hash_id, card.public_key_hex)
             peer = self.trusted.get(card.hash_id)
@@ -215,6 +226,7 @@ class PairingMixin:
                 public_key=card.public_key_hex,
                 tcp_host=host,
                 tcp_port=port,
+                alt_hosts=alts,
             )
         )
 

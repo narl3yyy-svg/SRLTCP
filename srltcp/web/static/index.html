@@ -484,8 +484,19 @@
 </div>
 <div class="modal-overlay" id="add-contact-modal" aria-hidden="true">
 <div class="modal-card">
-<h3>Add contact manually</h3>
-<p class="hint">Enter a peer's 32-character hash ID (from their SRLTCP profile). Set LAN and/or WAN host/port for manual connections when discovery is unavailable.</p>
+<h3>Add contact</h3>
+<section class="find-ip">
+<h4>Find a device by IP</h4>
+<p class="hint">Works over WireGuard/VPN and LAN. SRLTCP must be open on the other device; it will appear under <strong>Discovered</strong>, ready to trust.</p>
+<div class="field-row">
+<label class="field grow"><span>IP address or hostname</span>
+<input type="text" id="find-ip-input" placeholder="e.g. 10.0.100.5" autocomplete="off" spellcheck="false" inputmode="decimal" />
+</label>
+<button type="button" class="action-btn" id="find-ip-btn">Find</button>
+</div>
+</section>
+<h4 class="drawer-subhead">Or enter their details</h4>
+<p class="hint">Their 32-character hash ID is shown under their name in SRLTCP.</p>
 <label class="field"><span>Hash ID</span>
 <input type="text" id="add-contact-hash" placeholder="32 hex characters" autocomplete="off" spellcheck="false" />
 </label>
@@ -498,8 +509,8 @@
 <option value="serial">Serial / RF</option>
 </select>
 </label>
-<label class="field"><span>LAN host (optional)</span>
-<input type="text" id="add-contact-host" placeholder="e.g. 10.0.0.5" />
+<label class="field"><span>Address — LAN or VPN IP (optional)</span>
+<input type="text" id="add-contact-host" placeholder="e.g. 10.0.100.5" />
 </label>
 <label class="field"><span>LAN TCP port</span>
 <input type="number" id="add-contact-port" value="7825" min="1" max="65535" />
@@ -548,7 +559,7 @@
 <h4>Add someone</h4>
 <div class="pair-buttons">
 <button type="button" class="action-btn hidden" id="pair-scan">Scan their QR code</button>
-<button type="button" class="action-btn hidden" id="pair-nfc">Tap phones (NFC)</button>
+<button type="button" class="action-btn hidden" id="pair-nfc">Open NFC settings</button>
 </div>
 <p class="pair-nfc-status hidden" id="pair-nfc-status"></p>
 <label class="field"><span>…or paste their pairing link</span>
@@ -565,12 +576,54 @@
 </div>
 </div>
 </div>
+<div class="modal-overlay" id="edit-contact-modal" aria-hidden="true">
+<div class="modal-card">
+<h3>Edit contact</h3>
+<label class="field"><span>Name (only you see this)</span>
+<input type="text" id="edit-contact-name" maxlength="64" autocomplete="off" />
+</label>
+<div class="field-row">
+<label class="field grow"><span>Address — LAN or VPN IP / hostname</span>
+<input type="text" id="edit-contact-host" placeholder="e.g. 10.0.100.5 (WireGuard) or 192.168.1.20" autocomplete="off" spellcheck="false" />
+</label>
+<label class="field port"><span>Port</span>
+<input type="number" id="edit-contact-port" min="1" max="65535" value="7825" />
+</label>
+</div>
+<p class="hint" id="edit-contact-alts"></p>
+<details class="edit-advanced">
+<summary>Internet address (advanced)</summary>
+<div class="field-row">
+<label class="field grow"><span>Public host or domain</span>
+<input type="text" id="edit-contact-wan-host" placeholder="peer.example.com or 203.0.113.10" autocomplete="off" spellcheck="false" />
+</label>
+<label class="field port"><span>Port</span>
+<input type="number" id="edit-contact-wan-port" min="1" max="65535" value="7825" />
+</label>
+</div>
+<label class="field checkbox-field"><input type="checkbox" id="edit-contact-wan-enabled" /><span>Use the internet address</span></label>
+<label class="field"><span>Connection mode</span>
+<select id="edit-contact-mode">
+<option value="auto">Auto (address first, then internet)</option>
+<option value="lan">Address only</option>
+<option value="wan">Internet address only</option>
+</select>
+</label>
+</details>
+<p class="pair-fingerprint">Safety number: <code id="edit-contact-hash">—</code></p>
+<div class="modal-actions">
+<button type="button" class="action-btn small danger" id="edit-contact-delete">Delete</button>
+<span class="spacer"></span>
+<button type="button" class="action-btn secondary" id="edit-contact-cancel">Cancel</button>
+<button type="button" class="action-btn" id="edit-contact-save">Save</button>
+</div>
+</div>
+</div>
 <div class="contact-menu hidden" id="contact-menu" role="menu" aria-hidden="true">
 <button type="button" class="contact-menu-item" data-action="copy-hash">Copy hash ID</button>
 <button type="button" class="contact-menu-item" data-action="send-folder">Send folder…</button>
 <button type="button" class="contact-menu-item" data-action="clear-chat">Clear chat history</button>
-<button type="button" class="contact-menu-item" data-action="rename">Rename contact</button>
-<button type="button" class="contact-menu-item" data-action="wan">WAN / manual endpoint</button>
+<button type="button" class="contact-menu-item" data-action="edit">Edit contact…</button>
 <button type="button" class="contact-menu-item" data-action="share">Share folder (E2EE)</button>
 <button type="button" class="contact-menu-item" data-action="block">Block contact</button>
 <button type="button" class="contact-menu-item danger" data-action="delete">Delete contact</button>

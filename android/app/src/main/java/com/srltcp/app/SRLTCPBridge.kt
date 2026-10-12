@@ -25,8 +25,14 @@ class SRLTCPBridge(private val activity: MainActivity) {
     @JavascriptInterface
     fun isNfcAvailable(): Boolean = activity.isNfcAvailable()
 
+    /** Start automatic tap-to-pair; returns "ok", "off" or "missing". */
     @JavascriptInterface
-    fun startNfcScan(): Boolean = activity.startNfcReader()
+    fun startNfcScan(): String = activity.startNfcReader()
+
+    @JavascriptInterface
+    fun openNfcSettings() {
+        activity.runOnUiThread { activity.openNfcSettings() }
+    }
 
     @JavascriptInterface
     fun stopNfcScan() {
