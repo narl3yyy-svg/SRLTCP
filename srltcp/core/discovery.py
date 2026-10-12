@@ -175,12 +175,16 @@ class DiscoveryRegistry:
         if link_quality_pct is not None:
             peer.link_quality_pct = link_quality_pct
 
+    def _ttl_for(self, peer: DiscoveredPeer) -> float:
+        # Contact requests stay visible until the user acts on them (or a day).
+        return 86400.0 if peer.metadata.get("contact_request") else self.ttl
+
     def get(self, hash_id: str, transport: str | None = None) -> DiscoveredPeer | None:
         key = self._find_key(hash_id, transport)
         if not key:
             return None
         peer = self._peers.get(key)
-        if peer and time.time() - peer.last_seen > self.ttl:
+        if peer and time.time() - peer.last_seen > self._ttl_for(peer):
             del self._peers[key]
             return None
         return peer
@@ -190,7 +194,7 @@ class DiscoveryRegistry:
         alive: list[DiscoveredPeer] = []
         expired: list[str] = []
         for key, peer in self._peers.items():
-            if now - peer.last_seen > self.ttl:
+            if now - peer.last_seen > self._ttl_for(peer):
                 expired.append(key)
             else:
                 alive.append(peer)

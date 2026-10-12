@@ -14,16 +14,17 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    # Camera/microphone are used for QR scanning and calls (same origin only).
+    "Permissions-Policy": "camera=(self), microphone=(self), geolocation=()",
     "Content-Security-Policy": (
         "default-src 'self'; "
         "script-src 'self'; "
-        "style-src 'self' https://fonts.googleapis.com; "
-        "font-src 'self' https://fonts.gstatic.com; "
+        "style-src 'self'; "
+        "font-src 'self'; "
         "connect-src 'self' https://127.0.0.1:* wss://127.0.0.1:* "
         "https://localhost:* wss://localhost:*; "
         "img-src 'self' data: blob:; "
-        "media-src 'self' blob:; "
+        "media-src 'self' blob: mediastream:; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self'"

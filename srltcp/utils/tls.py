@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import ipaddress
+import os
 import ssl
 from pathlib import Path
 
@@ -18,13 +19,22 @@ from srltcp.utils.platform import data_dir, is_android
 
 log = get_logger(__name__)
 
-CERT_DIR = data_dir() / "certs"
-CERT_FILE = CERT_DIR / "localhost.crt"
-KEY_FILE = CERT_DIR / "localhost.key"
+def _cert_paths() -> tuple[Path, Path, Path]:
+    # Resolved lazily: on Android the data dir is only known after startup.
+    cert_dir = data_dir() / "certs"
+    return cert_dir, cert_dir / "localhost.crt", cert_dir / "localhost.key"
+
+
+def localhost_cert_sha256() -> str:
+    """Hex SHA-256 fingerprint of the localhost certificate in DER form."""
+    cert_path, _key = ensure_localhost_cert()
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    return cert.fingerprint(hashes.SHA256()).hex()
 
 
 def ensure_localhost_cert() -> tuple[Path, Path]:
     """Create or load a self-signed cert for 127.0.0.1 / localhost."""
+    CERT_DIR, CERT_FILE, KEY_FILE = _cert_paths()  # noqa: N806
     ensure_dir(CERT_DIR)
     if CERT_FILE.exists() and KEY_FILE.exists():
         return CERT_FILE, KEY_FILE
@@ -59,13 +69,15 @@ def ensure_localhost_cert() -> tuple[Path, Path]:
         .sign(key, hashes.SHA256())
     )
 
-    KEY_FILE.write_bytes(
-        key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption(),
+    fd = os.open(KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(
+            key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
         )
-    )
     CERT_FILE.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     return CERT_FILE, KEY_FILE
 

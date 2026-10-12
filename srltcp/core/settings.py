@@ -106,6 +106,7 @@ class AppSettings:
     hub_lan_host: str = ""
     hub_port: int = DEFAULT_TCP_PORT
     handshake_protocol: str = "identity"
+    call_stun_server: str = ""
     version: str = "0.1.57"
 
     def resolved_incoming_dir(self) -> Path:

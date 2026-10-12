@@ -5,9 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="theme-color" content="#0c0e14" />
 <title>SRLTCP Chat</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
@@ -41,6 +38,10 @@
 <input type="search" id="peer-search" placeholder="Search conversations…" autocomplete="off" />
 </div>
 <div class="sidebar-actions announce-actions">
+<button class="action-btn primary-action" id="btn-pair" title="Pair with someone nearby (QR code, link or NFC tap)">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 17h4v4"/></svg>
+          Pair
+</button>
 <button class="action-btn" id="btn-add-contact" title="Add contact manually by hash ID">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
           Add Contact
@@ -100,6 +101,12 @@
 </div>
 </div>
 <div class="chat-header-actions">
+<button class="icon-btn" id="btn-call-voice" type="button" title="Voice call (end-to-end encrypted)" aria-label="Voice call">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+</button>
+<button class="icon-btn" id="btn-call-video" type="button" title="Video call (end-to-end encrypted)" aria-label="Video call">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m23 7-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+</button>
 <button class="icon-btn mobile-only" id="btn-settings-chat" type="button" title="Settings" aria-label="Settings">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
 </button>
@@ -219,6 +226,11 @@
 <option value="noise_xx">Noise XX (experimental)</option>
 </select>
 <small>Both peers must use the same protocol. Noise XX uses Noise_XX_25519_ChaChaPoly_SHA256.</small>
+</label>
+<label class="field">
+<span>Call STUN server (optional)</span>
+<input type="text" id="set-stun" placeholder="Leave empty for LAN-only calls" spellcheck="false" />
+<small>Calls connect directly between devices. A STUN server (e.g. <code>stun:stun.example.org:3478</code>) helps internet calls through NAT but reveals your IP address to that server.</small>
 </label>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-wan-expose" />
@@ -366,7 +378,7 @@
 <span class="stat-value">—</span>
 </div>
 <div class="stat-item hidden" id="stat-clock" aria-hidden="true"></div>
-<div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v0.1.44</div>
+<div class="stat-item stat-version clickable" id="stat-version" title="Release notes">v—</div>
 </footer>
 <div class="modal-overlay" id="folder-modal">
 <div class="modal-card">
@@ -515,6 +527,43 @@
 </div>
 </div>
 </div>
+<div class="modal-overlay" id="pair-modal" aria-hidden="true">
+<div class="modal-card wide pair-card">
+<h3>Pair with someone</h3>
+<p class="hint">Pairing exchanges identity keys directly between your devices — no server, phone number or account involved.</p>
+<div class="pair-grid">
+<section class="pair-section">
+<h4>Your pairing code</h4>
+<div class="pair-qr" id="pair-qr" aria-label="Your pairing QR code"></div>
+<p class="hint" id="pair-qr-hint">Let the other person scan this. Valid for 15 minutes, works once.</p>
+<div class="modal-actions pair-actions">
+<button type="button" class="action-btn small" id="pair-copy">Copy link</button>
+<button type="button" class="action-btn small hidden" id="pair-share">Share…</button>
+<button type="button" class="action-btn small secondary" id="pair-refresh">New code</button>
+</div>
+<p class="pair-fingerprint">Safety number: <code id="pair-my-hash">—</code></p>
+</section>
+<section class="pair-section">
+<h4>Add someone</h4>
+<div class="pair-buttons">
+<button type="button" class="action-btn hidden" id="pair-scan">Scan their QR code</button>
+<button type="button" class="action-btn hidden" id="pair-nfc">Tap phones (NFC)</button>
+</div>
+<p class="pair-nfc-status hidden" id="pair-nfc-status"></p>
+<label class="field"><span>…or paste their pairing link</span>
+<textarea id="pair-code-input" rows="3" placeholder="srltcp://pair#…" spellcheck="false" autocomplete="off"></textarea>
+</label>
+<div class="modal-actions">
+<button type="button" class="action-btn" id="pair-import">Pair</button>
+</div>
+<video id="pair-camera" class="pair-camera hidden" playsinline muted></video>
+</section>
+</div>
+<div class="modal-actions">
+<button type="button" class="action-btn secondary" id="pair-close">Close</button>
+</div>
+</div>
+</div>
 <div class="contact-menu hidden" id="contact-menu" role="menu" aria-hidden="true">
 <button type="button" class="contact-menu-item" data-action="copy-hash">Copy hash ID</button>
 <button type="button" class="contact-menu-item" data-action="send-folder">Send folder…</button>
@@ -525,8 +574,29 @@
 <button type="button" class="contact-menu-item" data-action="block">Block contact</button>
 <button type="button" class="contact-menu-item danger" data-action="delete">Delete contact</button>
 </div>
+<div class="call-overlay hidden" id="call-overlay" role="dialog" aria-label="Call">
+<video id="call-remote-video" class="call-remote-video" autoplay playsinline></video>
+<audio id="call-remote-audio" autoplay></audio>
+<video id="call-local-video" class="call-local-video" autoplay playsinline muted></video>
+<div class="call-info">
+<div class="call-peer-name" id="call-peer-name">Contact</div>
+<div class="call-status" id="call-status">Calling…</div>
+</div>
+<div class="call-actions" id="call-incoming-actions">
+<button type="button" class="call-btn decline" id="call-decline" aria-label="Decline">✕</button>
+<button type="button" class="call-btn accept" id="call-accept-audio" aria-label="Answer with audio">🎤</button>
+<button type="button" class="call-btn accept" id="call-accept-video" aria-label="Answer with video">🎥</button>
+</div>
+<div class="call-actions hidden" id="call-active-actions">
+<button type="button" class="call-btn" id="call-mute" aria-label="Mute microphone">🔇</button>
+<button type="button" class="call-btn" id="call-toggle-camera" aria-label="Turn camera off">📷</button>
+<button type="button" class="call-btn decline" id="call-hangup" aria-label="Hang up">✕</button>
+</div>
+</div>
 <div class="toast-container" id="toasts"></div>
 </div>
+<script src="/static/qrcode.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/calls.js"></script>
 </body>
 </html>

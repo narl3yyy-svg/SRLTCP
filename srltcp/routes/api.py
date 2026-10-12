@@ -67,7 +67,17 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         if not is_valid_hash_id(hash_id):
             return web.json_response({"error": "invalid hash_id"}, status=400)
         transport = data.get("transport")
-        peer = node.add_trusted_from_discovered(hash_id, transport)
+        try:
+            peer = node.add_trusted_from_discovered(hash_id, transport)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        if peer:
+            # Accepting a contact request / discovered peer: bring the session up
+            # so anything they queued for us is delivered.
+            if node.backend.get_link(hash_id):
+                await node.backend.notify_contact_accepted(hash_id)
+            else:
+                node.backend._kick_connect(hash_id, peer.get("transport", "tcp"))
         if not peer:
             tcp_port_raw = data.get("tcp_port", 7825)
             try:
@@ -500,6 +510,45 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response({"error": "fetch request failed"}, status=400)
         return web.json_response({"requested": True})
 
+    async def pairing_card(request: web.Request) -> web.Response:
+        from srltcp.core.messaging.pairing import PairingError
+
+        one_time = request.rel_url.query.get("one_time", "1") not in ("0", "false", "no")
+        try:
+            return web.json_response(node.backend.create_pairing_card(one_time=one_time))
+        except PairingError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    async def pairing_import(request: web.Request) -> web.Response:
+        from srltcp.core.messaging.pairing import PairingError
+
+        data = await request.json()
+        code = str(data.get("code", "")).strip()
+        if not code:
+            return web.json_response({"error": "pairing code required"}, status=400)
+        try:
+            peer = await node.backend.import_pairing_card(code)
+        except PairingError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(peer)
+
+    async def call_signal(request: web.Request) -> web.Response:
+        data = await request.json()
+        recipient = str(data.get("recipient_hash", ""))
+        signal = data.get("signal")
+        if not is_valid_hash_id(recipient) or not isinstance(signal, dict):
+            return web.json_response({"error": "recipient_hash and signal required"}, status=400)
+        if not node.backend.is_trusted(recipient):
+            return web.json_response({"error": "peer not trusted"}, status=403)
+        link = node.backend.get_link(recipient)
+        if not link or not link.handshake_complete:
+            await node.backend.connect_to_peer(recipient)
+            await node.backend.wait_for_handshake(recipient, timeout=8.0)
+        ok = await node.backend.send_call_signal(recipient, signal)
+        if not ok:
+            return web.json_response({"error": "peer is not reachable"}, status=503)
+        return web.json_response({"sent": True})
+
     async def version_info(_request: web.Request) -> web.Response:
         from srltcp.utils.platform import is_android
 
@@ -567,6 +616,12 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             updated.clock_source = "system"
         if updated.handshake_protocol not in ("identity", "noise_xx"):
             updated.handshake_protocol = "identity"
+        stun = str(updated.call_stun_server or "").strip()
+        if stun and (not stun.startswith(("stun:", "stuns:")) or len(stun) > 255 or " " in stun):
+            return web.json_response(
+                {"error": "STUN server must look like stun:host:port"}, status=400
+            )
+        updated.call_stun_server = stun
         if updated.ntp_server:
             updated.ntp_server = str(updated.ntp_server).strip()[:253]
 
@@ -638,10 +693,20 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         return web.json_response({"version": __version__, "notes": text})
 
     async def restart(_request: web.Request) -> web.Response:
+        from srltcp.utils.platform import is_android
+
+        if is_android():
+            # execv would kill the Android app process; settings that need a
+            # restart are applied the next time the app is started.
+            return web.json_response(
+                {"restarting": False, "error": "Close and reopen the app to apply"},
+                status=409,
+            )
+
         async def _do_restart() -> None:
             await asyncio.sleep(0.5)
             await node.stop()
-            os.execv(sys.executable, [sys.executable, "-m", "srltcp", "web"])
+            os.execv(sys.executable, [sys.executable, "-m", "srltcp", *sys.argv[1:]])
 
         asyncio.create_task(_do_restart())
         return web.json_response({"restarting": True})
@@ -800,6 +865,9 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_post("/api/share/peer/fetch", share_peer_fetch)
     app.router.add_post("/api/share/peer/revoke", share_peer_revoke)
     app.router.add_get("/api/version", version_info)
+    app.router.add_get("/api/pairing/card", pairing_card)
+    app.router.add_post("/api/pairing/import", pairing_import)
+    app.router.add_post("/api/call/signal", call_signal)
     app.router.add_post("/api/share/create", create_share)
     app.router.add_get("/api/settings", settings_get)
     app.router.add_post("/api/settings", settings_post)
