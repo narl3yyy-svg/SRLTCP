@@ -148,6 +148,7 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        current = java.lang.ref.WeakReference(this)
         SRLTCPNotifier.ensureChannels(this)
         firstLaunch = savedInstanceState == null
         pendingSavePath = savedInstanceState?.getString(STATE_PENDING_SAVE)
@@ -923,5 +924,9 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS = "srltcp_prefs"
         private const val PREF_ALL_FILES_ASKED = "all_files_access_asked"
         private const val STATE_PENDING_SAVE = "pending_save_path"
+
+        /** The open activity, so Quit can close the screen before the process ends. */
+        @Volatile
+        var current: java.lang.ref.WeakReference<MainActivity>? = null
     }
 }
