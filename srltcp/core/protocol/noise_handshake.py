@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Literal
 
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 from noise.connection import Keypair, NoiseConnection
 
 from srltcp.core.protocol.crypto import SessionKeys, derive_session_key
@@ -35,6 +39,7 @@ class NoiseHandshakeSession:
     noise: NoiseConnection
     role: Literal["initiator", "responder"]
     step: int = 0
+    created: float = field(default_factory=time.time)
 
     @classmethod
     def create(
@@ -44,6 +49,7 @@ class NoiseHandshakeSession:
         initiator: bool,
     ) -> NoiseHandshakeSession:
         noise = NoiseConnection.from_name(NOISE_PATTERN)
+        role: Literal["initiator", "responder"]
         if initiator:
             noise.set_as_initiator()
             role = "initiator"
@@ -68,17 +74,44 @@ class NoiseHandshakeSession:
     def complete(self) -> bool:
         return bool(self.noise.handshake_finished)
 
-    def session_keys(self, *, initiator: bool) -> SessionKeys:
+    def handshake_hash(self) -> bytes:
         if not self.complete:
             raise RuntimeError("noise handshake not complete")
-        handshake_hash = self.noise.get_handshake_hash()
-        salt = hashlib.sha256(handshake_hash + b"srltcp-noise-session-v1").digest()[:16]
-        send_info = b"srltcp-noise-send"
-        recv_info = b"srltcp-noise-recv"
-        if initiator:
-            send_key = derive_session_key(handshake_hash, salt, send_info)
-            recv_key = derive_session_key(handshake_hash, salt, recv_info)
-        else:
-            recv_key = derive_session_key(handshake_hash, salt, send_info)
-            send_key = derive_session_key(handshake_hash, salt, recv_info)
+        return bytes(self.noise.get_handshake_hash())
+
+    def session_keys(self, *, initiator: bool | None = None) -> SessionKeys:
+        """Derive AES-GCM session keys from the Noise split() cipher keys.
+
+        The handshake hash alone is *not* secret (it is computable from the
+        public transcript), so keys must come from the post-handshake cipher
+        states, which are derived from the DH chaining key.
+        """
+        del initiator
+        if not self.complete:
+            raise RuntimeError("noise handshake not complete")
+        proto = self.noise.noise_protocol
+        enc_k = bytes(proto.cipher_state_encrypt.k)
+        dec_k = bytes(proto.cipher_state_decrypt.k)
+        handshake_hash = self.handshake_hash()
+        salt = hashlib.sha256(handshake_hash + b"srltcp-noise-session-v2").digest()[:16]
+        send_key = derive_session_key(enc_k, salt, b"srltcp-noise-v2-dir")
+        recv_key = derive_session_key(dec_k, salt, b"srltcp-noise-v2-dir")
         return SessionKeys(send_key=send_key, recv_key=recv_key, salt=salt)
+
+
+NOISE_BIND_CONTEXT = b"srltcp-noise-bind-v1"
+
+
+def sign_noise_binding(ed_private: Ed25519PrivateKey, handshake_hash: bytes, role: str) -> bytes:
+    """Bind an Ed25519 identity to a completed Noise session (channel binding)."""
+    return ed_private.sign(NOISE_BIND_CONTEXT + role.encode() + handshake_hash)
+
+
+def verify_noise_binding(
+    ed_public: Ed25519PublicKey, signature: bytes, handshake_hash: bytes, role: str
+) -> bool:
+    try:
+        ed_public.verify(signature, NOISE_BIND_CONTEXT + role.encode() + handshake_hash)
+        return True
+    except Exception:
+        return False

@@ -31,13 +31,22 @@ class PingMixin:
 
     async def start_ping_loop(self: MessagingBackend) -> None:
         async def _loop() -> None:
+            tick = 0
             while self._running:
                 for link in self.list_links():
                     hash_id = link.get("hash_id", "")
                     if link.get("handshake_complete") and not self.has_active_transfer_for(
                         hash_id
                     ):
-                        await self.ping_peer(hash_id)
+                        try:
+                            await self.ping_peer(hash_id)
+                        except (KeyError, OSError, ConnectionError) as exc:
+                            log.debug("Ping to %s failed: %s", hash_id[:8], exc)
+                # Retry undelivered messages: every 30 s for the first few
+                # minutes, then every ~2 minutes.
+                if tick % (2 if tick < 20 else 8) == 0:
+                    self.retry_outbox_connections()
+                tick += 1
                 await asyncio.sleep(PING_INTERVAL)
 
         self._ping_tasks.append(asyncio.create_task(_loop()))

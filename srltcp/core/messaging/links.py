@@ -27,6 +27,7 @@ class PeerLink:
     link_quality_pct: float | None = None
     peer_name: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    link_up_announced: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {

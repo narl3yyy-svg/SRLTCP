@@ -1,5 +1,6 @@
 """Persistent application settings (~/.srltcp/settings.json)."""
 from __future__ import annotations
+
 import json
 import time
 from dataclasses import asdict, dataclass
@@ -13,7 +14,6 @@ from srltcp.core.messaging.constants import (
 )
 from srltcp.utils.files import ensure_dir
 from srltcp.utils.platform import data_dir, is_android
-
 
 DEFAULT_INCOMING = "incoming"
 DEFAULT_SHARED = "shared"

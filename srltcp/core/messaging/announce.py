@@ -6,7 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from srltcp.core.messaging.constants import DISCOVERY_PORT
-from srltcp.core.protocol.messages import MessageType, build_header, encode_payload
+from srltcp.core.protocol.messages import MessageType, build_header
 from srltcp.core.protocol.signed import sign_payload
 from srltcp.utils.logging import get_logger
 from srltcp.utils.network import primary_ipv4

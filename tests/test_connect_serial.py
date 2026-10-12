@@ -43,7 +43,6 @@ async def test_stale_tcp_link_torn_down_before_serial_connect(backend: Messaging
         TrustedPeer(
             hash_id=hash_id,
             name="serial-peer",
-            public_key="01" * 32,
             transport="serial",
         )
     )
@@ -75,7 +74,6 @@ async def test_serial_connect_skips_unreachable_incomplete_link(backend: Messagi
         TrustedPeer(
             hash_id=hash_id,
             name="serial-peer",
-            public_key="02" * 32,
             transport="serial",
         )
     )

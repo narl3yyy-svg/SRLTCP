@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from srltcp.core.protocol.messages import decode_payload
-from srltcp.core.protocol.signed import verify_signed_payload
+from srltcp.core.protocol.signed import verify_identity_binding, verify_signed_payload
 from srltcp.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -57,37 +57,96 @@ class DiscoveryRegistry:
             data = decode_payload(payload)
         except Exception:
             return None, False
-        ann_type = data.get("type", "")
-        if ann_type not in ("announce", "hub_presence", "hub_register"):
+        if not isinstance(data, dict):
             return None, False
+        ann_type = data.get("type", "")
         if ann_type == "announce":
             if not verify_signed_payload(data):
                 log.debug("Rejected unsigned or invalid announce signature")
                 return None, False
-        hash_id = data.get("hash_id", "")
+        elif ann_type == "hub_register":
+            # Hub forwards the member's own signed registration.
+            if not verify_signed_payload(data, signature_field="hub_signature"):
+                log.debug("Rejected hub presence with invalid signature")
+                return None, False
+        elif ann_type == "hub_presence":
+            # Legacy hubs strip the signature; at least require hash/key binding.
+            if not verify_identity_binding(
+                str(data.get("hash_id", "")), str(data.get("public_key", ""))
+            ):
+                return None, False
+        else:
+            return None, False
+        hash_id = str(data.get("hash_id", "")).lower()
         if not hash_id:
             return None, False
         ann_transport = str(data.get("transport", transport))
         if data.get("via_hub") or ann_type in ("hub_presence", "hub_register"):
             ann_transport = "hub"
+        if ann_transport not in ("tcp", "serial", "hub"):
+            ann_transport = transport
+        try:
+            tcp_port = int(data.get("tcp_port", 7825))
+        except (TypeError, ValueError):
+            tcp_port = 7825
+        if not 1 <= tcp_port <= 65535:
+            tcp_port = 7825
+        tcp_host = str(data.get("tcp_host", ""))[:255]
+        if ann_transport == "tcp" and address and ":" in address:
+            # Trust the packet's source IP over the self-reported address so a
+            # LAN host cannot point us at an arbitrary third party.
+            src_ip = address.rsplit(":", 1)[0]
+            if src_ip and src_ip not in ("127.0.0.1", "::1") and tcp_host != src_ip:
+                tcp_host = src_ip
         peer_key = f"{ann_transport}:{hash_id}"
         is_new = peer_key not in self._peers
         existing = self._peers.get(peer_key)
         peer = DiscoveredPeer(
             hash_id=hash_id,
-            name=data.get("name", "unknown"),
+            name=str(data.get("name", "unknown"))[:64],
             transport=ann_transport,
             address=address,
-            public_key=data.get("public_key", ""),
-            tcp_host=data.get("tcp_host", ""),
-            tcp_port=int(data.get("tcp_port", 7825)),
+            public_key=str(data.get("public_key", "")),
+            tcp_host=tcp_host,
+            tcp_port=tcp_port,
             last_seen=time.time(),
             rtt_ms=existing.rtt_ms if existing else None,
             link_quality_pct=existing.link_quality_pct if existing else None,
-            metadata=data,
+            metadata={
+                "type": ann_type,
+                "discovery_port": data.get("discovery_port"),
+            },
         )
         self._peers[peer_key] = peer
         return peer, is_new
+
+    def upsert_contact_request(
+        self,
+        *,
+        hash_id: str,
+        name: str,
+        public_key: str,
+        transport: str,
+        address: str,
+    ) -> DiscoveredPeer:
+        """Record a verified peer that connected to us but is not trusted yet."""
+        key = f"{transport}:{hash_id}"
+        existing = self._peers.get(key)
+        tcp_host = existing.tcp_host if existing else ""
+        tcp_port = existing.tcp_port if existing else 7825
+        peer = DiscoveredPeer(
+            hash_id=hash_id,
+            name=(name or (existing.name if existing else "") or f"Peer {hash_id[:8]}")[:64],
+            transport=transport,
+            address=address,
+            public_key=public_key,
+            tcp_host=tcp_host,
+            tcp_port=tcp_port,
+            last_seen=time.time(),
+            metadata={"contact_request": True},
+        )
+        self._peers[key] = peer
+        return peer
 
     def _find_key(self, hash_id: str, transport: str | None = None) -> str | None:
         if transport:

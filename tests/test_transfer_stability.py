@@ -11,6 +11,7 @@ import pytest
 from srltcp.core.messaging.backend import MessagingBackend, NodeConfig
 from srltcp.core.messaging.links import PeerLink
 from srltcp.core.messaging.models import FileTransfer, TransferState
+from srltcp.core.trusted import TrustedPeer
 from srltcp.transports.base import Connection, TransportPeer
 
 
@@ -37,13 +38,15 @@ async def test_file_chunk_dispatched_as_background_task(backend: MessagingBacken
         handshake_complete=True,
     )
     backend.register_link(link)
+    backend.trusted.add(TrustedPeer(hash_id=hash_id, name="peer"))
+    link.crypto.decrypt = lambda body, aad=b"": body  # type: ignore[method-assign]
     backend._handle_file_chunk = AsyncMock()
 
     with patch("asyncio.create_task") as mock_task:
         peer = TransportPeer(peer_id=peer_id, address="127.0.0.1:7825", transport="tcp")
-        from srltcp.core.protocol.messages import MessageType, build_header
+        from srltcp.core.protocol.messages import Flags, MessageType, build_header
 
-        packet = build_header(MessageType.FILE_CHUNK, body=b"encrypted")
+        packet = build_header(MessageType.FILE_CHUNK, flags=Flags.ENCRYPTED, body=b"encrypted")
         await backend._on_transport_frame(peer, packet)
 
     mock_task.assert_called_once()

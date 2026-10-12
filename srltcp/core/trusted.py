@@ -97,6 +97,12 @@ class TrustedStore:
         if not is_valid_hash_id(peer.hash_id):
             raise ValueError("invalid peer hash_id")
         peer.hash_id = peer.hash_id.lower()
+        if peer.public_key:
+            from srltcp.core.protocol.signed import verify_identity_binding
+
+            peer.public_key = peer.public_key.strip().lower()
+            if verify_identity_binding(peer.hash_id, peer.public_key) is None:
+                raise ValueError("public_key does not match hash_id")
         if peer.name.strip().lower() in _GENERIC_NAMES:
             peer.name = peer.name.strip() or "Peer"
         self._peers[peer.hash_id] = peer
@@ -119,6 +125,13 @@ class TrustedStore:
 
     def get(self, hash_id: str) -> TrustedPeer | None:
         return self._peers.get(hash_id)
+
+    def set_public_key(self, hash_id: str, public_key_hex: str) -> None:
+        """Pin a verified public key for a contact added by hash only."""
+        peer = self._peers.get(hash_id)
+        if peer and not peer.public_key:
+            peer.public_key = public_key_hex
+            self.save()
 
     def update(
         self,

@@ -83,12 +83,14 @@ def test_key_exchange_e2ee() -> None:
         bob_kx.ephemeral_public,
         bob_kx.sign_ephemeral(),
         bob.public_key,
+        peer_timestamp=bob_kx.timestamp,
         initiator=True,
     )
     bob_keys = bob_kx.complete(
         alice_kx.ephemeral_public,
         alice_kx.sign_ephemeral(),
         alice.public_key,
+        peer_timestamp=alice_kx.timestamp,
         initiator=False,
     )
 

@@ -178,24 +178,31 @@ async def fsync_file(path: Path) -> None:
 
 
 def walk_directory(root: Path) -> list[dict[str, object]]:
-    """Return a flat listing of files under root (relative paths)."""
+    """Return a flat listing of files under root (relative paths).
+
+    Symlinks that point outside ``root`` and unreadable entries are skipped so a
+    shared folder can never expose files beyond its boundary.
+    """
     entries: list[dict[str, object]] = []
     root = root.resolve()
     for dirpath, dirnames, filenames in os.walk(root):
         rel_dir = Path(dirpath).relative_to(root)
         for d in sorted(dirnames):
+            full = Path(dirpath) / d
+            if full.is_symlink():
+                continue
             rel = rel_dir / d if str(rel_dir) != "." else Path(d)
-            entries.append({"name": str(rel), "type": "dir", "size": 0})
+            entries.append({"name": rel.as_posix(), "type": "dir", "size": 0})
         for fn in sorted(filenames):
+            full = Path(dirpath) / fn
+            try:
+                if full.is_symlink() and not full.resolve().is_relative_to(root):
+                    continue
+                size = full.stat().st_size
+            except OSError:
+                continue
             rel = rel_dir / fn if str(rel_dir) != "." else Path(fn)
-            full = root / rel
-            entries.append(
-                {
-                    "name": str(rel).replace("\\", "/"),
-                    "type": "file",
-                    "size": full.stat().st_size,
-                }
-            )
+            entries.append({"name": rel.as_posix(), "type": "file", "size": size})
     return entries
 
 
