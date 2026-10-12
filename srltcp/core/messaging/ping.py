@@ -48,7 +48,7 @@ class PingMixin:
                 # minutes, then every ~2 minutes.
                 if tick % (2 if tick < 20 else 8) == 0:
                     self.retry_outbox_connections()
-                if tick and tick % 3 == 0:
+                if tick:
                     try:
                         await self.reap_dead_links(LINK_DEAD_AFTER)
                     except Exception as exc:  # noqa: BLE001 - keep the loop alive

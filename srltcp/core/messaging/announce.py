@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import TYPE_CHECKING
 
@@ -19,7 +20,7 @@ log = get_logger(__name__)
 
 ANNOUNCE_BURSTS = 3
 ANNOUNCE_BURST_DELAY = 0.12
-SWEEP_EVERY_N_LOOPS = 12  # auto-announce: VPN sweep about once a minute
+SWEEP_EVERY_N_LOOPS = 6  # auto-announce: VPN sweep every ~30 s (~250 tiny packets)
 REPLY_INTERVAL = 20.0  # answer a given address at most this often
 DISCOVERABLE_AFTER_MANUAL = 600.0  # reply to announces for 10 min after pressing Announce
 
@@ -135,6 +136,25 @@ class AnnounceMixin:
             await self.tcp_transport.unicast_discovery(payload, [host])
             await asyncio.sleep(ANNOUNCE_BURST_DELAY)
 
+    def _verify_link_soon(self: MessagingBackend, hash_id: str, wait: float = 6.0) -> None:
+        """Ping a link now; if no answer arrives within ``wait`` s, replace it."""
+        link = self.get_link(hash_id)
+        if not link:
+            return
+        started = time.monotonic()
+
+        async def _check() -> None:
+            with contextlib.suppress(KeyError, OSError, ConnectionError):
+                await self.ping_peer(hash_id)
+            await asyncio.sleep(wait)
+            current = self.get_link(hash_id)
+            if current is link and link.last_seen < started:
+                log.info("Link to %s did not answer after address change — redialing", hash_id[:8])
+                await self._teardown_link(hash_id)
+                self._kick_connect(hash_id)
+
+        asyncio.ensure_future(_check())
+
     async def _reply_to_announce(
         self: MessagingBackend, address: str, discovery_port: object
     ) -> None:
@@ -235,13 +255,21 @@ class AnnounceMixin:
 
         async def _loop() -> None:
             n = 0
+            last_ips: set[str] = set()
             while self._running and self.config.announce:
                 try:
+                    # Our address changed (Wi-Fi <-> mobile data, VPN reconnect):
+                    # tell contacts right away instead of waiting for the next sweep.
+                    ips = self._own_ips()
+                    moved = bool(last_ips) and ips != last_ips
+                    last_ips = ips
+                    if moved:
+                        log.info("Network address changed — announcing now")
                     for t in ("tcp", "serial"):
                         if (t == "tcp" and self.tcp_transport) or (
                             t == "serial" and self.serial_transport
                         ):
-                            sweep = t == "tcp" and n % SWEEP_EVERY_N_LOOPS == 0
+                            sweep = t == "tcp" and (moved or n % SWEEP_EVERY_N_LOOPS == 0)
                             await self._send_announce(t, sweep=sweep)
                 except Exception as exc:  # noqa: BLE001 - keep announcing after transient errors
                     log.debug("Auto-announce failed: %s", exc)
@@ -290,8 +318,21 @@ class AnnounceMixin:
             and peer.tcp_host
             and (trusted.tcp_host != peer.tcp_host or trusted.tcp_port != peer.tcp_port)
         ):
-            self.trusted.update(peer.hash_id, tcp_host=peer.tcp_host, tcp_port=peer.tcp_port)
+            alts = [h for h in [trusted.tcp_host, *trusted.alt_hosts] if h and h != peer.tcp_host]
+            self.trusted.update(
+                peer.hash_id, tcp_host=peer.tcp_host, tcp_port=peer.tcp_port, alt_hosts=alts
+            )
             log.info("Updated address for %s to %s:%d", trusted.name, peer.tcp_host, peer.tcp_port)
+            link = self.get_link(peer.hash_id)
+            if (
+                link
+                and link.transport == "tcp"
+                and link.address
+                and not link.address.startswith(f"{peer.tcp_host}:")
+                and not self.has_active_transfer_for(peer.hash_id)
+            ):
+                # Our session points at the old address: check it still answers.
+                self._verify_link_soon(peer.hash_id)
         # Answer so the sender discovers us too (one press on one phone is enough).
         src_ip = address.rsplit(":", 1)[0] if ":" in address else ""
         if (
