@@ -2,7 +2,9 @@ package com.srltcp.app
 
 import android.app.Service
 import android.content.Intent
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.Process
 import android.util.Log
 
@@ -31,12 +33,21 @@ class SRLTCPService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_QUIT) {
+            // Quit button, or the notification swiped away (Android 14+).
             Log.i(TAG, "Quit requested from notification")
             SRLTCPApplication.instance?.releaseNetworkLocks()
+            running = false
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
-            // The Python node runs on a non-daemon thread; end the process cleanly.
-            Process.killProcess(Process.myPid())
+            // Close the screen first so Android doesn't bring the app back up,
+            // then end the process: the Python node runs on a non-daemon thread.
+            val activity = MainActivity.current?.get()
+            if (activity != null && !activity.isFinishing) {
+                activity.runOnUiThread { activity.finishAndRemoveTask() }
+                Handler(Looper.getMainLooper()).postDelayed({ Process.killProcess(Process.myPid()) }, 300)
+            } else {
+                Process.killProcess(Process.myPid())
+            }
             return START_NOT_STICKY
         }
         SRLTCPApplication.instance?.ensurePythonServer()

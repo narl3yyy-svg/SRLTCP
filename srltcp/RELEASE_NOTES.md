@@ -1,5 +1,14 @@
 # SRLTCP Release Notes
 
+## v0.4.1 (2026-10-12)
+
+- **Swipe to stop.** Swiping the "SRLTCP — Running" notification away now stops
+  the app completely (no more App info → Force stop). This works on Android 14
+  and newer; older Android versions don't allow swiping that notification, so
+  use its **Quit** button there. Opening SRLTCP starts it again
+- Quit also closes the app screen if it is open
+
+
 ## v0.4.0 (2026-10-12)
 
 Update every phone (and your hub, if you run one).

@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
 
-**Current version:** 0.4.0 (chat works with 0.2.x; calls need 0.3.1+ and group chats 0.4.0 on every device; a hub must run 0.4.0 for 0.4.0 phones; not wire-compatible with 0.1.x)
+**Current version:** 0.4.1 (chat works with 0.2.x; calls need 0.3.1+ and group chats 0.4.0 on every device; a hub must run 0.4.0 for 0.4.0 phones; not wire-compatible with 0.1.x)
 
 ---
 
@@ -236,7 +236,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.4.0.apk`
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.4.1.apk`
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -244,7 +244,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.4.0.apk`
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.4.0.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.4.1.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -345,7 +345,7 @@ Phones on different mobile carriers can only reach each other through something 
 
 ### Running in the background (Android)
 
-SRLTCP keeps running after you close it, like any messenger, so messages, calls and contact requests arrive as notifications. Use **Quit** on the SRLTCP notification to stop it completely.
+SRLTCP keeps running after you close it, like any messenger, so messages, calls and contact requests arrive as notifications. To stop it completely, **swipe the SRLTCP notification away** (Android 14 and newer) or tap **Quit** on it (any version — older Android keeps that notification pinned). Opening the app starts it again.
 
 ### Hub server (recommended for internet users)
 
@@ -603,6 +603,10 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [x] Android stack navigation — sidebar home, chat overlay, back gesture (v0.1.56)
 - [x] Signed LAN announces — Ed25519 signatures on UDP discovery; reject unsigned/spoofed peers (v0.1.57)
 - [x] Noise XX handshake option — Settings → Network (experimental; both peers must match) (v0.1.57)
+
+**Done (v0.4.1)**
+
+- [x] Swipe the background notification away to stop SRLTCP completely
 
 **Done (v0.4.0)**
 

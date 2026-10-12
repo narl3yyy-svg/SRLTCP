@@ -50,13 +50,21 @@ object SRLTCPNotifier {
             Intent(context, SRLTCPService::class.java).setAction(SRLTCPService.ACTION_QUIT),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        // Swiping the notification away stops SRLTCP completely (same as Quit).
+        // Android 14+ lets the user dismiss a foreground-service notification
+        // when it isn't marked ongoing; older versions keep it pinned, so the
+        // Quit button stays for them.
+        val swipeable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+        val hint = if (swipeable) "Swipe away or tap Quit to stop" else "Tap Quit to stop"
         return NotificationCompat.Builder(context, CHANNEL_NODE)
             .setContentTitle("SRLTCP")
             .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText("$text\n$hint"))
             .setSmallIcon(R.drawable.ic_launcher_legacy)
             .setContentIntent(launch)
+            .setDeleteIntent(quit)
             .addAction(0, "Quit", quit)
-            .setOngoing(true)
+            .setOngoing(!swipeable)
             .setOnlyAlertOnce(true)
             .build()
     }
