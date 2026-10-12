@@ -36,10 +36,12 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 - **Replay / reordering** — 64-bit counter nonces with a sliding replay window; the message type and flags are authenticated as AAD. Unencrypted application messages are dropped.
 - **Trust gate** — only trusted contacts' messages, files and share requests are processed; others become contact requests.
 - **Calls** — WebRTC DTLS-SRTP; SDP (with DTLS fingerprints) is exchanged inside the authenticated session, and the media packets are carried inside the session too (a per-device TURN relay bound to the device itself, with per-call credentials, accepting traffic only for the contact being called). No outside STUN/TURN unless you configure one.
-- **Address updates** — a contact's stored address is only changed by a fresh (≤ 5 min old) announce signed by that contact's key; replayed old announces are ignored.
+- **Address updates** — a contact's stored address is only changed by a fresh (≤ 5 min old) announce signed by that contact's key and newer than any announce seen from it; replayed announces are ignored.
+- **Group chats** — no group key or server: every group message is signed by its author (Ed25519) and sent over the pairwise sessions; the creator relays to members who aren't each other's contacts but cannot alter or forge messages. Member lists are versioned and only accepted from the creator; invites only from trusted contacts; group traffic only from current members. The creator (and every member) sees all group messages and the member list, including members' public keys and names.
 - **Pairing codes** — signed contact cards; a one-time token (15 min) lets the scanner be trusted back automatically.
 - **Hub forwarding** wraps opaque E2EE blobs. Hub servers never receive session keys and cannot decrypt chat or file content.
-- **Hub registration** is signed with the client's Ed25519 identity; the hub rejects unsigned or mismatched registrations.
+- **Hub registration** is signed with the client's Ed25519 identity and time-stamped; the hub rejects unsigned, mismatched, stale or replayed registrations (each must be newer than the last one for that identity).
+- **Unauthenticated connections** — TCP connections that don't complete a handshake within 30 s are closed, open connections are capped, and frame parsing is linear in the input, so junk traffic can't stall the node.
 - **LAN UDP announces** (port 7826) are signed with the sender's Ed25519 identity key. Receiving peers verify the signature and `hash_id` ↔ `public_key` binding before displaying or trusting a discovered peer. Unsigned or invalid announces are dropped.
 - **Optional Noise XX handshake** — Settings → Network → Handshake protocol. Uses `Noise_XX_25519_ChaChaPoly_SHA256`; session keys are HKDF-derived from the Noise cipher-state keys, and each side signs the handshake hash with its Ed25519 identity (versions before 0.2.0 derived keys from the public handshake hash — do not use them). Both peers must select the same protocol.
 - **Web UI** is served over **HTTPS on localhost only** (self-signed cert generated locally) and every request needs the per-install access token (`~/.srltcp/web_token`, mode 600) — so other apps/users on the device cannot use the API.
@@ -53,8 +55,9 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 | Hub presence | Hub operator sees who registered (hash ID prefix, display name) and when |
 | Hub routing | Hub sees source/destination identity hash tokens and approximate packet sizes/timing |
 | WAN / hub TCP | Observers see connection endpoints, timing, and volume — not decrypted payloads |
+| Known limitation | In the default (identity) handshake the signature does not name the recipient, so someone who saw a handshake could replay it to a third node within 10 minutes and disrupt (not read) that node's session with the original sender until it reconnects. Noise XX mode is not affected; a fix needs a protocol change planned for a later version |
 | Local disk | Settings, trusted-peer list, chat history, identities stored without extra encryption |
-| Android WebView | Pins the app's own localhost certificate (SHA-256) |
+| Android WebView | Pins the app's own localhost certificate (SHA-256); user-installed CAs are not trusted for it; the JavaScript bridge only answers the app's own page |
 | NFC pairing | Contact cards (public data) are exchanged in the clear over a few centimetres |
 | VPN discovery | With discovery on (or after pressing Announce), your signed announce (name, hash ID, public key, addresses) is sent to every address in your VPN subnet, and you answer announces from inside that subnet |
 | External call relay (TURN/STUN) | Only if you configure one (not needed since 0.3.1): it sees both devices' IP addresses and traffic volume, never call content |

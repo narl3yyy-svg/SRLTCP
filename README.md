@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN, and optionally connects clients through a **headless hub server** so users do not need router port-forwarding. The hub forwards opaque encrypted traffic and cannot read messages.
 
-**Current version:** 0.3.1 (chat works with 0.2.x; calls need 0.3.1 on both devices; not wire-compatible with 0.1.x)
+**Current version:** 0.4.0 (chat works with 0.2.x; calls need 0.3.1+ and group chats 0.4.0 on every device; a hub must run 0.4.0 for 0.4.0 phones; not wire-compatible with 0.1.x)
 
 ---
 
@@ -25,6 +25,7 @@
 | **Settings** | First-run wizard + persistent config (folders, retention, LAN IP) |
 | **System stats** | CPU usage & temperature in the web UI status bar |
 | **Pairing** | QR code, shareable link, or **NFC tap** (Android) — one scan pairs both sides |
+| **Group chats** | End-to-end encrypted groups of up to 32; members who aren't each other's contacts still talk (the creator passes messages on, signed by their author so they can't be faked) |
 | **Voice & video calls** | WebRTC; signalling and media both travel inside the encrypted SRLTCP session (built-in relay), so calls work wherever chat works — no third-party servers |
 | **Offline delivery** | Messages queue while a contact is offline and deliver on reconnect, with ✓/✓✓ receipts |
 | **Works over WireGuard** | VPN-aware discovery (unicast sweep + replies), Find by IP, automatic address updates |
@@ -235,7 +236,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.3.1.apk`
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.4.0.apk`
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -243,7 +244,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.3.1.apk`
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.3.1.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.4.0.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -327,6 +328,20 @@ Tap the contact's name at the top of a chat, the **⋮** next to a contact, or l
 ### Calls
 
 Voice and video calls use WebRTC. Offer/answer are sent inside the encrypted SRLTCP session, so DTLS fingerprints are authenticated by the contact's identity key. The media itself also goes through the session: each device runs a tiny TURN relay on localhost for its own browser/WebView, and the relay forwards the (already DTLS-SRTP encrypted) packets to the other phone as encrypted `CALL_MEDIA` messages. So **calls work wherever chat works** — same Wi-Fi, WireGuard/VPN, or through an SRLTCP hub across mobile carriers — with no STUN/TURN server and no firewall holes beyond TCP 7825.
+
+### Group chats
+
+*Groups → New group*, give it a name and tick the trusted contacts to add. Everyone you add gets the group automatically (only invites from your own contacts are accepted).
+
+- Every message is signed by its author and sent over the normal one-to-one encrypted connections — no group server and no shared group key.
+- You send to the creator and to the members you have as contacts; the creator passes messages on to the rest. So members who don't know each other still see every message, and the creator can't change or invent anyone's message (each one carries its author's signature).
+- Members who are offline get missed messages and member-list changes when they come back.
+- The creator renames the group and adds or removes members (tap the group name at the top of the chat). Anyone can *Leave group*; the creator leaving closes it for everyone.
+- Text only for now — files and calls stay one-to-one.
+
+### When the VPN is off
+
+Phones on different mobile carriers can only reach each other through something in the middle: your WireGuard server or an SRLTCP hub. With the VPN switched off (and no hub), a message waits on your phone (tap its tick: *Waiting to send*) and goes out by itself a few seconds after the VPN is back on — nothing is lost. To keep messaging without the VPN, run `srltcp hub` on a machine with a public address and turn on *Settings → Network → Connect via hub server* on both phones.
 
 ### Running in the background (Android)
 
@@ -412,7 +427,7 @@ curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" https://127.0.0.1:9876/api/tran
 
 Transfers are **resumable** — if interrupted, the receiver's partial file offset is used on resume via `FILE_RESUME`.
 
-In the web UI, images and videos preview in chat during transfer. Click to enlarge in a lightbox; use **Download file** to save it — you are asked where to save (Android shows the system *Save as* screen; desktop Chrome/Edge show a save dialog, other browsers use their download folder). The transfer dock (progress bar above the composer) hides automatically when no transfers are active. **Drag files** from your file manager onto a contact in the sidebar to send. Both peers must run **v0.1.17+** for shared-folder limits, revoke, and WAN features.
+In the web UI, images and videos preview in chat during transfer. Click to enlarge in a viewer that zooms with two fingers, a double-tap or the mouse wheel (the rest of the app doesn't zoom; it fits the screen); use **Download file** to save it — you are asked where to save (Android shows the system *Save as* screen; desktop Chrome/Edge show a save dialog, other browsers use their download folder). The transfer dock (progress bar above the composer) hides automatically when no transfers are active. **Drag files** from your file manager onto a contact in the sidebar to send. Both peers must run **v0.1.17+** for shared-folder limits, revoke, and WAN features.
 
 ### E2EE shared folder (recommended)
 
@@ -589,6 +604,12 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [x] Signed LAN announces — Ed25519 signatures on UDP discovery; reject unsigned/spoofed peers (v0.1.57)
 - [x] Noise XX handshake option — Settings → Network (experimental; both peers must match) (v0.1.57)
 
+**Done (v0.4.0)**
+
+- [x] Group chats (signed messages, creator relays to members who aren't contacts)
+- [x] Call audio/video on Android, phone-style audio routing, speaker button
+- [x] Security and reliability fixes from a full review (network flood, hub replay, transfer resume)
+
 **Done (v0.3.1)**
 
 - [x] Calls connect everywhere chat works (media through the encrypted session)
@@ -611,7 +632,7 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 
 **Planned**
 
-- [ ] Group chats
+- [ ] Files and voice/video calls in group chats
 - [x] Built-in call relay (calls through the encrypted session, also via the hub)
 - [ ] Calls over serial/RF
 - [ ] Encrypted-at-rest chat history
