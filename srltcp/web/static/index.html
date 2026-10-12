@@ -229,9 +229,9 @@
 <small>Both peers must use the same protocol. Noise XX uses Noise_XX_25519_ChaChaPoly_SHA256.</small>
 </label>
 <label class="field">
-<span>Call relay server (optional)</span>
-<input type="text" id="set-stun" placeholder="Empty = direct calls only (VPN / same network)" spellcheck="false" />
-<small>Calls connect directly over your VPN or network. Only for calls across mobile networks <em>without</em> a VPN: a TURN server such as <code>turn:vpn.example.com:3478</code> (e.g. coturn on your own server) relays the encrypted media. A STUN URL also works for simple NATs. The server sees your IP address, never the call content.</small>
+<span>External call relay (advanced, normally not needed)</span>
+<input type="text" id="set-stun" placeholder="Leave empty" spellcheck="false" />
+<small>Calls are relayed through SRLTCP's own encrypted connection, so they work wherever messages do (LAN, VPN, hub). This is only a fallback if that relay is unavailable: a STUN/TURN URL such as <code>turn:host:3478</code>.</small>
 </label>
 <div class="field-row">
 <label class="field grow"><span>TURN username</span><input type="text" id="set-turn-user" autocomplete="off" spellcheck="false" /></label>

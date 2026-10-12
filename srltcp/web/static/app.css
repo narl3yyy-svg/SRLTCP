@@ -1250,8 +1250,14 @@ body {
   align-items: center;
   justify-content: center;
   padding: 1.5rem;
+  /* Scroll on short screens (phones in landscape) so "Get started" is reachable */
+  overflow-y: auto;
+}
+@media (max-height: 820px) {
+  .setup-overlay { align-items: flex-start; }
 }
 .setup-card {
+  margin: auto 0;
   width: min(440px, 100%);
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);

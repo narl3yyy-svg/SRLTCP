@@ -33,16 +33,26 @@
 
   const app = () => window.srltcpApp || {};
 
-  function iceServers() {
+  // ICE config for one call. Normally our node's local relay: media then
+  // travels inside the encrypted SRLTCP session, so calls work wherever text
+  // does (LAN, VPN, hub) without depending on WebRTC finding a direct path.
+  async function iceConfig(peer) {
+    try {
+      const res = await fetch(`/api/call/ice?peer=${encodeURIComponent(peer)}`, { credentials: "same-origin" });
+      if (res.ok) return await res.json();
+    } catch (_) { /* fall through */ }
     const st = app().getSettings?.() || {};
     const url = (st.call_stun_server || "").trim();
-    if (!url) return [];
-    const server = { urls: url };
-    if (/^turns?:/.test(url) && st.call_turn_username) {
-      server.username = st.call_turn_username;
-      server.credential = st.call_turn_password || "";
+    const servers = [];
+    if (url) {
+      const server = { urls: url };
+      if (/^turns?:/.test(url) && st.call_turn_username) {
+        server.username = st.call_turn_username;
+        server.credential = st.call_turn_password || "";
+      }
+      servers.push(server);
     }
-    return [server];
+    return { iceServers: servers };
   }
 
   function newCallId() {
@@ -121,8 +131,8 @@
     });
   }
 
-  function createPeerConnection() {
-    const pc = new RTCPeerConnection({ iceServers: iceServers(), bundlePolicy: "max-bundle" });
+  function createPeerConnection(config) {
+    const pc = new RTCPeerConnection({ ...config, bundlePolicy: "max-bundle" });
     pc.onicecandidate = (ev) => {
       if (ev.candidate && call.peer) {
         signal(call.peer, { type: "ice", call_id: call.id, candidate: ev.candidate.toJSON() });
@@ -143,7 +153,7 @@
         startClock();
       } else if (st === "failed") {
         app().toast?.(
-          "Call could not connect. Calls work over WireGuard/VPN or the same network; across mobile networks without a VPN, set a TURN server in Settings → Network.",
+          "Call could not connect — check that the contact is online (a text message should get ✓✓).",
           "error"
         );
         hangup("failed");
@@ -184,7 +194,7 @@
     showOverlay("outgoing");
     setStatus("Starting…");
     try {
-      call.pc = createPeerConnection();
+      call.pc = createPeerConnection(await iceConfig(peer));
       attachLocal(await getMedia(video));
       const offer = await call.pc.createOffer();
       await call.pc.setLocalDescription(offer);
@@ -242,7 +252,7 @@
     showOverlay("active");
     setStatus("Connecting…");
     try {
-      call.pc = createPeerConnection();
+      call.pc = createPeerConnection(await iceConfig(call.peer));
       await call.pc.setRemoteDescription({ type: "offer", sdp: call.pendingOffer });
       await flushIce();
       attachLocal(await getMedia(call.video));

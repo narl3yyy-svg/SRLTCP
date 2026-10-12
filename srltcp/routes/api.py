@@ -575,6 +575,15 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response({"error": "peer is not reachable"}, status=503)
         return web.json_response({"sent": True})
 
+    async def call_ice(request: web.Request) -> web.Response:
+        peer = request.rel_url.query.get("peer", "")
+        if not is_valid_hash_id(peer) or not node.backend.is_trusted(peer):
+            return web.json_response({"error": "unknown contact"}, status=400)
+        cfg = await node.backend.call_ice_config(peer)
+        if cfg is None:
+            return web.json_response({"error": "call relay unavailable"}, status=503)
+        return web.json_response(cfg)
+
     async def version_info(_request: web.Request) -> web.Response:
         from srltcp.utils.platform import is_android
 
@@ -901,6 +910,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_get("/api/pairing/card", pairing_card)
     app.router.add_post("/api/pairing/import", pairing_import)
     app.router.add_post("/api/call/signal", call_signal)
+    app.router.add_get("/api/call/ice", call_ice)
     app.router.add_post("/api/share/create", create_share)
     app.router.add_get("/api/settings", settings_get)
     app.router.add_post("/api/settings", settings_post)

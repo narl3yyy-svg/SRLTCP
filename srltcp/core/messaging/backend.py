@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import struct
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -99,6 +100,7 @@ class MessagingBackend(
         self._persist_handle: asyncio.TimerHandle | None = None
         self._contact_requests: dict[str, float] = {}
         self._dial_tasks: dict[str, asyncio.Task[None]] = {}
+        self.call_relay: Any = None
 
         # Event callbacks for web UI
         self._on_message: EventCallback | None = None
@@ -189,6 +191,7 @@ class MessagingBackend(
         if self._hub_enabled():
             await self.start_hub_client()
         if not self.config.hub_mode:
+            await self.start_call_relay()
             self.connect_known_contacts()
 
         log.info(
@@ -202,6 +205,9 @@ class MessagingBackend(
     async def stop(self) -> None:
         self._running = False
         self.save_message_history()
+        if self.call_relay is not None:
+            self.call_relay.close()
+            self.call_relay = None
         for task in list(self._dial_tasks.values()):
             task.cancel()
         self._dial_tasks.clear()
@@ -512,6 +518,8 @@ class MessagingBackend(
             await self._handle_share_request(hash_id, body)
         elif msg_type == MessageType.CALL_SIGNAL:
             await self._handle_call_signal(hash_id, body)
+        elif msg_type == MessageType.CALL_MEDIA:
+            self._handle_call_media(hash_id, body)
 
     async def _handle_untrusted_message(
         self, link: PeerLink, msg_type: MessageType, body: bytes
@@ -809,6 +817,56 @@ class MessagingBackend(
         packet = self._seal(link, MessageType.CALL_SIGNAL, body)
         await self._send_raw(link.transport_peer_id, link.transport, packet)
         return True
+
+    async def start_call_relay(self) -> None:
+        from srltcp.core.messaging.turn import LocalTurnServer
+
+        if self.call_relay is not None:
+            return
+        relay = LocalTurnServer(self._own_call_hash, self._send_call_media)
+        try:
+            await relay.start("127.0.0.1", 0)
+        except OSError as exc:
+            log.warning("Call relay unavailable: %s", exc)
+            return
+        self.call_relay = relay
+
+    def _own_call_hash(self) -> str:
+        ident = self.identities.get("tcp") or next(iter(self.identities.values()), None)
+        return ident.hash_id if ident else ""
+
+    async def call_ice_config(self, peer_hash: str) -> dict[str, Any] | None:
+        """ICE settings for one call: the browser talks only to our local relay."""
+        if self.call_relay is None or not self.call_relay.port:
+            return None
+        from srltcp.utils.network import list_interfaces
+
+        ips = [str(i.get("ip", "")) for i in list_interfaces()[:3]]
+        await self.call_relay.ensure_interface_endpoints([ip for ip in ips if ip])
+        creds = self.call_relay.issue_credentials(peer_hash)
+        return {
+            "iceServers": [{"urls": self.call_relay.urls(), **creds}],
+            "iceTransportPolicy": "relay",
+        }
+
+    async def _send_call_media(
+        self, peer_hash: str, src_port: int, dst_port: int, payload: bytes
+    ) -> None:
+        link = self.get_link(peer_hash)
+        if not link or not link.handshake_complete:
+            return
+        body = struct.pack(">HH", src_port, dst_port) + payload
+        try:
+            packet = self._seal(link, MessageType.CALL_MEDIA, body)
+            await self._send_raw(link.transport_peer_id, link.transport, packet)
+        except (KeyError, OSError, ConnectionError, RuntimeError):
+            pass  # media is loss-tolerant; the call recovers or ends
+
+    def _handle_call_media(self, hash_id: str, body: bytes) -> None:
+        if self.call_relay is None or len(body) < 4:
+            return
+        src_port, dst_port = struct.unpack(">HH", body[:4])
+        self.call_relay.deliver(hash_id, src_port, dst_port, body[4:])
 
     async def _handle_call_signal(self, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
