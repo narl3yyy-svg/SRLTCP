@@ -29,9 +29,9 @@ object SRLTCPNotifier {
         val alerts = NotificationChannel(
             CHANNEL_ALERTS,
             "SRLTCP alerts",
-            NotificationManager.IMPORTANCE_DEFAULT
+            NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Messages, transfers, and peer events"
+            description = "Messages, calls and contact requests"
         }
         mgr.createNotificationChannel(node)
         mgr.createNotificationChannel(alerts)
@@ -44,11 +44,18 @@ object SRLTCPNotifier {
             Intent(context, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val quit = PendingIntent.getService(
+            context,
+            1,
+            Intent(context, SRLTCPService::class.java).setAction(SRLTCPService.ACTION_QUIT),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
         return NotificationCompat.Builder(context, CHANNEL_NODE)
             .setContentTitle("SRLTCP")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_launcher_legacy)
             .setContentIntent(launch)
+            .addAction(0, "Quit", quit)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .build()

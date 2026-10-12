@@ -473,6 +473,7 @@ class MessagingBackend(
             log.warning("Decrypt failed for %s from %s: %s", msg_type.name, link.hash_id[:8], exc)
             return
         hash_id = link.hash_id
+        link.last_seen = time.monotonic()
         if msg_type == MessageType.RECEIPT:
             await self._handle_receipt(hash_id, body)
             return
@@ -735,11 +736,35 @@ class MessagingBackend(
             self._kick_connect(hash_id)
 
     def connect_known_contacts(self) -> None:
-        """Bring up sessions with trusted contacts at startup so their queued
-        messages to us arrive without anyone pressing a button."""
+        """Bring up sessions with trusted contacts (at startup and periodically)
+        so they show as online and their queued messages reach us."""
         for peer in self.trusted.list_peers():
+            link = self.get_link(peer.hash_id)
+            if link and link.handshake_complete:
+                continue
             if peer.tcp_host or peer.wan_host or self._hub_enabled():
                 self._kick_connect(peer.hash_id, peer.transport)
+
+    async def reap_dead_links(self, max_silence: float) -> list[str]:
+        """Drop sessions whose peer stopped answering pings (network switch,
+        phone asleep, VPN reconnect) so we reconnect instead of writing into
+        a dead socket for minutes."""
+        now = time.monotonic()
+        dead: list[str] = []
+        for hash_id, link in list(self._links.items()):
+            if not link.handshake_complete or self.has_active_transfer_for(hash_id):
+                continue
+            if now - link.last_seen > max_silence:
+                dead.append(hash_id)
+        for hash_id in dead:
+            stale = self.get_link(hash_id)
+            name = stale.peer_name if stale else ""
+            log.info("Link to %s (%s) went silent — reconnecting", name, hash_id[:8])
+            await self._teardown_link(hash_id)
+            if self._on_link_down:
+                await self._on_link_down(hash_id, name)
+            self._schedule_reconnect(hash_id)
+        return dead
 
     async def flush_outbox(self, hash_id: str) -> int:
         """Resend messages still pending/sent-but-unacknowledged to a peer."""
@@ -898,11 +923,8 @@ class MessagingBackend(
         own_hashes = {i.hash_id for i in self.identities.values()}
         own_keys = {i.public_bytes().hex() for i in self.identities.values()}
         trusted_hashes = {t.hash_id for t in self.trusted.list_peers()}
-        hub_only = self._hub_enabled()
         peers = []
         for p in self.discovery.list_peers():
-            if hub_only and p.transport != "hub":
-                continue
             if p.hash_id in own_hashes or p.public_key in own_keys:
                 self.discovery.remove(p.hash_id)
                 continue

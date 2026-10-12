@@ -25,6 +25,30 @@ class SRLTCPApplication : Application() {
         }
     }
 
+    private var serverThread: Thread? = null
+
+    /**
+     * Start the Python node once per process. Called by both MainActivity and
+     * SRLTCPService, so the node also comes back when Android restarts the
+     * service without opening the app.
+     */
+    @Synchronized
+    fun ensurePythonServer(onError: ((String) -> Unit)? = null) {
+        acquireNetworkLocks()
+        if (serverThread?.isAlive == true) return
+        serverThread = Thread {
+            try {
+                val py = Python.getInstance()
+                py.getModule("srltcp.utils.platform")
+                    .callAttr("set_android_data_dir", filesDir.absolutePath)
+                py.getModule("srltcp.app").callAttr("start_android_server")
+            } catch (e: Exception) {
+                Log.e(TAG, "Server thread failed", e)
+                onError?.invoke(e.message ?: e.javaClass.simpleName)
+            }
+        }.apply { name = "srltcp-server"; isDaemon = false; start() }
+    }
+
     private var multicastLock: WifiManager.MulticastLock? = null
 
     /**

@@ -28,6 +28,8 @@ class PeerLink:
     peer_name: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     link_up_announced: bool = False
+    # monotonic time of the last authenticated frame or pong from this peer
+    last_seen: float = field(default_factory=time.monotonic)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,6 +97,7 @@ class PeerLinkMixin:
             link.crypto.set_keys(keys)
             link.handshake_complete = True
             link.connected = True
+            link.last_seen = time.monotonic()
 
     def touch_link(self: MessagingBackend, hash_id: str) -> None:
         link = self._links.get(hash_id)

@@ -127,9 +127,11 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
 async def run_web(args: argparse.Namespace) -> None:
     store = SettingsStore()
     settings = store.load()
-    settings.version = __version__
 
     from srltcp.utils.platform import is_android
+
+    migrate_settings(settings, android=is_android())
+    settings.version = __version__
 
     if is_android():
         settings.strict_ports = False
@@ -198,6 +200,29 @@ async def run_web(args: argparse.Namespace) -> None:
 
     await shutdown.wait()
     await shutdown.run_cleanup()
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for piece in str(version).split(".")[:3]:
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def migrate_settings(settings: AppSettings, *, android: bool) -> bool:
+    """One-time fixes when upgrading from older versions. Returns True if changed."""
+    changed = False
+    if settings.setup_complete and _version_tuple(settings.version) < (0, 3, 0) and android:
+        # 0.2.x setup pinned the first interface (usually Wi-Fi), which goes
+        # stale when the phone changes networks, and left discovery off.
+        if settings.lan_ip:
+            settings.lan_ip = ""
+            changed = True
+        if not settings.auto_announce:
+            settings.auto_announce = True
+            changed = True
+    return changed
 
 
 async def run_hub(args: argparse.Namespace) -> None:
@@ -328,29 +353,32 @@ def is_android_server_ready() -> bool:
 
 
 def start_android_server() -> None:
-    """Entry point for Android Chaquopy runtime."""
+    """Entry point for the Android Chaquopy runtime (blocks while the node runs).
+
+    The Kotlin side guarantees a single server thread per process; this guard
+    only protects against an accidental second call while one is running.
+    """
     import os
     import sys
 
     global _android_server_ready, _android_server_started
-    if _android_server_started and is_android_server_ready():
+    if _android_server_started:
         return
-    _android_server_started = False
-    _android_server_ready = False
     _android_server_started = True
+    _android_server_ready = False
 
     os.environ["SRLTCP_ANDROID"] = "1"
     sys.argv = ["srltcp", "web", "--log-level", "INFO"]
-
     try:
         main()
     except Exception:
-        _android_server_started = False
-        _android_server_ready = False
         import logging
 
         logging.exception("Android server failed")
         raise
+    finally:
+        _android_server_started = False
+        _android_server_ready = False
 
 
 def main() -> None:

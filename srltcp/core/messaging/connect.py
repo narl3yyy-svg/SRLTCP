@@ -181,7 +181,9 @@ class ConnectMixin:
             return discovered.transport
         trusted = self.trusted.get(hash_id)
         if trusted:
-            if self._hub_enabled():
+            # Prefer a direct address (LAN/VPN) when we have one; use the hub
+            # for contacts we can only reach through it.
+            if self._hub_enabled() and not (trusted.tcp_host or trusted.wan_host):
                 return "hub"
             return trusted.transport
         if self._hub_enabled():

@@ -43,7 +43,6 @@ class MainActivity : AppCompatActivity() {
     private var loadAttempt = 0
     private var pageLoaded = false
     private var uiRestored = false
-    private var serverThread: Thread? = null
     private var serviceStarted = false
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var isClosing = false
@@ -355,33 +354,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startPythonServer() {
-        SRLTCPApplication.instance?.acquireNetworkLocks()
-        if (serverThread?.isAlive == true) {
-            try {
-                val py = Python.getInstance()
-                if (!py.getModule("srltcp.app").callAttr("is_android_server_ready").toBoolean()) {
-                    serverThread = null
-                } else {
-                    return
-                }
-            } catch (_: Exception) {
-                serverThread = null
-            }
-        }
-        serverThread = Thread {
-            try {
-                val py = Python.getInstance()
-                py.getModule("srltcp.utils.platform")
-                    .callAttr("set_android_data_dir", applicationContext.filesDir.absolutePath)
-                val appMod = py.getModule("srltcp.app")
-                if (!appMod.callAttr("is_android_server_ready").toBoolean()) {
-                    appMod.callAttr("start_android_server")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Server thread failed", e)
-                handler.post { showFatal("Server start failed:\n${e.message}") }
-            }
-        }.apply { name = "srltcp-server"; isDaemon = false; start() }
+        val app = SRLTCPApplication.instance ?: return
+        app.ensurePythonServer { msg -> handler.post { showFatal("Server start failed:\n$msg") } }
     }
 
     private fun waitForServerThenLoad() {
@@ -432,14 +406,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun maybeStartForegroundService() {
         if (serviceStarted) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
         serviceStarted = true
         try {
             val serviceIntent = Intent(this, SRLTCPService::class.java)
@@ -720,14 +686,7 @@ class MainActivity : AppCompatActivity() {
         isActivityResumed = true
         if (isClosing) return
         webView?.onResume()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-            Environment.isExternalStorageManager() &&
-            serverThread?.isAlive != true
-        ) {
-            startPythonServer()
-            waitForServerThenLoad()
-            return
-        }
+        startPythonServer()  // no-op while the node is running
         if (webView?.url.isNullOrBlank() &&
             statusView?.visibility == android.view.View.VISIBLE &&
             isServerReady()
@@ -780,10 +739,8 @@ class MainActivity : AppCompatActivity() {
                 webView?.destroy()
             } catch (_: Exception) { /* ignore */ }
             webView = null
-            try {
-                stopService(Intent(this, SRLTCPService::class.java))
-            } catch (_: Exception) { /* ignore */ }
-            SRLTCPApplication.instance?.releaseNetworkLocks()
+            // Keep the node (and message delivery) running after the UI closes,
+            // like any messenger. Quit from the notification to stop it.
         }
         super.onDestroy()
     }

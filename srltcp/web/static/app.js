@@ -1913,12 +1913,20 @@
     if (!selectEl) return;
     const { ok, data } = await apiGet("/api/interfaces", { fallback: { interfaces: [] } });
     state.interfaces = ok ? (data?.interfaces || []) : [];
-    selectEl.innerHTML = state.interfaces
-      .map((i) => `<option value="${escapeHtml(i.ip)}" ${i.ip === selectedIp ? "selected" : ""}>${escapeHtml(i.label)}</option>`)
-      .join("");
-    if (!state.interfaces.length) {
-      selectEl.innerHTML = '<option value="">127.0.0.1</option>';
+    // "Automatic" keeps working when the phone changes networks; pinning an IP
+    // only makes sense for multi-homed desktops.
+    const opts = ['<option value="">Automatic (recommended)</option>'];
+    let found = !selectedIp;
+    for (const i of state.interfaces) {
+      const sel = i.ip === selectedIp;
+      found = found || sel;
+      opts.push(`<option value="${escapeHtml(i.ip)}" ${sel ? "selected" : ""}>${escapeHtml(i.label)}</option>`);
     }
+    if (!found) {
+      opts.push(`<option value="${escapeHtml(selectedIp)}" selected>${escapeHtml(selectedIp)} (not currently present)</option>`);
+    }
+    selectEl.innerHTML = opts.join("");
+    if (!selectedIp) selectEl.value = "";
   }
 
   function fillSettingsForm(settings) {
