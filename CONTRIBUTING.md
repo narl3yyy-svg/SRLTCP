@@ -60,6 +60,14 @@ pip install playwright && playwright install chromium
 python scripts/simulate.py --out /tmp/srltcp-shots
 ```
 
+Real WireGuard test (Linux, root; needs iproute2, wireguard-tools and the WireGuard kernel module or `wireguard-go`):
+
+```bash
+sudo bash scripts/simulate_wireguard.sh
+```
+
+Android NFC protocol unit tests: `cd android && ./gradlew testDebugUnitTest`.
+
 ## Pre-commit (recommended)
 
 ```bash
@@ -80,7 +88,7 @@ pre-commit run --all-files
 | `srltcp/web/` | HTTPS web UI and static assets |
 | `srltcp/routes/` | REST API handlers |
 | `android/` | Gradle + Chaquopy Android app |
-| `scripts/` | `check.sh`, `build-android.sh`, `sync-android-python.sh`, `simulate.py` |
+| `scripts/` | `check.sh`, `build-android.sh`, `sync-android-python.sh`, `simulate.py`, `simulate_wireguard.sh` |
 | `tests/` | Pytest suite (`test_e2e_nodes.py` runs real nodes over loopback) |
 
 ## Coding Standards

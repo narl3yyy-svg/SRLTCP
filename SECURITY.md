@@ -4,7 +4,8 @@
 
 | Version | Supported |
 | ------- | --------- |
-| 0.2.0+ | :white_check_mark: |
+| 0.3.x | :white_check_mark: |
+| 0.2.x | :white_check_mark: (upgrade recommended) |
 | < 0.2.0 | :x: (impersonation and Noise-mode key derivation flaws; upgrade) |
 
 Security fixes are released on `main` and tagged as `v*`. Use the latest release when possible.
@@ -35,6 +36,7 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 - **Replay / reordering** — 64-bit counter nonces with a sliding replay window; the message type and flags are authenticated as AAD. Unencrypted application messages are dropped.
 - **Trust gate** — only trusted contacts' messages, files and share requests are processed; others become contact requests.
 - **Calls** — WebRTC DTLS-SRTP between the devices; SDP (with DTLS fingerprints) is exchanged inside the authenticated session. No STUN/TURN unless you configure one.
+- **Address updates** — a contact's stored address is only changed by a fresh (≤ 5 min old) announce signed by that contact's key; replayed old announces are ignored.
 - **Pairing codes** — signed contact cards; a one-time token (15 min) lets the scanner be trusted back automatically.
 - **Hub forwarding** wraps opaque E2EE blobs. Hub servers never receive session keys and cannot decrypt chat or file content.
 - **Hub registration** is signed with the client's Ed25519 identity; the hub rejects unsigned or mismatched registrations.
@@ -54,6 +56,8 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 | Local disk | Settings, trusted-peer list, chat history, identities stored without extra encryption |
 | Android WebView | Pins the app's own localhost certificate (SHA-256) |
 | NFC pairing | Contact cards (public data) are exchanged in the clear over a few centimetres |
+| VPN discovery | With discovery on (or after pressing Announce), your signed announce (name, hash ID, public key, addresses) is sent to every address in your VPN subnet, and you answer announces from inside that subnet |
+| Call relay (TURN/STUN) | Only if you configure one: it sees both devices' IP addresses and traffic volume, never call content |
 
 ### Connection modes
 
