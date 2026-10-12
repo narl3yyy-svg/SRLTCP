@@ -622,9 +622,10 @@
           break;
         case "contact_request":
           loadPeers();
+          showContactRequest(data);
           notifyUser(
             "Contact request",
-            `${data.name || data.hash_id?.slice(0, 8)} wants to chat — accept them in Discovered`,
+            `${data.name || data.hash_id?.slice(0, 8)} wants to add you as a contact`,
             { tag: `req-${data.hash_id}` }
           );
           logActivity(`Contact request: ${data.name || data.hash_id?.slice(0, 8)}`);
@@ -665,6 +666,11 @@
     };
   }
 
+  function setPeerTab(tab) {
+    state.peerTab = tab;
+    document.querySelectorAll(".peer-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
+  }
+
   /* ── API ── */
   async function loadPeers() {
     if (state.loadingPeers) return;
@@ -676,11 +682,54 @@
       ]);
       if (pRes.ok) state.peers = pRes.data || [];
       if (tRes.ok) state.trusted = tRes.data || [];
+      if (tRes.ok && !state.peerTabChosen) {
+        // First load: open on Trusted once there is someone to talk to.
+        state.peerTabChosen = true;
+        setPeerTab(state.trusted.some((t) => !t.blocked) ? "trusted" : "discovered");
+      }
       renderContacts();
       if (state._restorePeer) applyRestoredPeer();
+      state.peers.filter((p) => p.metadata?.contact_request).forEach((p) => showContactRequest(p));
     } finally {
       state.loadingPeers = false;
     }
+  }
+
+  /* Incoming contact request: ask once, so pairing ends up mutual. */
+  function showContactRequest(data) {
+    const hashId = data?.hash_id;
+    if (!hashId || state.trusted.some((t) => t.hash_id === hashId)) return;
+    state.requestQueue = state.requestQueue || [];
+    if (state.requestCurrent === hashId || state.requestQueue.some((r) => r.hash_id === hashId)) return;
+    state.requestQueue.push(data);
+    if (!state.requestCurrent) nextContactRequest();
+  }
+
+  function nextContactRequest() {
+    const modal = $("#request-modal");
+    const next = (state.requestQueue || []).shift();
+    state.requestCurrent = next?.hash_id || null;
+    if (!next || !modal) {
+      closeModal(modal);
+      return;
+    }
+    const name = next.name || next.hash_id.slice(0, 8);
+    $("#request-text").textContent = `${name} added you as a contact. Add them back?`;
+    $("#request-hash").textContent = `ID ${next.hash_id}`;
+    openModal(modal);
+  }
+
+  async function answerContactRequest(accept) {
+    const hashId = state.requestCurrent;
+    if (!hashId) return closeModal($("#request-modal"));
+    if (accept) {
+      await trustPeer(hashId);
+    } else {
+      await apiPost(`/api/contact-requests/${encodeURIComponent(hashId)}/decline`, {}, { silent: true });
+      state.peers = state.peers.filter((p) => p.hash_id !== hashId);
+      renderContacts();
+    }
+    nextContactRequest();
   }
 
   async function trustPeer(hashId) {
@@ -2490,7 +2539,7 @@
     const showDownload = stateLabel === "complete" && downloadUrl;
     const downloadLabel = meta.is_folder_zip ? "Download folder ZIP" : "Download file";
     const downloadLink = showDownload
-      ? `<a class="file-download" href="${downloadUrl}" download="${escapeHtml(filename)}" target="_blank" rel="noopener">${downloadLabel}</a>`
+      ? `<a class="file-download" href="${downloadUrl}" download="${escapeHtml(filename)}" data-save-transfer="${escapeHtml(tid)}">${downloadLabel}</a>`
       : "";
 
     if (canPreviewImage) {
@@ -2543,8 +2592,7 @@
     link.className = "file-download";
     link.href = url;
     link.setAttribute("download", filename || "file");
-    link.target = "_blank";
-    link.rel = "noopener";
+    link.dataset.saveTransfer = transferId;
     const msg = messageForTransfer(transferId);
     link.textContent = msg?.metadata?.is_folder_zip ? "Download folder ZIP" : "Download file";
     const info = bubble.querySelector(".file-info");
@@ -2836,6 +2884,58 @@
     body.addEventListener("touchend", endDrag);
     body.addEventListener("touchcancel", endDrag);
   }
+
+  /* Save a transfer's file: system "Save as" picker on Android, file picker on desktop. */
+  async function saveTransferFile(transferId, url, filename) {
+    const bridge = window.SRLTCPAndroid;
+    if (bridge && typeof bridge.saveTransferFile === "function") {
+      const err = bridge.saveTransferFile(transferId);
+      if (err) toast(err, "error");
+      return;
+    }
+    if (typeof window.showSaveFilePicker === "function") {
+      let handle;
+      try {
+        handle = await window.showSaveFilePicker({ suggestedName: filename || "file" });
+      } catch (e) {
+        if (e?.name === "AbortError") return;
+        handle = null;
+      }
+      if (handle) {
+        try {
+          const res = await fetch(url, { credentials: "same-origin" });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const writable = await handle.createWritable();
+          await res.body.pipeTo(writable);
+          toast(`Saved ${filename || "file"}`);
+        } catch (_) {
+          toast("Could not save the file", "error");
+        }
+        return;
+      }
+    }
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename || "file";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  window.onAndroidFileSaved = (ok) => {
+    toast(ok ? "File saved" : "Could not save the file", ok ? "info" : "error");
+  };
+
+  document.addEventListener("click", (e) => {
+    const link = e.target.closest?.("a.file-download, #media-lightbox-download");
+    if (!link) return;
+    const href = link.getAttribute("href") || "";
+    const tid = link.dataset.saveTransfer
+      || (href.match(/\/api\/transfers\/([^/]+)\/file/) || [])[1];
+    if (!tid) return;
+    e.preventDefault();
+    saveTransferFile(decodeURIComponent(tid), href, link.getAttribute("download") || "");
+  });
 
   function openMediaLightbox(url, kind, filename) {
     blurComposer();
@@ -3146,11 +3246,35 @@
     saveMobileSession();
   }
 
+  // Popups closed by the Android back gesture, topmost first. Each entry is
+  // [element id, close function].
+  const BACK_CLOSERS = [
+    ["media-lightbox", () => closeMediaLightbox()],
+    ["folder-modal", () => closeModal($("#folder-modal"))],
+    ["edit-contact-modal", () => closeEditContact()],
+    ["pair-modal", () => closePairModal()],
+    ["add-contact-modal", () => closeAddContactModal()],
+    ["share-modal", () => closeShareModal()],
+    ["wan-modal", () => closeWanModal()],
+    ["network-modal", () => $("#network-close")?.click()],
+    ["release-modal", () => closeModal($("#release-modal"))],
+    ["request-modal", () => answerContactRequest(false)],
+  ];
+
   function androidNavigateBack() {
     if (!isAndroidApp()) return false;
-    if ($("#media-lightbox")?.classList.contains("open")) {
-      closeMediaLightbox();
+    // During a call the back gesture must not hang up or leave the call screen.
+    if ($("#call-overlay") && !$("#call-overlay").classList.contains("hidden")) return true;
+    const menu = $("#contact-menu");
+    if (menu && !menu.classList.contains("hidden")) {
+      closeContactMenu();
       return true;
+    }
+    for (const [id, close] of BACK_CLOSERS) {
+      if ($(`#${id}`)?.classList.contains("open")) {
+        close();
+        return true;
+      }
     }
     if ($("#settings-window") && !$("#settings-window").classList.contains("hidden")) {
       closeSettings();
@@ -3506,8 +3630,12 @@
     }
   });
 
+  $("#request-accept")?.addEventListener("click", () => answerContactRequest(true));
+  $("#request-decline")?.addEventListener("click", () => answerContactRequest(false));
+
   document.querySelectorAll(".peer-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
+      state.peerTabChosen = true;
       state.peerTab = tab.dataset.tab;
       document.querySelectorAll(".peer-tab").forEach((t) => t.classList.toggle("active", t === tab));
       renderContacts();

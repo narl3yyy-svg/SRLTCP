@@ -266,7 +266,10 @@ class PairingMixin:
         token = str(data.get("token", ""))
         expiry = self._pairing_tokens.get(token)
         if not token or expiry is None or expiry < time.time():
-            log.warning("Pair request from %s with unknown/expired token", link.hash_id[:8])
+            # Old or reused code: still a verified peer who added us, so ask the user.
+            log.info("Pair request from %s with unknown/expired token", link.hash_id[:8])
+            if not self.is_trusted(link.hash_id):
+                await self._raise_contact_request(link)
             return
         try:
             card = decode_card(str(data.get("card", "")))

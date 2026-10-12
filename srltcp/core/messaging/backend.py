@@ -99,6 +99,7 @@ class MessagingBackend(
         self._message_store = MessageStore()
         self._persist_handle: asyncio.TimerHandle | None = None
         self._contact_requests: dict[str, float] = {}
+        self._declined_requests: set[str] = set()
         self._dial_tasks: dict[str, asyncio.Task[None]] = {}
         self.call_relay: Any = None
 
@@ -481,7 +482,7 @@ class MessagingBackend(
         hash_id = link.hash_id
         link.last_seen = time.monotonic()
         if msg_type == MessageType.RECEIPT:
-            await self._handle_receipt(hash_id, body)
+            await self._handle_receipt(link, body)
             return
         if msg_type == MessageType.PAIR:
             await self._handle_pair(link, body)
@@ -529,19 +530,23 @@ class MessagingBackend(
         Nothing is stored or shown as a message; the user gets a contact
         request they can accept, and the sender learns it was not delivered.
         """
-        hash_id = link.hash_id
         if msg_type == MessageType.TEXT:
             with contextlib.suppress(Exception):
                 data = decode_payload(body)
                 msg_id = str(data.get("id", ""))
                 if msg_id:
                     await self._send_receipt(link, msg_id, "not_trusted")
+        await self._raise_contact_request(link)
+
+    async def _raise_contact_request(self, link: PeerLink) -> None:
+        """Ask the user whether to add a verified peer who has added us."""
+        hash_id = link.hash_id
         now = time.monotonic()
         if now - self._contact_requests.get(hash_id, 0.0) < 30.0:
             return
         self._contact_requests[hash_id] = now
-        if self.trusted.get(hash_id):  # blocked contacts stay silent
-            return
+        if self.trusted.get(hash_id) or hash_id in self._declined_requests:
+            return  # already a contact, blocked, or declined this session
         self.discovery.upsert_contact_request(
             hash_id=hash_id,
             name=link.peer_name,
@@ -623,19 +628,34 @@ class MessagingBackend(
             await self._send_raw(link.transport_peer_id, link.transport, packet)
 
     async def notify_contact_accepted(self, hash_id: str) -> None:
-        """Tell a peer we now trust them so it re-sends refused messages."""
-        link = self.get_link(hash_id)
-        if link and link.handshake_complete:
-            await self._send_receipt(link, "", "accepted")
-        self._contact_requests.pop(hash_id, None)
+        """Tell a peer we added them: they flush refused messages, or get asked to add us back.
 
-    async def _handle_receipt(self, hash_id: str, body: bytes) -> None:
+        Sent again on every link-up with a trusted contact, so it also reaches
+        peers that were offline when they were added.
+        """
+        self._declined_requests.discard(hash_id)
+        self._contact_requests.pop(hash_id, None)
+        link = self.get_link(hash_id)
+        if link and link.handshake_complete and self.is_trusted(hash_id):
+            await self._send_receipt(link, "", "accepted")
+
+    def decline_contact_request(self, hash_id: str) -> None:
+        """Dismiss a contact request until the app restarts."""
+        self._declined_requests.add(hash_id)
+        self.discovery.remove(hash_id)
+
+    async def _handle_receipt(self, link: PeerLink, body: bytes) -> None:
+        hash_id = link.hash_id
         data = decode_payload(body)
         msg_id = str(data.get("id", ""))
         status = str(data.get("status", ""))
         if status == "accepted":
-            # The peer just accepted our contact request: resend what they refused.
-            await self.flush_outbox(hash_id)
+            if self.is_trusted(hash_id):
+                # They accepted our contact request: resend what they refused.
+                await self.flush_outbox(hash_id)
+            else:
+                # They added us — offer to add them back so pairing works both ways.
+                await self._raise_contact_request(link)
             return
         if status not in ("delivered", "not_trusted"):
             return

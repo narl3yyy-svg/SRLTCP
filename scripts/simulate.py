@@ -157,6 +157,25 @@ async def desktop_flow() -> None:
         await alice.wait_for_selector(".bubble.in img.chat-image", timeout=20000)
         print("alice received image preview")
         await shot(alice, "03-alice-received-image")
+        # "Download file" asks where to save (stub the picker, collect the bytes)
+        await alice.evaluate("""() => {
+          window.__saved = null;
+          window.showSaveFilePicker = async (opts) => ({
+            createWritable: async () => {
+              const parts = [];
+              return new WritableStream({
+                write: (c) => { parts.push(c); },
+                close: () => { window.__saved = { name: opts.suggestedName,
+                  size: parts.reduce((n, c) => n + c.byteLength, 0) }; },
+              });
+            },
+          });
+        }""")
+        await alice.click(".bubble.in .file-download")
+        await alice.wait_for_function("window.__saved && window.__saved.size > 0", timeout=10000)
+        saved = await alice.evaluate("window.__saved")
+        assert saved["size"] == os.path.getsize(f), saved
+        print("download: save picker offered, saved", saved)
 
         # --- Video call ---
         await bob.click("#btn-call-video")
@@ -322,6 +341,14 @@ async def mobile_flow() -> None:
         print("carol discovered alice over UDP broadcast")
         await carol.screenshot(path=f"{OUT}/11-carol-discovered.png")
 
+        # Back gesture on the Pair screen closes it instead of leaving the app
+        await carol.click("#btn-pair")
+        await carol.wait_for_selector("#pair-modal.open")
+        assert await carol.evaluate("window.androidNavigateBack()") is True
+        await carol.wait_for_selector("#pair-modal.open", state="detached", timeout=5000)
+        assert await carol.evaluate("window.androidNavigateBack()") is False  # main screen
+        print("back gesture: pair screen closed, main screen stays")
+
         # Carol trusts Alice and writes; Alice hasn't trusted Carol -> contact request
         await carol.click("#contacts .contact[data-name='Alice'] .contact-trust")
         await carol.click(".peer-tab[data-tab=trusted]")
@@ -333,10 +360,11 @@ async def mobile_flow() -> None:
         print("carol sees 'waiting for them to accept you'")
         await carol.screenshot(path=f"{OUT}/12-carol-waiting-accept.png")
 
-        await alice.click(".peer-tab[data-tab=discovered]")
-        await alice.wait_for_selector("#contacts .contact[data-name='Carol'] .contact-request-tag", timeout=15000)
+        # Alice is asked right away whether to add Carol back
+        await alice.wait_for_selector("#request-modal.open >> text=Carol", timeout=15000)
         await alice.screenshot(path=f"{OUT}/13-alice-contact-request.png")
-        await alice.click("#contacts .contact[data-name='Carol'] .contact-trust")
+        await alice.click("#request-accept")
+        await alice.wait_for_selector("#request-modal.open", state="detached", timeout=5000)
         await alice.click(".peer-tab[data-tab=trusted]")
         await alice.click("#contacts .contact[data-name='Carol']")
         await alice.wait_for_selector("text=Hi Alice, it's Carol from the LAN", timeout=15000)
@@ -355,7 +383,9 @@ async def mobile_flow() -> None:
         carol = await open_ui(browser, "carol", mobile=True)
         if not await carol.is_visible("#contacts"):
             await carol.click("#btn-menu")
-        await carol.click(".peer-tab[data-tab=trusted]")
+        # With a trusted contact the app opens on Trusted
+        await carol.wait_for_selector(".peer-tab.active[data-tab=trusted]", timeout=10000)
+        print("default tab: Trusted once a contact exists")
         await carol.click("#contacts .contact[data-name='Alice']")
         await carol.wait_for_selector("text=Sent while you were offline", timeout=45000)
         await carol.wait_for_selector("text=Hi Alice, it's Carol from the LAN", timeout=5000)

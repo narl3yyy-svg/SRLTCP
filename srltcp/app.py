@@ -335,6 +335,31 @@ def android_import_pairing_card(uri: str) -> str:
     return json.dumps({"hash_id": peer.get("hash_id"), "name": peer.get("name")})
 
 
+def android_transfer_file(transfer_id: str) -> str:
+    """Locate a transfer's file so the Android app can copy it where the user picks.
+
+    Returns JSON ``{"path", "filename", "mime"}`` or ``{"error": ...}``.
+    """
+    import json
+    import mimetypes
+
+    from srltcp.core.protocol.messages import is_valid_transfer_id
+
+    node = _running_node.get("node")
+    if node is None:
+        return json.dumps({"error": "SRLTCP is still starting"})
+    assert isinstance(node, SRLTCPNode)
+    if not is_valid_transfer_id(transfer_id):
+        return json.dumps({"error": "invalid transfer"})
+    path = node.backend.transfer_file_path(transfer_id)
+    transfer = node.backend._transfers.get(transfer_id)
+    if path is None or transfer is None:
+        return json.dumps({"error": "file not ready"})
+    name = transfer.filename or path.name
+    mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    return json.dumps({"path": str(path), "filename": name, "mime": mime})
+
+
 def get_android_web_port() -> int:
     """Return bound HTTPS port for Android WebView."""
     return _android_web_port["port"]

@@ -44,6 +44,10 @@ class SRLTCPBridge(private val activity: MainActivity) {
         activity.runOnUiThread { activity.launchQrScanner() }
     }
 
+    /** Open the system "Save as" picker for a received/sent file. */
+    @JavascriptInterface
+    fun saveTransferFile(transferId: String): String = activity.saveTransferFile(transferId)
+
     @JavascriptInterface
     fun shareText(title: String, text: String) {
         activity.runOnUiThread { activity.shareText(title, text) }

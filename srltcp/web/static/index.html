@@ -423,7 +423,7 @@
 <button type="button" class="media-zoom-btn" id="media-zoom-reset" title="Reset zoom" aria-label="Reset zoom">Reset</button>
 </div>
 <div id="media-lightbox-body" class="media-lightbox-body"></div>
-<a class="file-download media-lightbox-download" id="media-lightbox-download" href="#" download target="_blank" rel="noopener">Download</a>
+<a class="file-download media-lightbox-download" id="media-lightbox-download" href="#" download>Download</a>
 </div>
 </div>
 <div class="modal-overlay" id="wan-modal">
@@ -476,6 +476,18 @@
 <div id="share-entries" class="share-entries"></div>
 <div class="modal-actions">
 <button type="button" class="action-btn secondary" id="share-close">Close</button>
+</div>
+</div>
+</div>
+<div class="modal-overlay" id="request-modal" aria-hidden="true">
+<div class="modal-card">
+<h3>Contact request</h3>
+<p id="request-text"></p>
+<p class="hint">Accept to add them to Trusted so you can message and call each other.</p>
+<p class="hint" id="request-hash"></p>
+<div class="modal-actions">
+<button type="button" class="action-btn secondary" id="request-decline">Not now</button>
+<button type="button" class="action-btn" id="request-accept">Accept</button>
 </div>
 </div>
 </div>
