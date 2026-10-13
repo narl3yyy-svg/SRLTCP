@@ -800,7 +800,10 @@ class MessagingBackend(
             link = self.get_link(peer.hash_id)
             if link and link.handshake_complete:
                 continue
-            if peer.tcp_host or peer.wan_host or self.relay_available_for(peer.hash_id):
+            if (
+                peer.tcp_host or peer.alt_hosts or peer.wan_host
+                or self.relay_available_for(peer.hash_id)
+            ):
                 self._kick_connect(peer.hash_id)
 
     async def reap_dead_links(self, max_silence: float) -> list[str]:

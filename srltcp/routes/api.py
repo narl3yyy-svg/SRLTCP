@@ -196,6 +196,12 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         removed = node.backend.clear_messages_for_peer(hash_id)
         return web.json_response({"cleared": removed})
 
+    async def trusted_diagnose(request: web.Request) -> web.Response:
+        hash_id = request.match_info.get("hash_id", "").lower()
+        if not is_valid_hash_id(hash_id) or not node.backend.trusted.get(hash_id):
+            return web.json_response({"error": "peer not found"}, status=404)
+        return web.json_response(await node.backend.diagnose_contact(hash_id))
+
     async def trusted_remove(request: web.Request) -> web.Response:
         hash_id = request.match_info.get("hash_id", "")
         await node.backend.disconnect_peer(hash_id)
@@ -1024,6 +1030,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_patch("/api/trusted/{hash_id}", trusted_update)
     app.router.add_post("/api/trusted/{hash_id}/clear-chat", trusted_clear_chat)
     app.router.add_delete("/api/trusted/{hash_id}", trusted_remove)
+    app.router.add_post("/api/trusted/{hash_id}/diagnose", trusted_diagnose)
     app.router.add_get("/api/messages", messages)
     app.router.add_delete("/api/messages/{message_id}", delete_message)
     app.router.add_post("/api/messages", send_message)

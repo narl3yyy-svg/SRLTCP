@@ -1780,3 +1780,9 @@ html, body { touch-action: pan-x pan-y; }
 #share-password-row { margin: 0.5rem 0; }
 #share-password-row input { flex: 1; min-width: 0; }
 #share-submit { margin-top: 0.4rem; }
+.contact-check { margin: 0.6rem 0; }
+.contact-check-result { margin-top: 0.5rem; font-size: 0.8rem; line-height: 1.4; }
+.contact-check-result ul { margin: 0.35rem 0; padding-left: 1rem; }
+.contact-check-result li.ok { color: var(--success, #3ecf8e); }
+.contact-check-result li.bad { color: var(--text-muted); }
+.contact-check-result .muted { color: var(--text-muted); }

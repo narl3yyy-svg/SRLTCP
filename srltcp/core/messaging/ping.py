@@ -28,6 +28,8 @@ class PingMixin:
     def _init_ping(self: MessagingBackend) -> None:
         self._pending_pings = {}
         self._ping_tasks = []
+        self._ping_tick = 0
+        self._net_changed_tick = 0
 
     def _own_hash_ids(self: MessagingBackend) -> set[str]:
         return {i.hash_id for i in self.identities.values()}
@@ -66,9 +68,14 @@ class PingMixin:
                         await self.reap_dead_links(LINK_DEAD_AFTER)
                     except Exception as exc:  # noqa: BLE001 - keep the loop alive
                         log.debug("Link reaper failed: %s", exc)
-                if tick and tick % 8 == 0:
-                    self.connect_known_contacts()  # contacts come back online by themselves
+                # Contacts we have no session with: every 30 s for the first few
+                # minutes (after start or a network change), then every 2 min.
+                # Matters when only one side can dial (e.g. VPN phone -> home LAN).
+                since_change = tick - self._net_changed_tick
+                if tick and tick % (2 if since_change < 20 else 8) == 0:
+                    self.connect_known_contacts()
                 tick += 1
+                self._ping_tick = tick
                 await asyncio.sleep(PING_INTERVAL)
 
         self._ping_tasks.append(asyncio.create_task(_loop()))
@@ -99,6 +106,10 @@ class PingMixin:
                         self._kick_connect(hash_id)
                 await self.relay_network_changed(ips)
                 await self.addresses_changed()
+                if ips - last:
+                    # A network came up (VPN connected, new Wi-Fi): try contacts now.
+                    self._net_changed_tick = self._ping_tick
+                    self.connect_known_contacts()
             last = ips
 
     async def stop_ping_loop(self: MessagingBackend) -> None:
