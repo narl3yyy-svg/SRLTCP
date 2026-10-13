@@ -62,10 +62,14 @@ class MainActivity : AppCompatActivity() {
         val callback = filePathCallback
         filePathCallback = null
         if (callback == null) return@registerForActivityResult
-        val uris = WebChromeClient.FileChooserParams.parseResult(
-            result.resultCode,
-            result.data
-        )
+        // parseResult() only returns one file; with "select multiple" the
+        // picker returns them in clipData.
+        val clip = result.data?.clipData
+        val uris = if (result.resultCode == RESULT_OK && clip != null && clip.itemCount > 0) {
+            Array(clip.itemCount) { clip.getItemAt(it).uri }
+        } else {
+            WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+        }
         callback.onReceiveValue(uris)
     }
 

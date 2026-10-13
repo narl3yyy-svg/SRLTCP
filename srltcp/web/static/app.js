@@ -611,24 +611,17 @@
             }, 600);
           }
           break;
-        case "share_offer":
+        case "share_offer": {
+          const from = peerByHash(data.hash_id)?.name || data.hash_id?.slice(0, 8);
           loadShareGrants()
-            .then(() => {
-              if (state.selectedPeer === data.hash_id) renderShareGrants();
-              toast(`Shared folder offered: ${data.label || "folder"}`);
-            })
-            .catch(() => toast("Failed to refresh share grants", "error"));
+            .then(() => renderShareGrants())
+            .catch(() => {});
+          toast(`${from} shared “${data.label || "files"}” with you — open Share → Shared with me`);
+          notifyUser("Shared with you", `${from} shared “${data.label || "files"}”`, { tag: `share-${data.grant_id}` });
           break;
+        }
         case "share_listing":
-          if (data.grant_id) {
-            state.shareListing = {
-              ownerHash: data.hash_id,
-              grantId: data.grant_id,
-              entries: data.entries || [],
-            };
-            renderShareEntries();
-          }
-          break;
+          break;  // the listing request itself returns the result
         case "group_update":
           onGroupUpdate(data.group);
           break;
@@ -642,11 +635,21 @@
           );
           logActivity(`Contact request: ${data.name || data.hash_id?.slice(0, 8)}`);
           break;
-        case "paired":
-          loadPeers();
-          toast(`Paired with ${data.name || data.hash_id?.slice(0, 8)}`);
-          logActivity(`Paired with ${data.name || data.hash_id?.slice(0, 8)}`);
+        case "paired": {
+          // Someone scanned our QR / opened our link: they're a contact now
+          // on both sides. Show them, like on the scanning device.
+          const label = data.name || data.hash_id?.slice(0, 8);
+          toast(`${label} scanned your code — you're now contacts`);
+          logActivity(`Paired with ${label}`);
+          setPeerTab("trusted");
+          loadPeers().then(() => {
+            if ($("#pair-modal")?.classList.contains("open")) {
+              closePairModal();
+              if (data.hash_id) selectPeer(data.hash_id, label);
+            }
+          });
           break;
+        }
         case "call_signal":
           if (typeof window.srltcpOnCallSignal === "function") window.srltcpOnCallSignal(data);
           break;
@@ -1988,74 +1991,150 @@
     state.shareGrants = ok ? (data || { local: [], remote: [] }) : { local: [], remote: [] };
   }
 
-  function renderShareGrants() {
-    const el = $("#share-grants-list");
-    if (!el) return;
-    const peer = state.selectedPeer;
-    const remote = (state.shareGrants.remote || []).filter(
-      (g) => !peer || g.owner_hash === peer
-    );
-    const local = (state.shareGrants.local || []).filter(
-      (g) => !peer || g.recipient_hash === peer
-    );
-    let html = "";
-    if (state.shareMode === "offer" && peer && isPeerLinked(peer)) {
-      const folder = state.settings.shared_folder || "";
-      $("#share-offer-options")?.classList.remove("hidden");
-      html += `<div class="share-section">
-        <p class="share-section-title">Offer to ${escapeHtml(state.selectedName || "peer")}</p>
-        <p class="share-hint">Folder: ${escapeHtml(folder || "(default shared folder)")}</p>
-        <button type="button" class="action-btn" id="share-offer-btn">Offer shared folder (E2EE)</button>
-      </div>`;
-    } else {
-      $("#share-offer-options")?.classList.add("hidden");
-    }
-    if (remote.length) {
-      html += `<div class="share-section"><p class="share-section-title">Available from peers</p>`;
-      html += remote.map((g) => {
-        const owner = peerByHash(g.owner_hash);
-        return `<button type="button" class="share-grant-btn" data-owner="${escapeHtml(g.owner_hash)}" data-grant="${escapeHtml(g.grant_id)}">
-          ${escapeHtml(g.label || "shared")} · ${escapeHtml(owner?.name || g.owner_hash.slice(0, 8))}
-        </button>`;
-      }).join("");
-      html += "</div>";
-    }
-    if (local.length) {
-      html += `<div class="share-section"><p class="share-section-title">Your active offers</p>`;
-      html += local.map((g) => {
-        const recip = peerByHash(g.recipient_hash);
-        const limit = g.max_downloads
-          ? `${g.download_count || 0}/${g.max_downloads} downloads`
-          : "unlimited downloads";
-        return `<div class="share-grant-item">
-          <span>${escapeHtml(g.label)} → ${escapeHtml(recip?.name || g.recipient_hash.slice(0, 8))}</span>
-          <span class="share-grant-meta">${escapeHtml(limit)}</span>
-          <button type="button" class="share-revoke-btn" data-grant="${escapeHtml(g.grant_id)}">Remove</button>
-        </div>`;
-      }).join("");
-      html += "</div>";
-    }
-    if (!html) {
-      html = '<div class="empty-hint">No shared folders yet. Connect to a trusted peer and offer a folder.</div>';
-    }
-    el.innerHTML = html;
-    $("#share-offer-btn")?.addEventListener("click", offerShareToSelected);
-    el.querySelectorAll(".share-grant-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        requestShareListing(btn.dataset.owner, btn.dataset.grant);
-      });
+  /* ── Shared folders / files (E2EE) ── */
+  const SHARE_ERRORS = {
+    password_required: "This share needs a password.",
+    wrong_password: "Wrong password.",
+    locked: "Too many wrong passwords — try again in 10 minutes.",
+    access_denied: "This share has ended or was removed.",
+  };
+
+  function shareExpiry(g) {
+    if (!g.expires) return "";
+    if (g.ttl_preset === "forever") return "until removed";
+    const mins = Math.round((g.expires * 1000 - Date.now()) / 60000);
+    if (mins < 1) return "ending";
+    if (mins < 60) return `${mins} min left`;
+    if (mins < 48 * 60) return `${Math.round(mins / 60)} h left`;
+    return `${Math.round(mins / 1440)} days left`;
+  }
+
+  function setShareTab(tab) {
+    state.shareTab = tab;
+    document.querySelectorAll(".share-tab").forEach((b) => {
+      b.classList.toggle("active", b.dataset.shareTab === tab);
     });
+    document.querySelectorAll(".share-panel").forEach((p) => {
+      p.classList.toggle("hidden", p.dataset.sharePanel !== tab);
+    });
+  }
+
+  function shareKind() {
+    return document.querySelector('input[name="share-kind"]:checked')?.value || "folder";
+  }
+
+  function renderShareForm() {
+    const kind = shareKind();
+    $("#share-folder-field")?.classList.toggle("hidden", kind !== "folder");
+    $("#share-files-field")?.classList.toggle("hidden", kind !== "files");
+    const groupSel = $("#share-group");
+    if (groupSel) {
+      const current = groupSel.value || state.shareGroupPreset || "";
+      groupSel.innerHTML = '<option value="">Pick contacts below…</option>' +
+        (state.groups || []).map((g) =>
+          `<option value="${escapeHtml(g.id)}">Group: ${escapeHtml(g.name)}</option>`
+        ).join("");
+      groupSel.value = (state.groups || []).some((g) => g.id === current) ? current : "";
+    }
+    const box = $("#share-recipients");
+    if (!box) return;
+    const contacts = (state.trusted || []).filter((p) => !p.blocked);
+    if (!contacts.length) {
+      box.innerHTML = '<div class="empty-hint">No contacts yet — pair with someone first.</div>';
+      return;
+    }
+    const chosen = state.shareChosen || new Set();
+    box.innerHTML = contacts.map((p) => `
+      <label class="share-recipient">
+        <input type="checkbox" value="${escapeHtml(p.hash_id)}" ${chosen.has(p.hash_id) ? "checked" : ""} />
+        <span>${escapeHtml(p.name || p.hash_id.slice(0, 8))}</span>
+        ${isPeerLinked(p.hash_id) ? '<span class="contact-online" title="Connected">●</span>' : '<span class="share-later" title="Gets it when next connected">later</span>'}
+      </label>`).join("");
+  }
+
+  function renderShareIncoming() {
+    const el = $("#share-incoming-list");
+    if (!el) return;
+    const remote = state.shareGrants.remote || [];
+    const count = $("#share-incoming-count");
+    if (count) {
+      count.textContent = String(remote.length);
+      count.classList.toggle("hidden", !remote.length);
+    }
+    if (!remote.length) {
+      el.innerHTML = '<div class="empty-hint">Nothing shared with you right now.</div>';
+      $("#share-entries").innerHTML = "";
+      $("#share-password-row")?.classList.add("hidden");
+      return;
+    }
+    el.innerHTML = remote.map((g) => {
+      const owner = peerByHash(g.owner_hash);
+      const active = state.shareListing.grantId === g.grant_id ? " active" : "";
+      return `<button type="button" class="share-grant-btn${active}" data-owner="${escapeHtml(g.owner_hash)}" data-grant="${escapeHtml(g.grant_id)}">
+        ${g.password ? "🔒 " : ""}${escapeHtml(g.label || "shared")}
+        <span class="share-grant-meta">from ${escapeHtml(owner?.name || g.owner_hash.slice(0, 8))} · ${escapeHtml(shareExpiry(g))}${g.max_downloads ? ` · ${g.downloads_remaining ?? g.max_downloads} downloads left` : ""}</span>
+      </button>`;
+    }).join("");
+    el.querySelectorAll(".share-grant-btn").forEach((btn) => {
+      btn.addEventListener("click", () => requestShareListing(btn.dataset.owner, btn.dataset.grant));
+    });
+  }
+
+  function renderShareMine() {
+    const el = $("#share-mine-list");
+    if (!el) return;
+    const local = state.shareGrants.local || [];
+    const count = $("#share-mine-count");
+    if (count) {
+      count.textContent = String(local.length);
+      count.classList.toggle("hidden", !local.length);
+    }
+    if (!local.length) {
+      el.innerHTML = '<div class="empty-hint">You aren’t sharing anything.</div>';
+      return;
+    }
+    el.innerHTML = local.map((g) => {
+      const recip = peerByHash(g.recipient_hash);
+      const dl = g.max_downloads ? `${g.download_count || 0}/${g.max_downloads} downloads` : `${g.download_count || 0} downloads`;
+      const status = g.waiting ? "waiting for them to connect" : shareExpiry(g);
+      return `<div class="share-grant-item">
+        <span>${g.password ? "🔒 " : ""}${escapeHtml(g.label)} → ${escapeHtml(recip?.name || g.recipient_hash.slice(0, 8))}</span>
+        <span class="share-grant-meta">${escapeHtml(status)} · ${escapeHtml(dl)}</span>
+        <button type="button" class="share-revoke-btn" data-grant="${escapeHtml(g.grant_id)}">Stop sharing</button>
+      </div>`;
+    }).join("");
     el.querySelectorAll(".share-revoke-btn").forEach((btn) => {
       btn.addEventListener("click", () => revokeShareGrant(btn.dataset.grant));
     });
   }
 
+  function renderShareGrants() {
+    renderShareIncoming();
+    renderShareMine();
+  }
+
   function renderShareEntries() {
     const el = $("#share-entries");
     if (!el) return;
-    const entries = state.shareListing.entries || [];
+    const { grantId, entries = [], error = "", loading = false } = state.shareListing;
+    $("#share-password-row")?.classList.toggle(
+      "hidden",
+      !(grantId && ["password_required", "wrong_password"].includes(error))
+    );
+    if (!grantId) {
+      el.innerHTML = "";
+      return;
+    }
+    if (loading) {
+      el.innerHTML = '<div class="empty-hint">Opening…</div>';
+      return;
+    }
+    if (error) {
+      el.innerHTML = `<div class="empty-hint">${escapeHtml(SHARE_ERRORS[error] || error)}</div>`;
+      return;
+    }
     if (!entries.length) {
-      el.innerHTML = '<div class="empty-hint">Folder is empty or listing pending…</div>';
+      el.innerHTML = '<div class="empty-hint">This share is empty.</div>';
       return;
     }
     el.innerHTML = entries.map((e) => {
@@ -2081,12 +2160,20 @@
     });
   }
 
-  async function openShareModal(mode = "browse") {
-    state.shareMode = mode;
+  async function openShareModal(mode = "offer") {
     state.shareListing = { ownerHash: null, grantId: null, entries: [] };
+    state.shareChosen = new Set(state.selectedPeer && !state.selectedGroup ? [state.selectedPeer] : []);
+    state.shareGroupPreset = state.selectedGroup || "";
+    setInputValue("share-folder", state.settings.shared_folder || "");
+    setInputValue("share-label", "");
+    setInputValue("share-password", "");
+    const files = $("#share-files");
+    if (files) files.value = "";
     await loadShareGrants();
+    renderShareForm();
     renderShareGrants();
     renderShareEntries();
+    setShareTab(mode === "browse" ? "incoming" : "new");
     openModal($("#share-modal"));
   }
 
@@ -2094,57 +2181,82 @@
     closeModal($("#share-modal"));
   }
 
-  async function offerShareToSelected() {
-    if (!state.selectedPeer) {
-      toast("Select a peer first");
+  async function submitShare() {
+    const btn = $("#share-submit");
+    const recipients = [...document.querySelectorAll("#share-recipients input:checked")].map((i) => i.value);
+    const groupId = $("#share-group")?.value || "";
+    if (!recipients.length && !groupId) {
+      toast("Choose who to share with", "error");
       return;
     }
-    if (!isPeerLinked(state.selectedPeer)) {
-      toast("Connect to peer before sharing");
-      await connectPeer(state.selectedPeer, false);
-      if (!isPeerLinked(state.selectedPeer)) return;
+    const kind = shareKind();
+    let path = "";
+    if (kind === "files") {
+      const picked = [...($("#share-files")?.files || [])];
+      if (!picked.length) {
+        toast("Pick at least one file", "error");
+        return;
+      }
+      const form = new FormData();
+      picked.forEach((f) => form.append("file", f, f.name));
+      if (btn) btn.disabled = true;
+      toast(`Preparing ${picked.length} file${picked.length === 1 ? "" : "s"}…`);
+      const { ok, data } = await safeFetch("/api/share/files", { method: "POST", body: form }, { fallback: {} });
+      if (btn) btn.disabled = false;
+      if (!ok || !data?.path) {
+        toast(data?.error || "Could not prepare the files", "error");
+        return;
+      }
+      path = data.path;
+    } else {
+      path = ($("#share-folder")?.value || "").trim();
     }
+    if (btn) btn.disabled = true;
     const { ok, data } = await apiPost("/api/share/peer/offer", {
-      recipient_hash: state.selectedPeer,
-      label: state.settings.shared_folder?.split("/").pop() || "shared",
-      ttl_preset: $("#share-ttl")?.value || "1h",
+      recipients,
+      group_id: groupId,
+      kind,
+      path,
+      label: ($("#share-label")?.value || "").trim(),
+      ttl_preset: $("#share-ttl")?.value || "1d",
       download_limit_preset: $("#share-download-limit")?.value || "unlimited",
+      password: $("#share-password")?.value || "",
     });
+    if (btn) btn.disabled = false;
     if (!ok) {
-      toast(data?.error || "Share offer failed", "error");
+      toast(data?.error || "Sharing failed", "error");
       return;
     }
-    toast("Shared folder offered (E2EE)");
+    const grants = data.grants || [];
+    const waiting = grants.filter((g) => g.waiting).length;
+    toast(`Shared with ${grants.length} contact${grants.length === 1 ? "" : "s"}${waiting ? ` (${waiting} will get it when they connect)` : ""}`);
+    setInputValue("share-password", "");
     await loadShareGrants();
     renderShareGrants();
+    setShareTab("mine");
   }
 
-  async function requestShareListing(ownerHash, grantId) {
-    state.shareListing = { ownerHash, grantId, entries: [] };
+  async function requestShareListing(ownerHash, grantId, password = null) {
+    state.shareListing = { ownerHash, grantId, entries: [], loading: true };
+    renderShareIncoming();
     renderShareEntries();
-    toast("Loading folder listing…");
-    const { ok, data } = await apiPost("/api/share/peer/list", {
-      owner_hash: ownerHash,
-      grant_id: grantId,
-    });
+    const body = { owner_hash: ownerHash, grant_id: grantId };
+    if (password !== null) body.password = password;
+    const { ok, data } = await apiPost("/api/share/peer/list", body, { silent: true });
     if (!ok) {
-      toast(data?.error || "Could not list folder", "error");
+      state.shareListing = { ownerHash, grantId, entries: [], error: data?.error || "Could not open the share" };
+      renderShareEntries();
       return;
     }
-    if (Array.isArray(data.entries)) {
-      state.shareListing = {
-        ownerHash: data.owner_hash || ownerHash,
-        grantId: data.grant_id || grantId,
-        entries: data.entries,
-      };
-      renderShareEntries();
-      if (data.error) {
-        toast(data.error, "warning");
-      } else if (!data.entries.length) {
-        toast("Folder is empty");
-      } else {
-        toast(`Listed ${data.entries.length} item${data.entries.length === 1 ? "" : "s"}`);
-      }
+    state.shareListing = {
+      ownerHash: data.owner_hash || ownerHash,
+      grantId: data.grant_id || grantId,
+      entries: Array.isArray(data.entries) ? data.entries : [],
+      error: data.error || "",
+    };
+    renderShareEntries();
+    if (state.shareListing.error === "password_required" || state.shareListing.error === "wrong_password") {
+      $("#share-open-password")?.focus();
     }
   }
 
@@ -2168,13 +2280,13 @@
   }
 
   async function revokeShareGrant(grantId) {
-    if (!grantId || !confirm("Remove this shared folder offer? The peer will lose access.")) return;
+    if (!grantId || !confirm("Stop sharing? They lose access right away.")) return;
     const { ok, data } = await apiPost("/api/share/peer/revoke", { grant_id: grantId });
     if (!ok) {
-      toast(data?.error || "Could not revoke share", "error");
+      toast(data?.error || "Could not stop sharing", "error");
       return;
     }
-    toast("Share removed");
+    toast("Sharing stopped");
     await loadShareGrants();
     renderShareGrants();
   }
@@ -4173,7 +4285,7 @@
       case "share":
         closeContactMenu();
         if (state.selectedPeer !== hashId) selectPeer(hashId, name);
-        openShareModal("browse");
+        openShareModal("offer");
         break;
       default:
         break;
@@ -4198,6 +4310,34 @@
   $("#release-close")?.addEventListener("click", () => closeModal($("#release-modal")));
   $("#btn-share-folder")?.addEventListener("click", () => openShareModal("offer"));
   $("#share-close")?.addEventListener("click", closeShareModal);
+  $("#share-submit")?.addEventListener("click", submitShare);
+  document.querySelectorAll(".share-tab").forEach((b) => {
+    b.addEventListener("click", () => setShareTab(b.dataset.shareTab));
+  });
+  document.querySelectorAll('input[name="share-kind"]').forEach((r) => {
+    r.addEventListener("change", renderShareForm);
+  });
+  $("#share-recipients")?.addEventListener("change", (e) => {
+    const box = e.target.closest('input[type="checkbox"]');
+    if (!box) return;
+    state.shareChosen = state.shareChosen || new Set();
+    if (box.checked) state.shareChosen.add(box.value);
+    else state.shareChosen.delete(box.value);
+  });
+  $("#share-files")?.addEventListener("change", () => {
+    const n = $("#share-files")?.files?.length || 0;
+    const hint = $("#share-files-hint");
+    if (hint) hint.textContent = n ? `${n} file${n === 1 ? "" : "s"} selected.` : "Pick one or more files. A private copy is shared, so you can move or edit the originals.";
+  });
+  const openSharePw = () => {
+    const { ownerHash, grantId } = state.shareListing;
+    if (ownerHash && grantId) requestShareListing(ownerHash, grantId, $("#share-open-password")?.value || "");
+    setInputValue("share-open-password", "");
+  };
+  $("#share-open-submit")?.addEventListener("click", openSharePw);
+  $("#share-open-password")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") openSharePw();
+  });
   setupModalClose($("#share-modal"), closeShareModal);
   $("#wan-save")?.addEventListener("click", saveWanSettings);
   $("#wan-cancel")?.addEventListener("click", closeWanModal);

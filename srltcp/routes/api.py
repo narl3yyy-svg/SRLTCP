@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -13,7 +15,6 @@ from aiohttp import web
 
 from srltcp import __version__
 from srltcp.core.messaging.groups import GroupError, is_valid_group_id
-from srltcp.core.messaging.share_peer import SHARE_DOWNLOAD_LIMITS, SHARE_TTL_SECONDS
 from srltcp.core.protocol.messages import is_valid_transfer_id
 from srltcp.core.relay_proto import RelayCode, RelayCodeError
 from srltcp.core.settings import AppSettings, SettingsStore
@@ -457,43 +458,102 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         )
 
     async def share_peer_offer(request: web.Request) -> web.Response:
+        """Share a folder (or files uploaded via /api/share/files) with
+        contacts and/or the members of a group who are your contacts."""
+        from srltcp.core.messaging.groups import member_hashes
+
         data = await request.json()
-        recipient = data.get("recipient_hash", "")
-        if not recipient:
-            return web.json_response({"error": "recipient_hash required"}, status=400)
-        if not node.backend.is_trusted(recipient):
-            return web.json_response({"error": "peer not trusted"}, status=403)
-        path_str = data.get("path", "")
-        folder = (
-            _validate_path(path_str, must_exist=True)
-            if path_str
-            else node.settings.resolved_shared_folder()
-        )
+        recipients = [str(h).lower() for h in data.get("recipients", []) if isinstance(h, str)]
+        if data.get("recipient_hash"):
+            recipients.append(str(data["recipient_hash"]).lower())
+        group_id = str(data.get("group_id", "")).lower()
+        if group_id:
+            group = node.backend.groups.get(group_id)
+            if not group:
+                return web.json_response({"error": "group not found"}, status=404)
+            recipients += member_hashes(group)
+        me = node.backend._own_hash_ids()
+        recipients = [
+            h for h in dict.fromkeys(recipients)
+            if is_valid_hash_id(h) and h not in me and node.backend.is_trusted(h)
+        ]
+        if not recipients:
+            return web.json_response(
+                {"error": "choose at least one trusted contact (or a group with contacts)"},
+                status=400,
+            )
+        kind = "files" if data.get("kind") == "files" else "folder"
+        path_str = str(data.get("path", ""))
+        if kind == "files":
+            folder = _validate_path(path_str, must_exist=True)
+            base = node.backend.share_files_dir().resolve()
+            if not folder or not folder.is_relative_to(base) or folder == base:
+                return web.json_response({"error": "upload the files first"}, status=400)
+        else:
+            folder = (
+                _validate_path(path_str, must_exist=True)
+                if path_str
+                else node.settings.resolved_shared_folder()
+            )
         if not folder or not folder.is_dir():
-            return web.json_response({"error": "shared folder not found"}, status=404)
-        ttl_preset = data.get("ttl_preset", "1h")
-        download_limit_preset = data.get("download_limit_preset", "unlimited")
-        if ttl_preset not in SHARE_TTL_SECONDS:
-            return web.json_response({"error": "invalid ttl_preset"}, status=400)
-        if download_limit_preset not in SHARE_DOWNLOAD_LIMITS:
-            return web.json_response({"error": "invalid download_limit_preset"}, status=400)
-        link = node.backend.get_link(recipient)
-        if not link or not link.handshake_complete:
-            await node.backend.connect_to_peer(recipient)
-            await node.backend.wait_for_handshake(recipient, timeout=10.0)
+            return web.json_response({"error": "folder not found"}, status=404)
         try:
-            result = await node.backend.offer_share_folder(
-                recipient,
+            grants = await node.backend.offer_share(
+                recipients,
                 folder=folder,
-                label=data.get("label", folder.name),
-                ttl_preset=ttl_preset,
-                download_limit_preset=download_limit_preset,
+                label=str(data.get("label", "") or folder.name)[:128],
+                ttl_preset=str(data.get("ttl_preset", "1h")),
+                download_limit_preset=str(data.get("download_limit_preset", "unlimited")),
+                password=str(data.get("password", "")),
+                kind=kind,
             )
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
-        if not result:
-            return web.json_response({"error": "share offer failed — connect first"}, status=500)
-        return web.json_response(result)
+        if not grants:
+            return web.json_response({"error": "nothing shared"}, status=400)
+        return web.json_response({"grants": grants, **grants[0]})
+
+    async def share_files_upload(request: web.Request) -> web.Response:
+        """Copy picked files into a new private share folder (multipart, field "file",
+        repeatable). Returns the folder to pass to /api/share/peer/offer."""
+        import secrets as _secrets
+
+        from srltcp.utils.files import safe_filename
+
+        base = node.backend.share_files_dir()
+        folder = base / _secrets.token_hex(8)
+        folder.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.chmod(base, 0o700)
+        reader = await request.multipart()
+        names: list[str] = []
+        total = 0
+        while True:
+            field = await reader.next()
+            if field is None:
+                break
+            if getattr(field, "name", "") != "file":
+                continue
+            name = safe_filename(getattr(field, "filename", None) or "file.bin")
+            dest = folder / name
+            n = 1
+            while dest.exists():
+                dest = folder / f"{Path(name).stem}_{n}{Path(name).suffix}"
+                n += 1
+            with dest.open("wb") as f:
+                while True:
+                    chunk = await field.read_chunk()
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    total += len(chunk)
+            names.append(dest.name)
+            if len(names) >= 500:
+                break
+        if not names:
+            shutil.rmtree(folder, ignore_errors=True)
+            return web.json_response({"error": "no files received"}, status=400)
+        return web.json_response({"path": str(folder), "files": names, "size": total})
 
     async def share_peer_revoke(request: web.Request) -> web.Response:
         data = await request.json()
@@ -515,10 +575,13 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         grant_id = data.get("grant_id", "")
         if not owner or not grant_id:
             return web.json_response({"error": "owner_hash and grant_id required"}, status=400)
-        entries = await node.backend.request_share_list(owner, grant_id)
+        password = data.get("password")
+        entries = await node.backend.request_share_list(
+            owner, grant_id, password=str(password) if password is not None else None
+        )
         if entries is None:
             return web.json_response(
-                {"error": "list request failed or timed out"},
+                {"error": "list request failed or timed out — is the contact connected?"},
                 status=408,
             )
         return web.json_response(
@@ -526,6 +589,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                 "owner_hash": owner,
                 "grant_id": grant_id,
                 "entries": entries,
+                "error": node.backend.share_list_error(grant_id),
             }
         )
 
@@ -977,6 +1041,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_post("/api/transfers/{transfer_id}/cancel", cancel_transfer)
     app.router.add_get("/api/share/grants", share_grants)
     app.router.add_post("/api/share/peer/offer", share_peer_offer)
+    app.router.add_post("/api/share/files", share_files_upload)
     app.router.add_post("/api/share/peer/list", share_peer_list)
     app.router.add_post("/api/share/peer/fetch", share_peer_fetch)
     app.router.add_post("/api/share/peer/revoke", share_peer_revoke)
