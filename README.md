@@ -319,13 +319,17 @@ Every setting explained, plus common setups and troubleshooting: **[docs/NETWORK
 | **Link** | *Pair* → *Copy link* / *Share…*, send it over a channel you trust; the other side pastes it into *Pair* |
 | **NFC (Android)** | Open *Pair* on **both** phones and hold them back to back (NFC on, screens unlocked). The phones take turns reading each other and exchange contact cards automatically; you feel a short vibration when it worked |
 
-Pairing is always two-way. With QR, link and NFC both phones add each other. If you add someone from *Discovered* (or with an old code), their phone pops up **Contact request — Add them back?**; tapping *Accept* makes you contacts on both sides.
+Pairing is always two-way. With QR, link and NFC both phones add each other: the device that showed the code adds whoever scanned it automatically (the scan carries a one-time secret from that code) and opens the new chat — even if the two only reach each other later, or an app restarts in between. If you add someone from *Discovered* (or with an old code), their phone pops up **Contact request — Add them back?**; tapping *Accept* makes you contacts on both sides.
 
 A pairing code is a signed contact card (hash ID, public key, name, and every address the device has — VPN first). It works once and expires after 15 minutes. Compare the **safety number** (hash ID) shown on both screens if you want to be sure.
 
 ### Editing contacts
 
 Tap the contact's name at the top of a chat, the **⋮** next to a contact, or long-press it → *Edit contact*. You can rename them (only you see the name), set their LAN/VPN address and port, an optional internet address, block/unblock and delete.
+
+**Check connection** (in *Edit contact*) tries every address the app knows for that contact and says in plain words what works and what to change — e.g. "the VPN must include the home network" or "set up a relay".
+
+**Deleting a contact** keeps your chat with them for 24 hours: add them back within that time and the conversation carries on. After 24 hours it is deleted for good, and adding them again starts fresh. Group chats are not affected.
 
 ### Calls
 
@@ -408,45 +412,35 @@ Transfers are **resumable** — if interrupted, the receiver's partial file offs
 
 In the web UI, images and videos preview in chat during transfer. Click to enlarge in a viewer that zooms with two fingers, a double-tap or the mouse wheel (the rest of the app doesn't zoom; it fits the screen); use **Download file** to save it — you are asked where to save (Android shows the system *Save as* screen; desktop Chrome/Edge show a save dialog, other browsers use their download folder). The transfer dock (progress bar above the composer) hides automatically when no transfers are active. **Drag files** from your file manager onto a contact in the sidebar to send. Both peers must run **v0.1.17+** for shared-folder limits, revoke, and WAN features.
 
-### E2EE shared folder (recommended)
+### Sharing folders and files (E2EE)
 
-Share a folder with a **trusted, connected** peer over the encrypted link — no plaintext folder listing on the network.
+Open a chat → **folder icon** in the header (or the contact's **⋮** → *Share folder*). The share window has three tabs:
 
-**Owner (machine A):**
+**Share**
+1. *What*: **a folder** (Choose folder; your default shared folder is pre-filled) or **files** (pick one or more; a private copy is shared, so you can move or edit the originals).
+2. *With*: tick contacts, or pick a **group** (every member who is your contact gets it). Contacts who aren't connected now get the offer automatically the next time they are.
+3. *Name* (optional), *Available for* (5 min … until you stop it), *Downloads per person* (1 … unlimited).
+4. *Password* (optional): recipients must type it to open the share. Tell them another way. It's sent only inside the encrypted connection, you keep only a salted hash, and 5 wrong tries lock the share for 10 minutes.
 
-1. Open **Settings → Folders** and set **Default shared folder** (or use the default `~/.srltcp/shared`).
-2. Trust and connect to the peer on the LAN (or WAN — see below).
-3. Open the chat with that peer → click the **folder icon** in the header → set **time limit** and **download limit** → **Offer shared folder**.
-4. The peer receives an encrypted grant bound to their hash ID (enforced server-side).
+**Shared with me**: tap a share → enter the password if it has one → tap a file to download it (or *Download as ZIP* for a folder). Downloads use the normal encrypted file transfer.
 
-**Remove a share:** In the share modal, under **Your active offers**, click **Remove** next to any grant.
+**My shares**: who has what, time left, downloads used, "waiting for them to connect"; **Stop sharing** ends access at once.
 
-**Download limits:** Choose 1, 2, 5, 10, 25, or unlimited downloads per grant. Each file or ZIP counts as one download.
+Each recipient gets their own grant bound to their identity: nobody else can use it, even with the password. Shares survive restarts; files copied for a share are deleted when it ends.
 
-**Time limits:** 1 minute, 5 minutes, 1 hour, 1 day, 1 week, or forever.
-
-**Folder download:** Click **Download as ZIP** next to any folder in the browse view — the sender compresses it before transfer.
-
-**Recipient (machine B):**
-
-1. When connected, open **Share folder** for that contact.
-2. Select the offered grant → browse files (listing arrives over E2EE).
-3. Click a file to start a **secure file transfer** (same encrypted pipeline as chat attachments).
-
-**API (peer share):**
+**API:**
 
 ```bash
-# Offer folder to trusted peer (must be connected)
+# Files: upload into a private share folder (repeat -F for more files)
+curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" -F file=@photo.jpg https://127.0.0.1:9876/api/share/files
+# Share a folder (or the uploaded files: "kind":"files","path":<returned path>)
 curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" -X POST https://127.0.0.1:9876/api/share/peer/offer \
   -H 'Content-Type: application/json' \
-  -d '{"recipient_hash":"<peer_hash>","path":"/home/user/shared"}'
-
-# List remote folder (async — results via WebSocket share_listing)
+  -d '{"recipients":["<peer_hash>"],"group_id":"","path":"/home/user/shared","ttl_preset":"1d","download_limit_preset":"unlimited","password":""}'
+# Open a share you received (add "password" if it has one)
 curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" -X POST https://127.0.0.1:9876/api/share/peer/list \
-  -H 'Content-Type: application/json' \
-  -d '{"owner_hash":"<owner_hash>","grant_id":"<grant_id>"}'
-
-# Request file download
+  -H 'Content-Type: application/json' -d '{"owner_hash":"<owner_hash>","grant_id":"<grant_id>"}'
+# Download a file from it
 curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" -X POST https://127.0.0.1:9876/api/share/peer/fetch \
   -H 'Content-Type: application/json' \
   -d '{"owner_hash":"<owner_hash>","grant_id":"<grant_id>","path":"docs/readme.txt"}'
