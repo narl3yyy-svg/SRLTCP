@@ -1023,6 +1023,18 @@ class MessagingBackend(
         self._messages = prune_messages_by_retention(
             self._messages, self.config.message_retention_hours
         )
+        # A contact deleted over 24 h ago and not added back: their one-to-one
+        # chat goes for good (re-adding them later starts fresh). Group chats
+        # they took part in stay.
+        gone = set(self.trusted.take_expired_removals())
+        if gone:
+            self._messages = [
+                m for m in self._messages
+                if m.metadata.get("group_id")
+                or not ({m.sender_hash, m.recipient_hash} & gone)
+            ]
+            if self._history_enabled():
+                self._message_store.save(self._messages)
 
     def get_messages(
         self, *, limit: int = 200, peer: str = "", group: str = ""

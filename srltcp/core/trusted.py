@@ -14,6 +14,8 @@ from typing import Any
 from srltcp.utils.platform import data_dir
 
 _HASH_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+REMOVED_HISTORY_GRACE = 24 * 3600.0  # deleted contact's chat is kept this long
+
 _GENERIC_NAMES = frozenset({"peer", "trusted", "serial-peer", "tcp-peer", "unknown"})
 _FIXTURE_HASHES = frozenset(
     {
@@ -85,12 +87,22 @@ class TrustedStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or (data_dir() / "trusted.json")
         self._peers: dict[str, TrustedPeer] = {}
+        # hash_id -> when the contact was deleted. Their chat history is kept
+        # for REMOVED_HISTORY_GRACE (re-adding resumes it), then purged.
+        self.removed: dict[str, float] = {}
         self.load()
 
     def load(self) -> None:
         if not self.path.exists():
             return
         raw = json.loads(self.path.read_text(encoding="utf-8"))
+        removed = raw.get("removed", {})
+        if isinstance(removed, dict):
+            self.removed = {
+                str(k).lower(): float(v)
+                for k, v in removed.items()
+                if is_valid_hash_id(str(k)) and isinstance(v, (int, float))
+            }
         cleaned: dict[str, TrustedPeer] = {}
         for item in raw.get("peers", []):
             item = {k: v for k, v in item.items() if k in TrustedPeer.__dataclass_fields__}
@@ -113,7 +125,9 @@ class TrustedStore:
     def save(self) -> None:
         # Owner-only and atomic: the file holds the relay pair secrets.
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        data = {"peers": [p.to_dict() for p in self._peers.values()]}
+        data: dict[str, Any] = {"peers": [p.to_dict() for p in self._peers.values()]}
+        if self.removed:
+            data["removed"] = self.removed
         tmp = self.path.with_suffix(".json.tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
@@ -135,6 +149,7 @@ class TrustedStore:
         if not is_valid_hash_id(peer.hash_id):
             raise ValueError("invalid peer hash_id")
         peer.hash_id = peer.hash_id.lower()
+        self.removed.pop(peer.hash_id, None)  # re-added: history resumes
         if peer.public_key:
             from srltcp.core.protocol.signed import verify_identity_binding
 
@@ -147,10 +162,25 @@ class TrustedStore:
         self.save()
         return peer
 
+    def take_expired_removals(self, now: float | None = None) -> list[str]:
+        """Contacts deleted more than REMOVED_HISTORY_GRACE ago (and not added
+        back): returned once, so their chat history can be purged for good."""
+        now = time.time() if now is None else now
+        expired = [
+            h for h, ts in self.removed.items()
+            if now - ts >= REMOVED_HISTORY_GRACE and h not in self._peers
+        ]
+        if expired:
+            for h in expired:
+                self.removed.pop(h, None)
+            self.save()
+        return expired
+
     def remove(self, hash_id: str) -> bool:
         if hash_id not in self._peers:
             return False
         del self._peers[hash_id]
+        self.removed[hash_id] = time.time()
         self.save()
         return True
 
