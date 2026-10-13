@@ -14,6 +14,19 @@
   went into a dead connection. Now an unanswered offer is sent once more,
   then waits for the next connection, and the connection check keeps running.
 - The chat header no longer says "Online" after a contact disconnects.
+
+### Fixed: loudspeaker not working in calls on some phones
+- The earpiece/speaker choice was applied once, when the call connected. On
+  some phones the WebView's audio engine reset it a moment later, when the
+  other side's audio started, so the speaker button did nothing. The choice
+  is now applied again at that point, shortly after, and whenever a headset
+  is plugged in or removed.
+- On Android 12+, a phone that refuses the newer audio-routing call now falls
+  back to the older speakerphone switch instead of failing silently.
+- The speaker button also works on older WebViews that never report the
+  call as connected.
+- An "Add them back?" prompt no longer stays on screen after that contact
+  was added another way (for example by scanning a QR code).
 - File names with two dots in a row (e.g. `report..v2.pdf`) could be uploaded
   but then not sent. Fixed. If the device's storage is full, the error now
   says so.

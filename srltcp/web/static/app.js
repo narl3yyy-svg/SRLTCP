@@ -715,7 +715,10 @@
         state.groups = gRes.data || [];
         if (state.selectedGroup) updateGroupHeader();
       }
-      if (tRes.ok) state.trusted = tRes.data || [];
+      if (tRes.ok) {
+        state.trusted = tRes.data || [];
+        dropAnsweredRequests();
+      }
       if (tRes.ok && !state.peerTabChosen) {
         // First load: open on Trusted once there is someone to talk to.
         state.peerTabChosen = true;
@@ -997,6 +1000,14 @@
     state.requestDismissed?.delete(hashId);
     state.requestQueue.push(data);
     if (!state.requestCurrent) nextContactRequest();
+  }
+
+  // A contact trusted another way (pairing, QR) while its prompt was open or
+  // queued: the question is answered, so don't leave it covering the app.
+  function dropAnsweredRequests() {
+    const trusted = (h) => state.trusted.some((t) => t.hash_id === h);
+    state.requestQueue = (state.requestQueue || []).filter((r) => !trusted(r.hash_id));
+    if (state.requestCurrent && trusted(state.requestCurrent)) nextContactRequest();
   }
 
   function nextContactRequest() {

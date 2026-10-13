@@ -37,6 +37,8 @@
     const b = window.SRLTCPAndroid;
     return b && typeof b.setCallAudio === "function" ? b : null;
   };
+  // Answered (connecting) or connected; never while it's still ringing.
+  const inCall = () => call.state === "connecting" || call.state === "active";
   function routeAudio(active) {
     try { nativeAudio()?.setCallAudio(!!active, !!call.speaker); } catch (_) { /* ignore */ }
   }
@@ -200,6 +202,9 @@
       if (ra && ra.srcObject !== call.remote) ra.srcObject = call.remote;
       rv?.play?.().catch(() => {});
       ra?.play?.().catch(() => {});
+      // Remote audio starts now: apply earpiece/speaker again (the WebView's
+      // audio engine can reset the route when it opens its output).
+      if (inCall()) routeAudio(true);
     };
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;
@@ -402,7 +407,8 @@
 
   function toggleSpeaker() {
     call.speaker = !call.speaker;
-    if (call.state === "active") routeAudio(true);
+    // Not only once "active": older WebViews never report connectionState.
+    if (inCall()) routeAudio(true);
     updateButtons();
   }
 
