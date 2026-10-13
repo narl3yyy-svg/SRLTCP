@@ -467,7 +467,10 @@ async def group_flow() -> None:
         alice = await open_ui(browser, "alice")
         bob = await open_ui(browser, "bob")
         carol = await open_ui(browser, "carol", mobile=True)
-        # Alice and Bob pair again (Bob was deleted in the features flow)
+        # Alice and Bob pair again (Bob was deleted in the features flow).
+        # Bob may already be asking to be added back: decline that (it only
+        # hides the request); pairing explicitly still works.
+        await decline_requests(alice)
         await alice.click("#btn-pair")
         await alice.wait_for_selector("#pair-qr img", timeout=10000)
         await alice.click("#pair-copy")
