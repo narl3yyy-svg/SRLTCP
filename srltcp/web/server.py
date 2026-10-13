@@ -99,6 +99,7 @@ def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application
                 "hash_id": hash_id,
                 "name": name,
                 "transport": link.transport if link else "tcp",
+                "address": link.address if link else "",
             },
         )
 
