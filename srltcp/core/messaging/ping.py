@@ -63,6 +63,10 @@ class PingMixin:
                 # minutes, then every ~2 minutes.
                 if tick % (3 if tick < 30 else 12) == 0:
                     self.retry_outbox_connections()
+                try:
+                    await self._check_stale_offers()
+                except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                    log.debug("Stale offer check failed: %s", exc)
                 if tick:
                     try:
                         await self.reap_dead_links(LINK_DEAD_AFTER)

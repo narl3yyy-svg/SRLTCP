@@ -129,7 +129,9 @@ async def desktop_flow() -> None:
         await bob.click("#pair-import")
         await bob.wait_for_selector("#chat-active:not(.hidden)", timeout=10000)
         print("bob paired + chat open")
-        await alice.click("#pair-close")
+        await asyncio.sleep(1)
+        if await alice.is_visible("#pair-close"):
+            await alice.click("#pair-close")
         # Alice should auto-trust Bob (mutual pairing)
         await alice.click(".peer-tab[data-tab=trusted]")
         await alice.wait_for_selector("#contacts .contact[data-name='Bob']", timeout=15000)
@@ -180,7 +182,9 @@ async def desktop_flow() -> None:
         # --- Video call ---
         await bob.click("#btn-call-video")
         await alice.wait_for_selector("#call-overlay:not(.hidden)[data-mode=incoming]", timeout=10000)
-        assert await alice.is_visible("#call-accept-video") and await alice.is_visible("text=Video call")
+        kind = await alice.inner_text("#call-kind")
+        assert await alice.is_visible("#call-accept-video") and "Video call" in kind, (
+            await alice.is_visible("#call-accept-video"), kind)
         await shot(alice, "04-alice-incoming-call")
         await alice.click("#call-accept-video")
         await alice.wait_for_function("document.querySelector('#call-status').textContent.includes('encrypted')", timeout=20000)
@@ -220,6 +224,15 @@ async def desktop_flow() -> None:
         await browser.close()
 
 
+async def decline_requests(page) -> None:  # type: ignore[no-untyped-def]
+    """Close contact-request prompts from contacts deleted earlier in the run."""
+    for _ in range(5):
+        if not await page.is_visible("#request-modal.open"):
+            return
+        await page.click("#request-decline")
+        await page.wait_for_timeout(300)
+
+
 async def features_flow() -> None:
     """Contacts, shared folders, folder send, cancel, block, settings, misc modals."""
     shared = NODES["alice"].data / "shared"
@@ -257,11 +270,15 @@ async def features_flow() -> None:
 
         # Shared folder: Alice offers, Bob browses and downloads
         await alice.click("#btn-share-folder")
-        await alice.wait_for_selector("#share-offer-btn")
-        await alice.click("#share-offer-btn")
+        await alice.wait_for_selector("#share-submit")
+        if not await alice.is_checked("#share-recipients input[type=checkbox]"):
+            await alice.check("#share-recipients input[type=checkbox]")
+        await alice.click("#share-submit")
+        await alice.wait_for_selector("#share-mine-list .share-grant-item", timeout=10000)
         await alice.click("#share-close")
-        await bob.wait_for_selector("text=Shared folder offered", timeout=10000)
+        await bob.wait_for_selector("text=shared “", timeout=10000)
         await bob.click("#btn-share-folder")
+        await bob.click(".share-tab[data-share-tab=incoming]")
         await bob.wait_for_selector(".share-grant-btn", timeout=5000)
         await bob.click(".share-grant-btn")
         await bob.wait_for_selector(".share-entry.file >> text=hello.txt", timeout=10000)
@@ -276,8 +293,9 @@ async def features_flow() -> None:
             for _ in range(600):
                 fh.write(os.urandom(1024 * 1024))
         await alice.set_input_files("#file-input", str(big))
-        await alice.wait_for_selector("[data-cancel-transfer]", timeout=30000)
-        await alice.click("[data-cancel-transfer]")
+        cancel_big = ".transfer-dock-item:has-text('big.bin') [data-cancel-transfer]:not([disabled])"
+        await alice.wait_for_selector(cancel_big, timeout=30000)
+        await alice.click(cancel_big)
         await alice.wait_for_function(
             "[...document.querySelectorAll('.file-bubble')].some(b => /cancel/i.test(b.textContent))",
             timeout=10000,
@@ -379,10 +397,21 @@ async def mobile_flow() -> None:
         await carol.screenshot(path=f"{OUT}/12-carol-waiting-accept.png")
 
         # Alice is asked right away whether to add Carol back
+        # Bob (deleted from Alice's contacts earlier) may ask first: answer later.
+        for _ in range(30):
+            if await alice.is_visible("#request-modal.open >> text=Carol"):
+                break
+            if await alice.is_visible("#request-modal.open"):
+                await alice.click("#request-decline")
+            await alice.wait_for_timeout(500)
         await alice.wait_for_selector("#request-modal.open >> text=Carol", timeout=15000)
         await alice.screenshot(path=f"{OUT}/13-alice-contact-request.png")
         await alice.click("#request-accept")
-        await alice.wait_for_selector("#request-modal.open", state="detached", timeout=5000)
+        await alice.wait_for_selector("#request-modal.open >> text=Carol", state="detached", timeout=5000)
+        if await alice.is_visible("#request-modal.open"):
+            await alice.click("#request-decline")  # Bob's request again
+        if not await alice.is_visible(".peer-tab[data-tab=trusted]") and await alice.is_visible("#btn-back"):
+            await alice.click("#btn-back")  # phone layout: back from the open chat
         await alice.click(".peer-tab[data-tab=trusted]")
         await alice.click("#contacts .contact[data-name='Carol']")
         await alice.wait_for_selector("text=Hi Alice, it's Carol from the LAN", timeout=15000)
@@ -392,10 +421,24 @@ async def mobile_flow() -> None:
 
         # Offline delivery: stop Carol, Alice sends, restart Carol
         NODES["carol"].stop()
+        await decline_requests(alice)  # Bob (deleted earlier) keeps asking
         await alice.fill("#msg-input", "Sent while you were offline")
         await alice.click("#send-btn")
         await alice.wait_for_selector(".bubble.out:last-child .bubble-status:is(.pending,.sent)", timeout=5000)
         print("alice message queued while carol offline")
+        # A file to an unreachable contact waits too (it used to fail outright).
+        note = OUT / "offline-note.txt"
+        note.write_text("sent while carol was offline\n")
+        await alice.set_input_files("#file-input", str(note))
+        try:
+            await alice.wait_for_selector(
+                ".file-bubble:has-text('offline-note.txt') >> text=waiting for connection", timeout=15000)
+        except Exception:
+            print("DEBUG bubbles:", await alice.evaluate(
+                "[...document.querySelectorAll('.file-bubble')].map(b => b.innerText).join(' | ')"))
+            await alice.screenshot(path=f"{OUT}/debug-alice.png")
+            raise
+        print("alice file queued while carol offline")
         NODES["carol"].start()
         await NODES["carol"].wait_ready()
         carol = await open_ui(browser, "carol", mobile=True)
@@ -408,8 +451,11 @@ async def mobile_flow() -> None:
         await carol.wait_for_selector("text=Sent while you were offline", timeout=45000)
         await carol.wait_for_selector("text=Hi Alice, it's Carol from the LAN", timeout=5000)
         print("carol got the offline message after restart; history persisted")
+        await carol.wait_for_selector(".file-bubble:has-text('offline-note.txt') >> text=complete", timeout=45000)
+        print("carol got the file queued while she was offline")
         await carol.screenshot(path=f"{OUT}/14-carol-mobile-chat.png")
-        await alice.wait_for_selector(".bubble.out:last-child .bubble-status.delivered", timeout=15000)
+        await alice.wait_for_selector(
+            ".bubble.out:has-text('Sent while you were offline') .bubble-status.delivered", timeout=15000)
         print("alice sees delivered")
         await browser.close()
 
@@ -522,7 +568,7 @@ async def csp_flow() -> None:
         await page.fill("#set-relay-code", "")
         await page.click("#settings-form button[type=submit]")
         await page.wait_for_selector("text=Settings saved", timeout=5000)
-        await page.locator(".relay-settings").screenshot(path=f"{OUT}/30-relay-settings.png")
+        await page.locator(".relay-settings").first.screenshot(path=f"{OUT}/30-relay-settings.png")
         print("relay settings: bad code rejected, empty code saved")
         await browser.close()
 

@@ -1,5 +1,38 @@
 # SRLTCP Release Notes
 
+## v0.7.2 (2026-10-13)
+
+### Fixed: sending files failed
+- **Files to a contact who isn't reachable right now** (other network, Tor
+  still connecting, phone asleep) used to fail with "Cannot send file" or
+  "File send failed". They now wait, like messages: the chat shows *waiting
+  for connection*, and the file goes out by itself as soon as the contact is
+  reachable again.
+- **A file offer lost when the connection dropped** left the transfer stuck
+  as "offered". Because that counted as a transfer in progress, the app also
+  stopped checking that contact's connection, so later files and messages
+  went into a dead connection. Now an unanswered offer is sent once more,
+  then waits for the next connection, and the connection check keeps running.
+- The chat header no longer says "Online" after a contact disconnects.
+- File names with two dots in a row (e.g. `report..v2.pdf`) could be uploaded
+  but then not sent. Fixed. If the device's storage is full, the error now
+  says so.
+
+### Testing
+- New tests: a file sent to an offline contact arrives when they're back, in
+  the browser simulation too; an unanswered offer is resent; a 3 MB file over
+  Tor. 161 tests pass. App pentest 66/0, relay pentest 44/0.
+
+## v0.6.0 – v0.7.1 (summary)
+- **Tor** (0.7.x): reach trusted contacts from any network with no server or
+  port forwarding; only mutually trusted contacts can connect.
+- **Direct connections across networks** (0.6.x): address exchange, parallel
+  dialing, hole punching, IPv6; a VPN phone and a Wi-Fi phone talk directly.
+- Shared folders rebuilt (files or folders, contacts or groups, password,
+  time limit); QR pairing adds both sides; deleted contacts' chats kept 24 h.
+- Disconnect notices in the chat and *Check connection* explain why a contact
+  can't be reached.
+
 ## v0.5.0 (2026-10-12)
 
 **Update both phones** (and replace any old hub with the new relay): 0.5 uses a

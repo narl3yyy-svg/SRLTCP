@@ -14,6 +14,7 @@ from srltcp.core.messaging.constants import (
     CHUNK_SEND_DELAY,
     CHUNK_SIZE,
     COMPRESS_THRESHOLD,
+    OFFER_TIMEOUT,
     PROGRESS_EMIT_INTERVAL,
     RELAY_CHUNK_SIZE,
     SERIAL_CHUNK_DELAY,
@@ -68,6 +69,8 @@ class TransferMixin:
         self._transfer_started: dict[str, float] = {}
         self._transfer_cooldown_until: dict[str, float] = {}
         self._transfer_progress_emit: dict[str, float] = {}
+        # Outgoing offers not yet accepted: transfer id -> (sent at, tries).
+        self._offer_sent_at: dict[str, tuple[float, int]] = {}
 
     def transfer_file_path(self: MessagingBackend, transfer_id: str) -> Path | None:
         """Where a transfer's bytes live on disk (received copy or the sent original)."""
@@ -183,7 +186,43 @@ class TransferMixin:
 
             transfer.filename = safe_filename(filename)
         self._transfers[transfer.id] = transfer
-        chunk_size, _ = self._chunk_params(link.transport)
+        await self._send_file_offer(link, transfer)
+        transfer.state = TransferState.OFFERED
+        return transfer
+
+    async def queue_file(
+        self: MessagingBackend,
+        recipient_hash: str,
+        path: Path,
+        *,
+        transport: str = "tcp",
+        filename: str | None = None,
+    ) -> FileTransfer:
+        """Create an outgoing transfer for a contact with no session yet.
+
+        It waits PAUSED (offset 0) and is offered by resume_transfer when the
+        contact's session comes up."""
+        file_hash = await sha256_file(path)
+        transfer = FileTransfer.create(
+            self._identity_for_transport(transport).hash_id,
+            recipient_hash,
+            path,
+            transport,
+            sha256=file_hash,
+        )
+        if filename:
+            from srltcp.utils.files import safe_filename
+
+            transfer.filename = safe_filename(filename)
+        transfer.state = TransferState.PAUSED
+        self._transfers[transfer.id] = transfer
+        log.info("Contact %s unreachable — file %s queued", recipient_hash[:8], transfer.id)
+        return transfer
+
+    async def _send_file_offer(
+        self: MessagingBackend, link: object, transfer: FileTransfer
+    ) -> None:
+        chunk_size, _ = self._chunk_params(link.transport)  # type: ignore[attr-defined]
         body = encode_payload(
             {
                 "transfer_id": transfer.id,
@@ -193,10 +232,46 @@ class TransferMixin:
                 "chunk_size": chunk_size,
             }
         )
+        _, tries = self._offer_sent_at.get(transfer.id, (0.0, 0))
+        self._offer_sent_at[transfer.id] = (time.monotonic(), tries + 1)
         packet = await self._encrypt_for_link(link, MessageType.FILE_OFFER, body)
-        await self._send_raw(link.transport_peer_id, link.transport, packet)
-        transfer.state = TransferState.OFFERED
-        return transfer
+        await self._send_raw(link.transport_peer_id, link.transport, packet)  # type: ignore[attr-defined]
+
+    async def _check_stale_offers(self: MessagingBackend) -> None:
+        """Offers nobody answered (lost with a dropping link) must not count as
+        an active transfer forever: that would stop pings, dead-link detection
+        and reconnects for the contact. Re-offer once, then queue the file
+        again (PAUSED) so it is offered on the next link-up."""
+        now = time.monotonic()
+        for tid, (sent_at, tries) in list(self._offer_sent_at.items()):
+            transfer = self._transfers.get(tid)
+            if not transfer or transfer.state != TransferState.OFFERED:
+                self._offer_sent_at.pop(tid, None)
+                continue
+            if now - sent_at < OFFER_TIMEOUT:
+                continue
+            link = self.get_link(transfer.recipient_hash)
+            if tries < 2 and link and link.handshake_complete:
+                log.info("File offer %s unanswered — offering again", tid)
+                with contextlib.suppress(Exception):
+                    await self._send_file_offer(link, transfer)
+                continue
+            log.info("File offer %s unanswered — queued until reconnect", tid)
+            self._offer_sent_at.pop(tid, None)
+            transfer.state = TransferState.PAUSED
+            await self._emit_transfer_progress(transfer, force=True)
+
+    async def _pause_outgoing_for_peer(self: MessagingBackend, peer_hash: str) -> None:
+        """Link to a contact went down: outgoing files not yet streaming wait
+        for the next session (the chunk loop pauses streaming ones itself)."""
+        own = self._own_hash_ids()
+        for tid, transfer in list(self._transfers.items()):
+            if transfer.recipient_hash != peer_hash or transfer.sender_hash not in own:
+                continue
+            if transfer.state in (TransferState.OFFERED, TransferState.ACCEPTED):
+                self._offer_sent_at.pop(tid, None)
+                transfer.state = TransferState.PAUSED
+                await self._emit_transfer_progress(transfer, force=True)
 
     async def _handle_file_offer(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
@@ -293,6 +368,7 @@ class TransferMixin:
             return
         if existing and existing.done():
             self._transfer_tasks.pop(transfer_id, None)
+        self._offer_sent_at.pop(transfer_id, None)
         transfer.state = TransferState.TRANSFERRING
         # The receiver's offset is authoritative: it is what is on its disk.
         transfer.offset = offset
@@ -607,8 +683,15 @@ class TransferMixin:
         if not link or not link.handshake_complete:
             return False
         if transfer.sender_hash in self._own_hash_ids():
-            if transfer.offset >= transfer.size:
-                return False
+            # Re-send the full offer: the receiver may never have got it (file
+            # queued while offline, or the link dropped right after offering).
+            # A receiver that already knows the transfer answers with its
+            # on-disk offset, so this also resumes a partial transfer.
+            if transfer.state == TransferState.PAUSED:
+                transfer.state = TransferState.OFFERED
+            await self._send_file_offer(link, transfer)
+            await self._emit_transfer_progress(transfer, force=True)
+            return True
         else:
             dest = self._incoming_paths.get(tid, transfer.path)
             if dest.exists():
@@ -705,6 +788,15 @@ class TransferMixin:
                     transfer_id,
                     exc,
                 )
+
+    def peers_with_queued_files(self: MessagingBackend) -> set[str]:
+        """Contacts we still have outgoing files waiting for."""
+        own = self._own_hash_ids()
+        return {
+            t.recipient_hash
+            for t in self._transfers.values()
+            if t.state == TransferState.PAUSED and t.sender_hash in own
+        }
 
     def has_active_transfer_for(self: MessagingBackend, hash_id: str) -> bool:
         for transfer in self._transfers.values():

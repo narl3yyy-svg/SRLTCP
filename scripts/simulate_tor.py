@@ -5,7 +5,7 @@
         .venv/bin/python scripts/simulate_tor.py
 
 Checks: onion addresses are exchanged inside the encrypted session; with the
-direct path gone, a message is delivered over Tor; a stranger who knows the
+direct path gone, a message and a file are delivered over Tor; a stranger who knows the
 onion address is refused; turning Tor off removes the address from contacts.
 """
 
@@ -152,6 +152,14 @@ async def main() -> int:
         await b.send_message(ah, "reply over tor")
         ok = await wait_for(lambda: "reply over tor" in texts(a), 60)
         check("reply delivered back over the same Tor session", ok)
+        src = base / "photo.jpg"
+        src.write_bytes(os.urandom(3_000_000))
+        sent = await a.send_file(bh, src)
+        tid = sent["id"] if sent else ""
+        ok = await wait_for(lambda: tid in b._transfers
+                            and b._transfers[tid].state == "complete", 120)
+        check("3 MB file delivered over Tor", ok and b._incoming_paths[tid].read_bytes()
+              == src.read_bytes())
 
         # A stranger who somehow knows Alice's onion address gets nothing.
         m.trusted.add(TrustedPeer(hash_id=ah, name="alice", public_key=a.identities[

@@ -575,6 +575,9 @@
           }
           delete state.links[data.hash_id];
           delete state.linkMetrics[data.hash_id];
+          // The cached link list is only refreshed by the next poll; drop the
+          // dead link now so the header and file sends don't think it's up.
+          state._lastLinks = (state._lastLinks || []).filter((l) => l.hash_id !== data.hash_id);
           loadPeers();
           if (state.selectedPeer === data.hash_id) {
             refreshPeerStatus(data.hash_id);
@@ -1857,14 +1860,9 @@
 
   async function sendFileToPeer(file, hashId, peerName) {
     if (!hashId || !file) return false;
-    if (!isPeerLinked(hashId)) {
-      toast(`Connecting to ${peerName || "peer"}…`);
-      await connectPeer(hashId, false);
-      if (!isPeerLinked(hashId)) {
-        toast("Cannot send file — peer not connected");
-        return false;
-      }
-    }
+    // Not connected right now is fine: the file waits and goes out when the
+    // contact is reachable again, like a message.
+    if (!isPeerLinked(hashId)) await connectPeer(hashId, false);
     toast(`Uploading ${file.name}…`);
     const form = new FormData();
     form.append("file", file);
@@ -1874,7 +1872,7 @@
       { fallback: {} }
     );
     if (!upOk || !uploaded?.path) {
-      toast("Upload failed", "error");
+      toast(uploaded?.error || "Upload failed", "error");
       return false;
     }
     const { ok, data: sent } = await apiPost("/api/transfer", {
@@ -1886,7 +1884,11 @@
       toast(sent?.error || "File send failed", "error");
       return false;
     }
-    toast(`Sending ${file.name}…`);
+    if (sent?.state === "paused") {
+      toast(`${peerName || "Contact"} isn't reachable right now — ${file.name} will be sent when they're back`);
+    } else {
+      toast(`Sending ${file.name}…`);
+    }
     if (state.selectedPeer === hashId) loadMessages();
     renderTransferDock();
     renderTransfers();
@@ -2991,7 +2993,7 @@
     const progressLine = stateLabel === "complete"
       ? `${formatBytes(size)} · complete`
       : stateLabel === "paused"
-        ? `${formatBytes(offset)} / ${formatBytes(size)} · paused`
+        ? `${formatBytes(offset)} / ${formatBytes(size)} · waiting for connection`
         : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr}`;
     const progressBar = stateLabel !== "complete" && !cancelled && !failed
       ? `<div class="progress-track chat-progress"><div class="progress-fill" style="width:${pct}%"></div></div>`
@@ -3035,9 +3037,7 @@
             ? "Transfer cancelled"
             : failed
               ? "Transfer failed"
-              : stateLabel === "complete"
-                ? `${formatBytes(size)} · complete`
-                : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr}`
+              : progressLine
         }</div>
         ${progressBar}
         ${downloadLink}
@@ -3189,7 +3189,7 @@
           : stateLabel === "complete"
             ? `${formatBytes(size)} · complete`
             : paused
-              ? `${formatBytes(offset)} / ${formatBytes(size)} · paused`
+              ? `${formatBytes(offset)} / ${formatBytes(size)} · waiting for connection`
               : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speed}`;
     }
     if (stateLabel === "complete" || cancelled || failed) {
@@ -3723,7 +3723,7 @@
     return `<div class="transfer-dock-item" data-transfer-id="${escapeHtml(t.id)}">
       <div class="transfer-dock-info">
         <div class="transfer-dock-name">${escapeHtml(t.filename || "file")}</div>
-        <div class="transfer-dock-meta">${escapeHtml(t.state || "transferring")} · ${pct}%${speed}</div>
+        <div class="transfer-dock-meta">${t.state === "paused" ? "waiting for connection" : escapeHtml(t.state || "transferring")} · ${pct}%${speed}</div>
         ${terminal ? "" : `<div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>`}
       </div>
       <button type="button" class="transfer-dock-cancel" data-cancel-transfer="${escapeHtml(t.id)}"
