@@ -12,8 +12,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 65
-        versionName = "0.6.1"
+        versionCode = 66
+        versionName = "0.7.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -71,6 +71,14 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     // QR code scanning for in-person pairing (Apache-2.0, works offline).
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    // Tor (onion services) to reach trusted contacts on any network without a
+    // server or port forwarding. Pure Java; its Kotlin stdlib dependency isn't
+    // used and would clash with this project's Kotlin version. 0.4.9.5 is the
+    // newest build this toolchain (AGP 8.5, compileSdk 34) can package; later
+    // ones need compileSdk 37 and Java 24 bytecode.
+    implementation("info.guardianproject:tor-android:0.4.9.5") {
+        exclude(group = "org.jetbrains.kotlin")
+    }
     testImplementation("junit:junit:4.13.2")
 }
 
@@ -103,3 +111,4 @@ tasks.register("renameReleaseApk") {
             }
     }
 }
+

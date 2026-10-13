@@ -243,6 +243,10 @@ class TorMixin:
         if self._tor_control:
             await self._tor_control.close()  # removes our (non-detached) onion
             self._tor_control = None
+        from srltcp.utils.platform import is_android
+
+        if is_android() and not self.tor_enabled():
+            await asyncio.to_thread(self._tor_stop_android)
         if self._tor_proc and self._tor_proc.returncode is None:
             self._tor_proc.terminate()
             with contextlib.suppress(Exception):
@@ -417,7 +421,9 @@ class TorMixin:
                 [
                     "ControlPort 127.0.0.1:auto",
                     f"ControlPortWriteToFile {port_file}",
+                    "CookieAuthentication 1",
                     f"CookieAuthFile {cookie}",
+                    "SocksPort 127.0.0.1:auto",
                     "ClientOnly 1",
                 ]
             )
@@ -428,6 +434,16 @@ class TorMixin:
         )
         intent.setAction(tor_service.ACTION_START)
         ctx.startService(intent)
+
+    def _tor_stop_android(self: MessagingBackend) -> None:
+        with contextlib.suppress(Exception):
+            from java import jclass
+
+            ctx = jclass("com.chaquo.python.Python").getPlatform().getApplication()
+            intent = jclass("android.content.Intent")(
+                ctx, jclass("java.lang.Class").forName("org.torproject.jni.TorService")
+            )
+            ctx.stopService(intent)
 
     # ── Dialing ──
 
