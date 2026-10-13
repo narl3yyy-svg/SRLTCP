@@ -1,10 +1,14 @@
 package com.srltcp.app
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.RingtoneManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -12,8 +16,13 @@ import androidx.core.app.NotificationManagerCompat
 object SRLTCPNotifier {
     const val CHANNEL_NODE = "srltcp_node"
     const val CHANNEL_ALERTS = "srltcp_alerts"
+    const val CHANNEL_CALLS = "srltcp_calls"
     const val NOTIFICATION_NODE = 7825
+    const val NOTIFICATION_CALL = 9500
+    const val EXTRA_INCOMING_CALL = "com.srltcp.app.INCOMING_CALL"
     private const val ALERT_ID_BASE = 9000
+    private const val RING_MS = 45_000L  // same as the web UI's ring timeout
+    private val RING_VIBRATION = longArrayOf(0, 1000, 1000)
 
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -33,8 +42,77 @@ object SRLTCPNotifier {
         ).apply {
             description = "Messages, calls and contact requests"
         }
+        // Incoming calls ring like a phone call: the phone's own ringtone,
+        // repeating, following its ring/vibrate/silent mode.
+        val calls = NotificationChannel(
+            CHANNEL_CALLS,
+            "Incoming calls",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Rings with your phone's ringtone when a contact calls"
+            setSound(
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+            enableVibration(true)
+            vibrationPattern = RING_VIBRATION
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
         mgr.createNotificationChannel(node)
         mgr.createNotificationChannel(alerts)
+        mgr.createNotificationChannel(calls)
+    }
+
+    /** Ring for an incoming call until answered, declined, cancelled or 45 s. */
+    fun ringIncomingCall(context: Context, caller: String, video: Boolean) {
+        ensureChannels(context)
+        val open = PendingIntent.getActivity(
+            context,
+            NOTIFICATION_CALL,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_INCOMING_CALL, true)
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val decline = PendingIntent.getService(
+            context,
+            NOTIFICATION_CALL + 1,
+            Intent(context, SRLTCPService::class.java).setAction(SRLTCPService.ACTION_DECLINE_CALL),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_CALLS)
+            .setSmallIcon(R.drawable.ic_launcher_legacy)
+            .setContentTitle(caller.ifBlank { "SRLTCP" })
+            .setContentText(if (video) "Incoming video call" else "Incoming voice call")
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(true)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .setFullScreenIntent(open, true)  // shows the call over the lock screen
+            .setTimeoutAfter(RING_MS)
+            // Android 7 and older have no channels: sound set here.
+            .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), AudioManager.STREAM_RING)
+            .setVibrate(RING_VIBRATION)
+            .addAction(0, "Decline", decline)
+            .addAction(0, "Answer", open)
+            .build()
+        notification.flags = notification.flags or Notification.FLAG_INSISTENT  // keep ringing
+        try {
+            NotificationManagerCompat.from(context).notify(NOTIFICATION_CALL, notification)
+        } catch (e: SecurityException) {
+            // Notifications turned off for the app: the in-app screen still shows the call.
+        }
+    }
+
+    fun stopRinging(context: Context) {
+        NotificationManagerCompat.from(context).cancel(NOTIFICATION_CALL)
     }
 
     fun buildNodeNotification(context: Context, text: String): android.app.Notification {

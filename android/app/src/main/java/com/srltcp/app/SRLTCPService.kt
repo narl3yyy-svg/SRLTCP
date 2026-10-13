@@ -50,6 +50,19 @@ class SRLTCPService : Service() {
             }
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_DECLINE_CALL) {
+            SRLTCPNotifier.stopRinging(this)
+            // Tell the caller (from Python, off the main thread).
+            Thread {
+                try {
+                    com.chaquo.python.Python.getInstance().getModule("srltcp.app")
+                        .callAttr("android_decline_call")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Declining the call failed", e)
+                }
+            }.start()
+            return START_STICKY
+        }
         SRLTCPApplication.instance?.ensurePythonServer()
         return START_STICKY
     }
@@ -64,6 +77,7 @@ class SRLTCPService : Service() {
     companion object {
         private const val TAG = "SRLTCPService"
         const val ACTION_QUIT = "com.srltcp.app.QUIT"
+        const val ACTION_DECLINE_CALL = "com.srltcp.app.DECLINE_CALL"
 
         /** True while the service is up in the foreground; lets MainActivity retry a failed start. */
         @Volatile

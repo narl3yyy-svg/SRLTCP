@@ -139,8 +139,11 @@ async def test_large_file_arrives_intact(pair, tmp_path: Path) -> None:  # type:
     assert await wait_for(lambda: b._transfers.get(tid) is not None
                           and b._transfers[tid].state == "complete", timeout=60)
     assert b._incoming_paths[tid].read_bytes() == payload
-    # The sender only says "complete" once the receiver verified the file.
+    # The sender only says "complete" once the receiver verified the file,
+    # and its chat bubble gets ✓✓ like a delivered message.
     assert await wait_for(lambda: a._transfers[tid].state == "complete", timeout=5)
+    msg = next(m for m in a.get_messages() if m["metadata"].get("transfer_id") == tid)
+    assert msg["status"] == "delivered"
     assert a._transfers[tid].sha256 == hashlib.sha256(payload).hexdigest()
 
 

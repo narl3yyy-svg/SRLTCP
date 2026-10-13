@@ -129,13 +129,9 @@ def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application
     async def on_event(data: dict) -> None:
         kind = data.get("kind", "")
         hid = str(data.get("hash_id", ""))
-        if kind == "call_signal" and (data.get("signal") or {}).get("type") == "offer":
-            video = bool((data.get("signal") or {}).get("video"))
-            notify_if_no_ui(
-                contact_name(hid),
-                "Incoming video call — open SRLTCP" if video else "Incoming call — open SRLTCP",
-                f"call-{hid}",
-            )
+        if kind == "call_signal" and isinstance(data.get("signal"), dict):
+            # Rings like a phone call on Android (ringtone, lock screen).
+            node.track_call_signal(hid, data["signal"], event=data)
         elif kind == "contact_request":
             who = data.get("name") or hid[:8]
             notify_if_no_ui("Contact request", f"{who} wants to chat", f"req-{hid}")

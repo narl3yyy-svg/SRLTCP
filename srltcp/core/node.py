@@ -18,6 +18,8 @@ from srltcp.utils.logging import get_logger
 
 log = get_logger(__name__)
 
+CALL_RING_SECONDS = 45.0  # same as the web UI's ring timeout
+
 
 @dataclass
 class ShareSession:
@@ -50,11 +52,75 @@ class SRLTCPNode:
         self.backend = MessagingBackend(config)
         self._share_sessions: dict[str, ShareSession] = {}
         self._ws_clients: set[Any] = set()
+        # The incoming call ringing right now: its signals are kept so a page
+        # opened from the ringing notification still gets the call.
+        self.pending_call: dict[str, Any] | None = None
 
     async def start(self) -> None:
         if self.settings.message_retention_hours == 0:
             self.backend.clear_messages()
         await self.backend.start()
+
+    # -- Ringing ---------------------------------------------------------
+
+    def track_call_signal(
+        self, hash_id: str, signal: dict[str, Any], event: dict[str, Any] | None = None
+    ) -> None:
+        """Follow call signals: an incoming offer starts ringing (with the
+        phone's ringtone on Android) until it is answered, declined,
+        cancelled or times out. ``event`` is set for signals from the peer."""
+        from srltcp.utils.android_notify import ring_android_call, stop_android_ringing
+
+        kind = str(signal.get("type", ""))
+        call_id = str(signal.get("call_id", ""))
+        pending = self.pending_call
+        if event is not None and kind == "offer" and call_id:
+            if pending and pending["hash_id"] != hash_id:
+                return  # already ringing for someone else; the UI answers "busy"
+            peer = self.backend.trusted.get(hash_id)
+            self.pending_call = {
+                "hash_id": hash_id, "call_id": call_id, "at": time.monotonic(),
+                "events": [event],
+            }
+            ring_android_call(peer.name if peer else hash_id[:8], bool(signal.get("video")))
+            return
+        if not pending or pending["hash_id"] != hash_id or pending["call_id"] != call_id:
+            return
+        if event is not None and kind == "ice":
+            pending["events"].append(event)
+        elif kind in ("answer", "hangup", "busy"):
+            self.pending_call = None  # answered here, or ended by either side
+            stop_android_ringing()
+
+    def pending_call_events(self) -> list[dict[str, Any]]:
+        """Signals of a call still ringing, for a page that just opened."""
+        pending = self.pending_call
+        if not pending:
+            return []
+        if time.monotonic() - pending["at"] > CALL_RING_SECONDS:
+            self.pending_call = None
+            return []
+        return list(pending["events"])
+
+    async def decline_pending_call(self) -> bool:
+        """Declined from the ringing notification: tell the caller and any open page."""
+        from srltcp.routes.ws import broadcast_event
+        from srltcp.utils.android_notify import stop_android_ringing
+
+        pending, self.pending_call = self.pending_call, None
+        stop_android_ringing()
+        if not pending:
+            return False
+        hangup = {"type": "hangup", "call_id": pending["call_id"], "reason": "declined"}
+        try:
+            await self.backend.send_call_signal(pending["hash_id"], hangup)
+        except (KeyError, OSError, ConnectionError, RuntimeError) as exc:
+            log.info("Couldn't tell the caller the call was declined: %s", exc)
+        # An open page closes its incoming-call screen.
+        await broadcast_event(self, "call_signal", {
+            "kind": "call_signal", "hash_id": pending["hash_id"], "signal": hangup,
+        })
+        return True
 
     async def close_websockets(self) -> None:
         """Close browser WebSocket connections so the web server can exit."""

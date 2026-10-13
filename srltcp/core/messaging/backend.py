@@ -1165,6 +1165,13 @@ class MessagingBackend(
                         "filename": transfer.get("filename", msg.metadata.get("filename")),
                     }
                 )
+                if (
+                    transfer.get("state") == "complete"
+                    and msg.sender_hash in self._own_hash_ids()
+                    and msg.status != "delivered"
+                ):
+                    # The receiver has the whole file and checked it: ✓✓, like a chat message.
+                    msg.status = "delivered"
                 meta = transfer.get("metadata") or {}
                 if meta.get("is_folder_zip"):
                     msg.metadata["is_folder_zip"] = True

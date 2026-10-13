@@ -42,6 +42,16 @@
   function routeAudio(active) {
     try { nativeAudio()?.setCallAudio(!!active, !!call.speaker); } catch (_) { /* ignore */ }
   }
+  // Android app: while a call rings or runs it may show over the lock screen;
+  // the phone itself rings (notification with the phone's ringtone).
+  function callScreen(on) {
+    const b = window.SRLTCPAndroid;
+    try { if (typeof b?.setCallScreen === "function") b.setCallScreen(!!on); } catch (_) { /* ignore */ }
+  }
+  function stopRinging() {
+    const b = window.SRLTCPAndroid;
+    try { if (typeof b?.stopRinging === "function") b.stopRinging(); } catch (_) { /* ignore */ }
+  }
 
   const app = () => window.srltcpApp || {};
 
@@ -165,6 +175,7 @@
       ringTimer: null, muted: false, cameraOff: false, speaker: false,
     });
     routeAudio(false);
+    callScreen(false);
     updateButtons();
     hideOverlay();
   }
@@ -292,6 +303,8 @@
 
   /* ── Incoming ── */
   function onOffer(from, sig) {
+    // The same offer again (page reopened from the ringing notification).
+    if (call.id && call.id === sig.call_id && call.peer === from) return;
     if (call.state !== "idle") {
       signal(from, { type: "busy", call_id: sig.call_id });
       return;
@@ -306,12 +319,16 @@
     earlyIce.delete(key);
     showOverlay("incoming");
     setStatus(call.video ? "Incoming video call" : "Incoming voice call");
-    app().notifyUser?.(
-      call.peerName,
-      call.video ? "Incoming video call" : "Incoming voice call",
-      { tag: `call-${from}` }
-    );
-    if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
+    if (window.SRLTCPAndroid) {
+      callScreen(true);  // the phone rings by itself (call notification)
+    } else {
+      app().notifyUser?.(
+        call.peerName,
+        call.video ? "Incoming video call" : "Incoming voice call",
+        { tag: `call-${from}` }
+      );
+      if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
+    }
     call.ringTimer = setTimeout(() => {
       if (call.state === "incoming") decline("timeout");
     }, RING_TIMEOUT_MS);
@@ -320,6 +337,7 @@
   async function accept(withVideo) {
     if (call.state !== "incoming") return;
     clearTimeout(call.ringTimer);
+    stopRinging();
     call.state = "connecting";
     call.video = !!withVideo && call.video;
     call.speaker = call.video;

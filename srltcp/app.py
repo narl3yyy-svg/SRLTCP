@@ -330,6 +330,20 @@ def android_import_pairing_card(uri: str) -> str:
     return json.dumps({"hash_id": peer.get("hash_id"), "name": peer.get("name")})
 
 
+def android_decline_call() -> None:
+    """Decline button on the ringing notification (called from a Java thread)."""
+    node = _running_node.get("node")
+    loop = _running_node.get("loop")
+    if node is None or not isinstance(loop, asyncio.AbstractEventLoop):
+        return
+    assert isinstance(node, SRLTCPNode)
+    future = asyncio.run_coroutine_threadsafe(node.decline_pending_call(), loop)
+    try:
+        future.result(timeout=10)
+    except Exception as exc:  # noqa: BLE001 - best effort
+        log.warning("Declining the call failed: %s", exc)
+
+
 def android_transfer_file(transfer_id: str) -> str:
     """Locate a transfer's file so the Android app can copy it where the user picks.
 

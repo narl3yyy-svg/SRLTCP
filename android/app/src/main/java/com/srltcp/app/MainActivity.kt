@@ -154,6 +154,9 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         current = java.lang.ref.WeakReference(this)
         SRLTCPNotifier.ensureChannels(this)
+        if (intent?.getBooleanExtra(SRLTCPNotifier.EXTRA_INCOMING_CALL, false) == true) {
+            setCallScreen(true)
+        }
         firstLaunch = savedInstanceState == null
         pendingSavePath = savedInstanceState?.getString(STATE_PENDING_SAVE)
 
@@ -599,6 +602,30 @@ class MainActivity : AppCompatActivity() {
     private var callDeviceCallback: android.media.AudioDeviceCallback? = null
     private val reapplyCallRoute = Runnable {
         if (callAudioActive) applyCallRoute(getSystemService(AUDIO_SERVICE) as android.media.AudioManager)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(SRLTCPNotifier.EXTRA_INCOMING_CALL, false)) setCallScreen(true)
+    }
+
+    /**
+     * While a call rings or runs, the app may show over the lock screen and
+     * wake the display (like the phone app). Turned off again when the call
+     * ends, so chats are never shown on a locked phone.
+     */
+    fun setCallScreen(on: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(on)
+            setTurnScreenOn(on)
+        } else {
+            @Suppress("DEPRECATION")
+            val flags = android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            if (on) window.addFlags(flags) else window.clearFlags(flags)
+        }
+        if (!on) SRLTCPNotifier.stopRinging(this)
     }
 
     fun setCallAudio(active: Boolean, speaker: Boolean) {

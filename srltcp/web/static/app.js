@@ -3225,7 +3225,11 @@
     state.transferPatchTimer = setTimeout(() => {
       state.transferPatchTimer = null;
       state.pendingTransferPatches.forEach((patchData, tid) => {
-        refreshTransferBubble(tid, patchData, { scroll: false });
+        // Use the newest state, not the one captured 200 ms ago: a small file
+        // finishes in between, and the stale "0 %" must not overwrite "complete".
+        const msg = messageForTransfer(tid);
+        const current = msg ? mergeTransferMeta(tid, msg.metadata || {}) : patchData;
+        refreshTransferBubble(tid, current, { scroll: false });
       });
       state.pendingTransferPatches.clear();
     }, 200);
@@ -3584,6 +3588,7 @@
         filename: merged.filename,
       };
       if (TERMINAL_TRANSFER_STATES.has(merged.state)) {
+        state.pendingTransferPatches.delete(data.id);
         refreshTransferBubble(data.id, mergeTransferMeta(data.id, state.messageCache[idx].metadata), {
           scroll: merged.state === "complete",
         });
@@ -3683,6 +3688,14 @@
     }
 
     if (msgMedia === "file" || msgMedia === "image" || msgMedia === "video") {
+      if (prev && prevStatus !== m.status) {
+        // A file the contact now has: ✓ becomes ✓✓.
+        const tick = document.querySelector(`[data-msg-id="${CSS.escape(m.id)}"] .bubble-status`);
+        if (tick) {
+          tick.className = `bubble-status ${m.status}`;
+          if (isOutgoing(m.sender_hash)) tick.title = STATUS_HINTS[m.status] || "";
+        }
+      }
       const merged = tid ? mergeTransferMeta(tid, m.metadata || {}) : m.metadata || {};
       const live = tid ? state.transfers[tid] : null;
       const transferData = live || merged;

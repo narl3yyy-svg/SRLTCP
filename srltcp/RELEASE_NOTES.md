@@ -1,5 +1,25 @@
 # SRLTCP Release Notes
 
+## v0.8.2 (2026-10-13)
+
+### Calls ring like phone calls
+- An incoming voice or video call rings with **your phone's ringtone**,
+  repeating until you answer or decline, or the caller hangs up (45 s at most).
+  It follows your phone's ring/vibrate/silent setting.
+- It shows as a call (over the lock screen, with **Answer** and **Decline**),
+  not as a message notification. Decline works without opening the app.
+- A call that arrives while SRLTCP is closed is still there when you open
+  the app from the ringing notification.
+- The app only shows over the lock screen while a call rings or runs, never
+  your chats.
+
+### Files
+- **Fixed: the sender's bubble showed "0 B / 14.3 KB · 0%"** for a small file
+  that had arrived. A progress update scheduled a moment earlier overwrote
+  "complete".
+- **Two checkmarks for files:** once the other device has the whole file
+  and has checked it, the file bubble shows ✓✓, like a delivered message.
+
 ## v0.8.1 (2026-10-13)
 
 - **"Upload failed" now says why.** When a file can't be sent, the message

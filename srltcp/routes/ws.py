@@ -26,6 +26,9 @@ def register_ws_routes(app: web.Application, node: SRLTCPNode) -> None:
         node._ws_clients.add(ws)
 
         await ws.send_json({"type": "status", "data": node.status()})
+        # Opened from the ringing notification: the call is still waiting.
+        for event in node.pending_call_events():
+            await ws.send_json({"type": "call_signal", "data": event})
 
         try:
             async for msg in ws:

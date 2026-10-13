@@ -57,6 +57,19 @@ class SRLTCPBridge(private val activity: MainActivity) {
         activity.runOnUiThread { activity.setCallAudio(active, speaker) }
     }
 
+    /** A call is ringing or running (true) or over (false): lock-screen display, ringing. */
+    @JavascriptInterface
+    fun setCallScreen(on: Boolean) {
+        if (!activity.isTrustedPage) return
+        activity.runOnUiThread { activity.setCallScreen(on) }
+    }
+
+    /** Stop the ringtone (call answered or declined in the app). */
+    @JavascriptInterface
+    fun stopRinging() {
+        activity.runOnUiThread { SRLTCPNotifier.stopRinging(activity) }
+    }
+
     /** Open the system "Save as" picker for a received/sent file. */
     @JavascriptInterface
     fun saveTransferFile(transferId: String): String =

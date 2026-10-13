@@ -758,6 +758,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             await node.backend.connect_to_peer(recipient)
             await node.backend.wait_for_handshake(recipient, timeout=8.0)
         ok = await node.backend.send_call_signal(recipient, signal)
+        node.track_call_signal(recipient, signal)  # answered/declined here: stop ringing
         if not ok:
             return web.json_response({"error": "peer is not reachable"}, status=503)
         return web.json_response({"sent": True})
