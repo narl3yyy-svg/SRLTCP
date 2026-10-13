@@ -87,6 +87,12 @@ class SRLTCPNode:
         self.config.relay_code = settings.relay_code
         direct_changed = self.config.direct_internet != settings.direct_internet
         self.config.direct_internet = settings.direct_internet
+        tor_changed = (
+            self.config.tor_enabled != settings.tor_enabled
+            or self.config.tor_path != settings.tor_path
+        )
+        self.config.tor_enabled = settings.tor_enabled
+        self.config.tor_path = settings.tor_path
         self.config.handshake_protocol = settings.handshake_protocol
         incoming = str(settings.resolved_incoming_dir())
         self.config.incoming_dir = incoming
@@ -102,6 +108,8 @@ class SRLTCPNode:
         await self.backend.apply_relay_settings()
         if direct_changed:
             await self.backend.addresses_changed()
+        if tor_changed:
+            await self.backend.tor_settings_changed()
         if settings.message_retention_hours == 0:
             self.backend.clear_messages()
 
@@ -162,6 +170,7 @@ class SRLTCPNode:
         return {
             "name": self.config.name,
             "relay": self.backend.relay_status(),
+            "tor": self.backend.tor_status(),
             "identities": self.backend.get_identities(),
             "links": self.backend.list_links(),
             "peers": self.backend.get_discovered_peers(),

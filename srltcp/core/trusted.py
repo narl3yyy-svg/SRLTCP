@@ -70,6 +70,8 @@ class TrustedPeer:
     # One-time token from their QR/link that we still have to send back
     # (inside the encrypted session) so they add us too. Cleared once sent.
     pair_token_out: str = ""
+    # Their onion address (Tor), learnt inside the encrypted session.
+    onion: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -218,6 +220,7 @@ class TrustedStore:
         pair_peer: str | None = None,
         relay_code_peer: str | None = None,
         pair_token_out: str | None = None,
+        onion: str | None = None,
     ) -> TrustedPeer | None:
         peer = self._peers.get(hash_id)
         if not peer:
@@ -248,5 +251,7 @@ class TrustedStore:
             peer.relay_code_peer = relay_code_peer
         if pair_token_out is not None:
             peer.pair_token_out = pair_token_out
+        if onion is not None:
+            peer.onion = onion
         self.save()
         return peer

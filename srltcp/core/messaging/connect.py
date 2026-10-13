@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from srltcp.core.messaging.links import PeerLink
 from srltcp.core.messaging.relay import RELAY_PEER_PREFIX, relay_peer_hash
+from srltcp.core.messaging.tor import ONION_VIRTUAL_PORT
 from srltcp.core.protocol.crypto import HANDSHAKE_MAX_SKEW, KeyExchange
 from srltcp.core.protocol.messages import MessageType, build_header, decode_payload, encode_payload
 from srltcp.core.protocol.noise_handshake import (
@@ -299,6 +300,8 @@ class ConnectMixin:
             if not endpoint:
                 if not host and self.relay_link_reachable(hash_id):
                     return await self.open_relay_link(hash_id)
+                if not host and self._tor_path_to(hash_id):
+                    return await self._connect_via_tor(hash_id, pub_bytes, peer_name)
                 log.warning("No host for peer %s", hash_id[:8])
                 return False
             candidates = [endpoint]
@@ -309,9 +312,12 @@ class ConnectMixin:
                         candidates.append(cand)
             peer_id = ""
             target_host, target_port = endpoint
-            # With a relay to fall back on, don't wait long for a dead VPN/LAN path.
+            # With a relay (or Tor) to fall back on, don't wait long for a dead
+            # VPN/LAN path.
             relay_fallback = not host and self.relay_link_reachable(hash_id)
-            timeout = 3.0 if relay_fallback else (8.0 if len(candidates) == 1 else 5.0)
+            tor_fallback = not host and not relay_fallback and self._tor_path_to(hash_id)
+            fallback = relay_fallback or tor_fallback
+            timeout = 3.0 if fallback else (8.0 if len(candidates) == 1 else 5.0)
             # All addresses at once (LAN, VPN, the other network's address learnt
             # from the contact…), slightly staggered; the first to answer wins.
             peer_id, target_host, target_port = await self._dial_first(candidates, timeout)
@@ -319,6 +325,9 @@ class ConnectMixin:
                 if relay_fallback:
                     log.info("No direct path to %s — using the relay", hash_id[:8])
                     return await self.open_relay_link(hash_id)
+                if tor_fallback:
+                    log.info("No direct path to %s — trying Tor", hash_id[:8])
+                    return await self._connect_via_tor(hash_id, pub_bytes, peer_name)
                 return False
             if trusted and isinstance(trusted, TrustedPeer) and target_host != trusted.tcp_host:
                 # Remember the address that worked so the next dial is instant.
@@ -392,6 +401,31 @@ class ConnectMixin:
                     if extra[0] and extra[0] != winner[0]:
                         await transport.disconnect(extra[0])
         return winner
+
+    def _tor_path_to(self: MessagingBackend, hash_id: str) -> bool:
+        return self.is_trusted(hash_id) and self.tor_ready() and bool(self.peer_onion(hash_id))
+
+    async def _connect_via_tor(
+        self: MessagingBackend, hash_id: str, pub_bytes: bytes, peer_name: str
+    ) -> bool:
+        """Session over Tor to a trusted contact's onion service."""
+        try:
+            peer_id = await self.dial_onion(hash_id)
+        except (OSError, TimeoutError, ConnectionError, asyncio.IncompleteReadError) as exc:
+            log.info("Tor path to %s failed: %s", hash_id[:8], exc or type(exc).__name__)
+            return False
+        link = PeerLink(
+            hash_id=hash_id,
+            transport_peer_id=peer_id,
+            transport="tcp",
+            address=f"{self.peer_onion(hash_id)}:{ONION_VIRTUAL_PORT}",
+            public_key=pub_bytes,
+            peer_name=peer_name,
+        )
+        self.register_link(link)
+        await self._initiate_handshake(hash_id)
+        log.info("Connecting to %s over Tor", hash_id[:8])
+        return True
 
     async def wait_for_handshake(
         self: MessagingBackend, hash_id: str, *, timeout: float = 10.0
@@ -688,6 +722,16 @@ class ConnectMixin:
         remote_hash, remote_pub, ed_pub = ident
         eph, sig, ts = parsed
         remote_name = str(data.get("name", ""))[:64]
+        if (
+            self.tcp_transport
+            and self.tcp_transport.is_tor(peer_id)
+            and not self.is_trusted(remote_hash)
+        ):
+            # Our onion address is only given to contacts: a stranger using it
+            # gets nothing, not even a contact request.
+            log.info("Refused a Tor connection from a non-contact (%s)", remote_hash[:8])
+            await self._reject_connection(peer_id)
+            return
 
         existing = self.get_link(remote_hash)
         transport = existing.transport if existing else self._infer_transport(peer_id)
@@ -803,7 +847,13 @@ class ConnectMixin:
             public_key=remote_pub,
             peer_name=str(data.get("name", ""))[:64] or (old.peer_name if old else ""),
         )
-        self.register_link(link)  # replaces the relay link
+        self.register_link(link)  # replaces the relay (or Tor) link
+        if (
+            old and old.transport == "tcp" and old.transport_peer_id != peer_id
+            and self.tcp_transport
+        ):
+            # The Tor connection it replaces isn't needed any more.
+            await self.tcp_transport.disconnect(old.transport_peer_id)
         self.set_link_keys(remote_hash, keys)
         log.info("Switched %s from the relay to a direct path (%s)", remote_hash[:8], address)
         await self._complete_handshake(remote_hash, link.peer_name, from_ack=True)

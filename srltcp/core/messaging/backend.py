@@ -27,6 +27,7 @@ from srltcp.core.messaging.punch import PunchMixin
 from srltcp.core.messaging.relay import RelayMixin, relay_peer_hash
 from srltcp.core.messaging.share_peer import SharePeerMixin
 from srltcp.core.messaging.store import MessageStore
+from srltcp.core.messaging.tor import TorMixin
 from srltcp.core.messaging.transfer import TransferMixin
 from srltcp.core.protocol.messages import (
     GROUP_MESSAGE_TYPES,
@@ -66,6 +67,8 @@ class NodeConfig:
     relay_enabled: bool = True
     relay_code: str = ""
     direct_internet: bool = True  # hole punching; shares public IP with contacts
+    tor_enabled: bool = False  # reach contacts over Tor (onion service)
+    tor_path: str = ""  # tor executable on a PC (empty: find it)
     punch_port: int = 0  # 0 = listen port + 3
     enable_tcp: bool = True
     enable_serial: bool = False
@@ -89,6 +92,7 @@ class MessagingBackend(
     PairingMixin,
     GroupMixin,
     PunchMixin,
+    TorMixin,
 ):
     """Central messaging orchestrator."""
 
@@ -130,6 +134,7 @@ class MessagingBackend(
         self._init_share_peer()
         self._init_relay()
         self._init_punch()
+        self._init_tor()
         self._init_pairing()
         self._init_groups()
 
@@ -197,6 +202,7 @@ class MessagingBackend(
         await self.start_call_relay()
         if self.tcp_transport:
             await self.start_relay_client()
+        await self.start_tor()
         self.connect_known_contacts()
 
         log.info(
@@ -215,6 +221,7 @@ class MessagingBackend(
         for task in list(self._dial_tasks.values()):
             task.cancel()
         self._dial_tasks.clear()
+        await self.stop_tor()
         await self.stop_relay_client()
         await self.stop_announce_loop()
         await self.stop_ping_loop()
@@ -803,6 +810,7 @@ class MessagingBackend(
             if (
                 peer.tcp_host or peer.alt_hosts or peer.wan_host
                 or self.relay_available_for(peer.hash_id)
+                or (self.tor_ready() and peer.onion)
             ):
                 self._kick_connect(peer.hash_id)
 
@@ -976,6 +984,7 @@ class MessagingBackend(
                 "error": self._serial_error,
             }
         status["relay"] = self.relay_status()
+        status["tor"] = self.tor_status()
         return status
 
     def _history_enabled(self) -> bool:
