@@ -16,7 +16,12 @@ android {
         versionName = "0.7.0"
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            // -PsrltcpAbis=arm64-v8a builds a smaller phone-only APK
+            // (x86_64 is for emulators and a few Chromebooks).
+            val abis = (project.findProperty("srltcpAbis") as String?)
+                ?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+                ?: listOf("arm64-v8a", "x86_64")
+            abiFilters += abis
         }
     }
 
