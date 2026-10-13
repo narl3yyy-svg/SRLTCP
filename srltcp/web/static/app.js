@@ -1372,7 +1372,7 @@
   };
 
   async function deleteTrusted(hashId, name) {
-    if (!confirm(`Remove ${name} from trusted contacts?`)) return;
+    if (!confirm(`Remove ${name} from trusted contacts?\n\nYour chat with them is kept for 24 hours: add them back before then and it carries on. After 24 hours it is deleted for good.`)) return;
     closeContactMenu();
     state.trusted = state.trusted.filter((p) => p.hash_id !== hashId);
     delete state.links[hashId];
