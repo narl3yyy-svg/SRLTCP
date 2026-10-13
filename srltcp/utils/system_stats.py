@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 import time
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
@@ -12,7 +14,30 @@ _prev_cpu: tuple[int, int] | None = None
 _prev_time: float = 0.0
 
 
+def _read_windows_times() -> tuple[int, int] | None:
+    """(total, idle) CPU time on Windows via GetSystemTimes."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        idle, kernel, user = (wintypes.FILETIME() for _ in range(3))
+        if not ctypes.windll.kernel32.GetSystemTimes(  # type: ignore[attr-defined]
+            ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)
+        ):
+            return None
+
+        def val(ft: wintypes.FILETIME) -> int:
+            return (ft.dwHighDateTime << 32) | ft.dwLowDateTime
+
+        # Kernel time already includes idle time.
+        return val(kernel) + val(user), val(idle)
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
 def _read_proc_stat() -> tuple[int, int] | None:
+    if sys.platform == "win32":
+        return _read_windows_times()
     try:
         line = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0]
         parts = [int(x) for x in line.split()[1:]]
@@ -60,8 +85,76 @@ def _thermal_zones() -> list[Path]:
     return sorted(base.glob("thermal_zone*"))
 
 
+_win_temp_cache: tuple[float, float | None] = (0.0, None)
+
+
+def _windows_temperature_c() -> float | None:
+    """ACPI thermal zone via WMI (PowerShell). Many PCs don't expose it, and
+    it may need administrator rights; checked at most once a minute."""
+    global _win_temp_cache
+    now = time.monotonic()
+    if now - _win_temp_cache[0] < 60:
+        return _win_temp_cache[1]
+    value: float | None = None
+    try:
+        out = subprocess.run(
+            [
+                "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                "(Get-CimInstance -Namespace root/wmi -ClassName "
+                "MSAcpi_ThermalZoneTemperature -ErrorAction Stop | "
+                "Measure-Object -Property CurrentTemperature -Maximum).Maximum",
+            ],
+            capture_output=True, text=True, timeout=6,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout.strip()
+        if out:
+            kelvin_tenths = float(out.splitlines()[-1])
+            celsius = kelvin_tenths / 10.0 - 273.15
+            if 0 < celsius < 130:
+                value = round(celsius, 1)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        value = None
+    _win_temp_cache = (now, value)
+    return value
+
+
+def _android_battery_temperature_c() -> float | None:
+    """Battery temperature from Android (works where CPU sensors are locked
+    down, e.g. many smaller phones). Tenths of a degree in the intent."""
+    try:
+        from java import jclass
+
+        python = jclass("com.chaquo.python.Python")
+        ctx = python.getPlatform().getApplication()
+        intent_filter = jclass("android.content.IntentFilter")(
+            "android.intent.action.BATTERY_CHANGED"
+        )
+        intent = ctx.registerReceiver(None, intent_filter)
+        if intent is None:
+            return None
+        tenths = intent.getIntExtra("temperature", -10000)
+        if tenths <= -1000:
+            return None
+        return round(float(tenths) / 10.0, 1)
+    except Exception:  # noqa: BLE001 - not on Android, or no permission
+        return None
+
+
 def cpu_temperature_c() -> float | None:
-    """Average CPU-relevant thermal zone temp in °C."""
+    """CPU temperature in °C where the OS exposes it; on Windows the ACPI
+    thermal zone; on Android phones that hide CPU sensors, the battery."""
+    if sys.platform == "win32":
+        return _windows_temperature_c()
+    value = _cpu_thermal_zone_c()
+    if value is None:
+        from srltcp.utils.platform import is_android
+
+        if is_android():
+            value = _android_battery_temperature_c()
+    return value
+
+
+def _cpu_thermal_zone_c() -> float | None:
     temps: list[float] = []
     for zone in _thermal_zones():
         type_path = zone / "type"
@@ -85,6 +178,7 @@ def cpu_temperature_c() -> float | None:
             temps.append(millideg / 1000.0)
         except (OSError, ValueError):
             pass
+    temps = [t for t in temps if 5.0 <= t <= 125.0]  # drop unplugged/bogus sensors
     if not temps:
         return None
     # Use hottest CPU-relevant zone (package temp is most representative).

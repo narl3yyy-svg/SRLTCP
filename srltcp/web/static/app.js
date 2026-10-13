@@ -561,6 +561,9 @@
             if (sendBtn) sendBtn.disabled = false;
           }
           toast(`Connected to ${data.name || data.hash_id?.slice(0, 8)}`);
+          if ((state.chatNotices?.[data.hash_id] || []).length) {
+            addChatNotice(data.hash_id, `Connected again ${pathLabel(data.transport, data.address)}`, "up");
+          }
           logActivity(`Link up: ${data.name || data.hash_id?.slice(0, 8)}`);
           break;
         case "link_down":
@@ -574,6 +577,11 @@
           if (state.selectedPeer === data.hash_id) {
             refreshPeerStatus(data.hash_id);
           }
+          addChatNotice(
+            data.hash_id,
+            `${data.name || "Contact"} disconnected — looking for another way to reach them; messages you send wait and go out as soon as they're back`,
+            "down"
+          );
           notifyUser(
             "Disconnected",
             data.name || data.hash_id?.slice(0, 8) || "Peer",
@@ -3194,6 +3202,23 @@
     failed: "Not sent",
   };
 
+  function addChatNotice(hashId, text, kind = "") {
+    if (!hashId) return;
+    state.chatNotices = state.chatNotices || {};
+    const list = (state.chatNotices[hashId] = state.chatNotices[hashId] || []);
+    list.push({ __notice: true, text, kind, timestamp: Date.now() / 1000 });
+    if (list.length > 20) list.splice(0, list.length - 20);
+    if (state.selectedPeer === hashId && !state.selectedGroup && state.messageCache) {
+      renderMessages(state.messageCache, { preserveScroll: true });
+    }
+  }
+
+  function pathLabel(transport, address) {
+    if (transport === "relay") return "through your relay";
+    if ((address || "").includes(".onion")) return "over Tor";
+    return "directly";
+  }
+
   function renderMessages(msgs, { preserveScroll = false, scrollToBottom = false } = {}) {
     const el = $("#messages");
     if (!el) return;
@@ -3202,13 +3227,23 @@
     state.messageCache = msgs;
     let lastDate = "";
     let html = "";
+    // Connection notices ("disconnected", "connected again") are shown in the
+    // chat where they happened, but never stored.
+    const notices = (!state.selectedGroup && state.chatNotices?.[state.selectedPeer]) || [];
+    const items = notices.length
+      ? [...msgs, ...notices].sort((x, y) => (x.timestamp || 0) - (y.timestamp || 0))
+      : msgs;
 
-    msgs.forEach((m) => {
+    items.forEach((m) => {
       try {
       const date = formatDate(m.timestamp);
       if (date !== lastDate) {
         html += `<div class="date-sep">${date}</div>`;
         lastDate = date;
+      }
+      if (m.__notice) {
+        html += `<div class="chat-notice ${m.kind || ""}">${escapeHtml(m.text)} · ${formatTime(m.timestamp)}</div>`;
+        return;
       }
       const out = isOutgoing(m.sender_hash);
       const mediaType = mediaMsgType(m);

@@ -10,7 +10,7 @@ from srltcp.core.messaging.constants import PING_INTERVAL
 from srltcp.core.protocol.messages import MessageType, build_header, decode_payload, encode_payload
 from srltcp.utils.logging import get_logger
 
-LINK_DEAD_AFTER = 3.5 * PING_INTERVAL  # ~50 s without any frame or pong
+LINK_DEAD_AFTER = 3.2 * PING_INTERVAL  # ~32 s without any frame or pong
 NETWORK_CHECK_EVERY = 3.0
 
 if TYPE_CHECKING:
@@ -61,7 +61,7 @@ class PingMixin:
                             log.debug("Ping to %s failed: %s", hash_id[:8], exc)
                 # Retry undelivered messages: every 30 s for the first few
                 # minutes, then every ~2 minutes.
-                if tick % (2 if tick < 20 else 8) == 0:
+                if tick % (3 if tick < 30 else 12) == 0:
                     self.retry_outbox_connections()
                 if tick:
                     try:
@@ -72,7 +72,7 @@ class PingMixin:
                 # minutes (after start or a network change), then every 2 min.
                 # Matters when only one side can dial (e.g. VPN phone -> home LAN).
                 since_change = tick - self._net_changed_tick
-                if tick and tick % (2 if since_change < 20 else 8) == 0:
+                if tick and tick % (3 if since_change < 30 else 12) == 0:
                     self.connect_known_contacts()
                 tick += 1
                 self._ping_tick = tick

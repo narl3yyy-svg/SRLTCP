@@ -1786,3 +1786,10 @@ html, body { touch-action: pan-x pan-y; }
 .contact-check-result li.ok { color: var(--success, #3ecf8e); }
 .contact-check-result li.bad { color: var(--text-muted); }
 .contact-check-result .muted { color: var(--text-muted); }
+.chat-notice {
+  align-self: center; margin: 0.4rem auto; padding: 0.3rem 0.75rem; max-width: 90%;
+  font-size: 0.75rem; text-align: center; color: var(--text-muted);
+  border: 1px dashed var(--border); border-radius: 999px;
+}
+.chat-notice.down { color: var(--warning, #e0a63b); border-color: var(--warning, #e0a63b); }
+.chat-notice.up { color: var(--success, #3ecf8e); }
