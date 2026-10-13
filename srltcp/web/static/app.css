@@ -542,51 +542,10 @@ body {
   margin: 0.75rem 0;
   background: #0c0e14;
 }
-/* ── Transfer dock (above composer) ── */
-.transfer-dock {
+/* Cancel button on a file bubble while it is moving */
+.file-cancel {
   flex-shrink: 0;
-  padding: 0.5rem 1.25rem 0;
-  background: rgba(18, 21, 30, 0.92);
-  border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  max-height: 140px;
-  overflow-y: auto;
-}
-.transfer-dock.hidden { display: none; }
-.transfer-dock-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-}
-.transfer-dock-item {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0.45rem 0.65rem;
-  font-size: 0.8rem;
-}
-.transfer-dock-info {
-  flex: 1;
-  min-width: 0;
-}
-.transfer-dock-name {
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.transfer-dock-meta {
-  font-size: 0.68rem;
-  color: var(--text-muted);
-  margin-top: 1px;
-}
-.transfer-dock-cancel {
-  flex-shrink: 0;
+  align-self: center;
   width: 28px;
   height: 28px;
   border-radius: 50%;
@@ -601,17 +560,12 @@ body {
   justify-content: center;
   transition: color 0.15s, border-color 0.15s;
 }
-.transfer-dock-cancel:hover:not(:disabled) {
+.file-cancel:hover:not(:disabled) {
   color: var(--danger);
   border-color: var(--danger);
 }
-.transfer-dock-cancel:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-.transfer-dock .progress-track {
-  margin-top: 0.35rem;
-}
+.file-cancel:disabled { opacity: 0.35; cursor: not-allowed; }
+.bubble.out .file-cancel { color: #d4e4ff; border-color: rgba(212, 228, 255, 0.45); }
 /* ── Composer ── */
 .composer {
   padding: 0.85rem 1.25rem 1.1rem;
@@ -940,25 +894,6 @@ body {
   color: var(--text-muted);
   word-break: break-all;
   margin-top: 0.35rem;
-}
-.transfer-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0.75rem;
-  margin-bottom: 0.5rem;
-  font-size: 0.82rem;
-}
-.transfer-name {
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.transfer-state {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  margin-top: 2px;
 }
 .progress-track {
   height: 4px;

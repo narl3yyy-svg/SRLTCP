@@ -35,6 +35,7 @@
     mediaDragStart: null,
     transferPatchTimer: null,
     pendingTransferPatches: new Map(),
+    transferReloads: new Set(),
     dropTargetHash: null,
     folderSendTarget: null,
     wsConnected: false,
@@ -42,7 +43,6 @@
     timers: [],
     pageUnloading: false,
     loadingPeers: false,
-    loadingTransfers: false,
     androidView: "sidebar",
 
     wanModalTarget: null,
@@ -63,7 +63,6 @@
   const ICON_TRASH = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>`;
   const ACTIVE_TRANSFER_STATES = new Set(["transferring", "accepted", "offered", "paused"]);
   const TERMINAL_TRANSFER_STATES = new Set(["complete", "failed", "cancelled", "rejected"]);
-  const DOCK_TERMINAL_STATES = TERMINAL_TRANSFER_STATES;
 
   function mediaMsgType(msg) {
     const t = msg?.msg_type;
@@ -605,10 +604,10 @@
           break;
         case "transfer_progress":
         case "transfer_complete":
-          state.transfers[data.id] = data;
+          // Progress lives in the file's own bubble, in the chat with the
+          // contact it is going to or coming from — nowhere else.
           syncTransferMessage(data);
           if (state.selectedPeer) updateChatTransfer(data);
-          renderTransferDock();
           if (type === "transfer_complete") {
             markTransferCooldown(data.sender_hash, data.recipient_hash);
             notifyUser(
@@ -616,14 +615,8 @@
               data.filename || "File received",
               { tag: `transfer-${data.id}` }
             );
-            refreshTransferBubble(data.id, data, { scroll: !!state.selectedPeer });
           }
-          if (DOCK_TERMINAL_STATES.has(data.state)) {
-            setTimeout(() => {
-              pruneTerminalTransfers();
-              renderTransferDock();
-            }, 600);
-          }
+          if (TERMINAL_TRANSFER_STATES.has(data.state)) setTimeout(pruneTerminalTransfers, 600);
           break;
         case "share_offer": {
           const from = peerByHash(data.hash_id)?.name || data.hash_id?.slice(0, 8);
@@ -1901,8 +1894,6 @@
       toast(`Sending ${file.name}…`);
     }
     if (state.selectedPeer === hashId) loadMessages();
-    renderTransferDock();
-    renderTransfers();
     return true;
   }
 
@@ -1938,8 +1929,6 @@
     }
     toast(`Sending folder ${folderName}.zip…`);
     if (state.selectedPeer === hashId) loadMessages();
-    renderTransferDock();
-    renderTransfers();
     return true;
   }
 
@@ -2818,7 +2807,6 @@
 
     loadPeers();
     if (state.selectedPeer) refreshPeerStatus(state.selectedPeer);
-    renderTransfers();
   }
 
   function dedupePeers(peers) {
@@ -3009,6 +2997,9 @@
     const progressBar = stateLabel !== "complete" && !cancelled && !failed
       ? `<div class="progress-track chat-progress"><div class="progress-fill" style="width:${pct}%"></div></div>`
       : "";
+    const cancelBtn = tid && ACTIVE_TRANSFER_STATES.has(stateLabel)
+      ? `<button type="button" class="file-cancel" data-cancel-transfer="${escapeHtml(tid)}" title="Cancel transfer" aria-label="Cancel transfer">✕</button>`
+      : "";
     const showDownload = stateLabel === "complete" && downloadUrl;
     const downloadLabel = meta.is_folder_zip ? "Download folder ZIP" : "Download file";
     const downloadLink = showDownload
@@ -3053,6 +3044,7 @@
         ${progressBar}
         ${downloadLink}
       </div>
+      ${cancelBtn}
     </div>`;
   }
 
@@ -3204,7 +3196,7 @@
               : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speed}`;
     }
     if (stateLabel === "complete" || cancelled || failed) {
-      bubble.querySelectorAll(".progress-track, .chat-progress").forEach((el) => el.remove());
+      bubble.querySelectorAll(".progress-track, .chat-progress, .file-cancel").forEach((el) => el.remove());
       bubble.classList.remove("cancelled", "failed");
       if (cancelled) bubble.classList.add("cancelled");
       if (failed) bubble.classList.add("failed");
@@ -3591,7 +3583,9 @@
         return;
       }
       scheduleTransferPatch(data.id, data);
-    } else {
+    } else if (!state.transferReloads.has(data.id)) {
+      // Its bubble isn't loaded yet (it just started): fetch the chat once.
+      state.transferReloads.add(data.id);
       loadMessages();
     }
   }
@@ -3710,38 +3704,6 @@
     });
   }
 
-  function activeTransfersFromState(extra = []) {
-    const seen = new Set();
-    const items = [];
-    const add = (t) => {
-      if (!t?.id || seen.has(t.id)) return;
-      const st = t.state || "";
-      if (DOCK_TERMINAL_STATES.has(st)) return;
-      if (!ACTIVE_TRANSFER_STATES.has(st)) return;
-      seen.add(t.id);
-      items.push(t);
-    };
-    Object.values(state.transfers).forEach(add);
-    extra.forEach(add);
-    return items;
-  }
-
-  function transferDockHtml(t) {
-    const pct = t.size ? Math.min(100, Math.round((t.offset / t.size) * 100)) : 0;
-    const speed = t.speed_mbps ? ` · ${Number(t.speed_mbps).toFixed(2)} MB/s` : "";
-    const terminal = DOCK_TERMINAL_STATES.has(t.state);
-    const canCancel = ACTIVE_TRANSFER_STATES.has(t.state);
-    return `<div class="transfer-dock-item" data-transfer-id="${escapeHtml(t.id)}">
-      <div class="transfer-dock-info">
-        <div class="transfer-dock-name">${escapeHtml(t.filename || "file")}</div>
-        <div class="transfer-dock-meta">${t.state === "paused" ? "waiting for connection" : escapeHtml(t.state || "transferring")} · ${pct}%${speed}</div>
-        ${terminal ? "" : `<div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>`}
-      </div>
-      <button type="button" class="transfer-dock-cancel" data-cancel-transfer="${escapeHtml(t.id)}"
-        title="Cancel transfer" aria-label="Cancel transfer" ${canCancel ? "" : "disabled"}>✕</button>
-    </div>`;
-  }
-
   async function cancelTransfer(transferId) {
     if (!transferId) return;
     const { ok, data } = await safeFetch(
@@ -3753,71 +3715,18 @@
       toast(data?.error || "Could not cancel transfer", "error");
       return;
     }
-    if (state.transfers[transferId]) {
-      state.transfers[transferId] = { ...state.transfers[transferId], state: "cancelled" };
-    }
-    pruneTerminalTransfers();
-    renderTransferDock();
-    renderTransfers();
-    if (state.selectedPeer) loadMessages();
+    const cancelled = { ...(state.transfers[transferId] || {}), id: transferId, state: "cancelled" };
+    syncTransferMessage(cancelled);
+    patchTransferBubble(transferId, cancelled);
   }
 
   function pruneTerminalTransfers() {
     Object.keys(state.transfers).forEach((id) => {
       const st = state.transfers[id]?.state;
-      if (st && DOCK_TERMINAL_STATES.has(st)) {
+      if (st && TERMINAL_TRANSFER_STATES.has(st)) {
         delete state.transfers[id];
       }
     });
-  }
-
-  function renderTransferDock(apiTransfers = null) {
-    const dock = $("#transfer-dock");
-    const list = $("#transfer-dock-list");
-    if (!dock || !list) return;
-    pruneTerminalTransfers();
-    const active = activeTransfersFromState(apiTransfers || []);
-    if (!active.length) {
-      dock.classList.add("hidden");
-      list.innerHTML = "";
-      return;
-    }
-    dock.classList.remove("hidden");
-    list.innerHTML = active.map(transferDockHtml).join("");
-  }
-
-  async function renderTransfers() {
-    const el = $("#transfers");
-    if (!el) return;
-    if (state.loadingTransfers) return;
-    state.loadingTransfers = true;
-    try {
-      const { ok, data } = await safeFetch(
-        "/api/transfers",
-        {},
-        { silent: true, fallback: [] }
-      );
-      const all = ok ? (data || []) : activeTransfersFromState();
-      const transfers = all.filter((t) => ACTIVE_TRANSFER_STATES.has(t.state));
-      renderTransferDock(all);
-      if (!transfers.length) {
-        el.innerHTML = '<div class="empty-hint">No active transfers</div>';
-        return;
-      }
-      el.innerHTML = transfers
-        .map((t) => {
-          const pct = t.size ? Math.round((t.offset / t.size) * 100) : 0;
-          const speed = t.speed_mbps ? ` · ${t.speed_mbps.toFixed(2)} MB/s` : "";
-          return `<div class="transfer-card">
-            <div class="transfer-name">${escapeHtml(t.filename)}</div>
-            <div class="transfer-state">${escapeHtml(t.state)} · ${pct}%${speed}</div>
-            <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
-          </div>`;
-        })
-        .join("");
-    } finally {
-      state.loadingTransfers = false;
-    }
   }
 
   /* ── UI helpers ── */
@@ -4258,11 +4167,12 @@
     });
   }
 
-  $("#transfer-dock")?.addEventListener("click", (e) => {
+  $("#messages")?.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-cancel-transfer]");
     if (!btn || btn.disabled) return;
     e.stopPropagation();
-    cancelTransfer(btn.dataset.cancelTransfer);
+    btn.disabled = true;
+    cancelTransfer(btn.dataset.cancelTransfer).finally(() => { btn.disabled = false; });
   });
 
   $("#settings-form")?.addEventListener("submit", async (e) => {
@@ -4553,7 +4463,6 @@
     }
   }, 1000);
   startInterval(() => { loadPeers().catch(() => {}); }, 5000);
-  startInterval(renderTransferDock, 3000);
   startInterval(() => {
     if (!state.wsConnected && state.selectedPeer && $("#chat-active") && !$("#chat-active").classList.contains("hidden")) {
       loadMessages().catch(() => {});

@@ -293,14 +293,20 @@ async def features_flow() -> None:
             for _ in range(600):
                 fh.write(os.urandom(1024 * 1024))
         await alice.set_input_files("#file-input", str(big))
-        cancel_big = ".transfer-dock-item:has-text('big.bin') [data-cancel-transfer]:not([disabled])"
+        # Progress, speed and the cancel button live in the file's own bubble.
+        cancel_big = ".file-bubble:has-text('big.bin') [data-cancel-transfer]:not([disabled])"
         await alice.wait_for_selector(cancel_big, timeout=30000)
+        await bob.wait_for_selector(".file-bubble:has-text('big.bin') .progress-fill", timeout=30000)
+        assert await alice.locator("[data-cancel-transfer]").count() == 1, "one transfer view only"
+        await shot(alice, "05-transfer-in-progress")
         await alice.click(cancel_big)
-        await alice.wait_for_function(
-            "[...document.querySelectorAll('.file-bubble')].some(b => /cancel/i.test(b.textContent))",
-            timeout=10000,
+        cancelled = (
+            "[...document.querySelectorAll('.file-bubble')]"
+            ".some(b => b.textContent.includes('big.bin') && /cancel/i.test(b.textContent))"
         )
-        print("transfer: cancelled mid-flight")
+        await alice.wait_for_function(cancelled, timeout=10000)
+        await bob.wait_for_function(cancelled, timeout=10000)  # the receiver sees it too
+        print("transfer: cancelled mid-flight, on both sides")
         big.unlink(missing_ok=True)
 
         # Block / unblock
