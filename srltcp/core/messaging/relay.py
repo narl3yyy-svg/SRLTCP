@@ -716,10 +716,28 @@ class RelayMixin:
                 continue
             if now - self._upgrade_attempts.get(hash_id, 0.0) < UPGRADE_EVERY:
                 continue
-            if self.has_active_transfer_for(hash_id) or self._call_active():
+            # A running file transfer does not hold us back: it resends from
+            # the last confirmed byte on the new path (and gets much faster).
+            if self._call_active():
                 continue
             self._upgrade_attempts[hash_id] = now
             asyncio.create_task(self._try_direct_upgrade(hash_id))
+
+    def request_direct_upgrade(self: MessagingBackend, hash_id: str) -> None:
+        """The contact just showed up on our network: if we reach it through
+        the relay or Tor, try the direct path now instead of within 45 s."""
+        link = self.get_link(hash_id)
+        if not link or not link.handshake_complete or not self.tcp_transport:
+            return
+        if link.transport != "relay" and not self._link_on_tor(link):
+            return
+        if self._me_hash() > hash_id or hash_id in self._upgrades or self._call_active():
+            return
+        now = time.monotonic()
+        if now - self._upgrade_attempts.get(hash_id, 0.0) < 5.0:
+            return
+        self._upgrade_attempts[hash_id] = now
+        asyncio.create_task(self._try_direct_upgrade(hash_id))
 
     def _call_active(self: MessagingBackend) -> bool:
         relay = getattr(self, "call_relay", None)

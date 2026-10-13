@@ -341,6 +341,8 @@ class AnnounceMixin:
             ):
                 # Our session points at the old address: check it still answers.
                 self._verify_link_soon(peer.hash_id)
+        if trusted and fresh and peer.transport == "tcp" and peer.tcp_host:
+            self.request_direct_upgrade(peer.hash_id)  # same Wi-Fi again: leave relay/Tor
         # Answer so the sender discovers us too (one press on one phone is enough).
         src_ip = address.rsplit(":", 1)[0] if ":" in address else ""
         if (

@@ -84,6 +84,43 @@ async def test_messages_move_to_the_relay_and_back(tmp_path: Path, relay: RelayS
         await b.stop()
 
 
+async def test_file_on_the_relay_moves_to_the_direct_path(
+    tmp_path: Path, relay: RelayServer
+) -> None:
+    import os
+
+    a, b = await paired_over_lan(tmp_path, relay)
+    try:
+        real_ports = {h(a): a.config.tcp_port, h(b): b.config.tcp_port}
+        await cut_direct_path(a, b)
+        await a.send_message(h(b), "on the relay")
+        assert await wait_for(lambda: "on the relay" in texts(b), timeout=15)
+        assert a.get_link(h(b)).transport == "relay"
+        import dataclasses
+
+        params = a._path_params
+        a._path_params = lambda link: dataclasses.replace(params(link), delay=0.02)  # type: ignore[method-assign]
+        src = tmp_path / "big.bin"
+        payload = os.urandom(6 * 1024 * 1024)
+        src.write_bytes(payload)
+        tid = (await a.send_file(h(b), src))["id"]
+        assert await wait_for(lambda: tid in b._transfers and b._transfers[tid].offset > 0)
+        assert b._transfers[tid].state != "complete"
+        # Mid-transfer the direct path works again: the session moves and the
+        # file carries on over it, intact.
+        low, high = (a, b) if h(a) < h(b) else (b, a)
+        low.trusted.update(h(high), tcp_host="127.0.0.1", tcp_port=real_ports[h(high)])
+        low._upgrade_attempts.clear()
+        await low.maintain_paths()
+        assert await wait_for(lambda: low.get_link(h(high)).transport == "tcp", timeout=15)
+        assert b._transfers[tid].state != "complete", "should switch mid-transfer"
+        assert await wait_for(lambda: b._transfers[tid].state == "complete", timeout=60)
+        assert b._incoming_paths[tid].read_bytes() == payload
+    finally:
+        await a.stop()
+        await b.stop()
+
+
 async def test_relay_sees_no_names_identities_or_text(tmp_path: Path, relay: RelayServer) -> None:
     seen: list[bytes] = []
     original = relay._on_frame

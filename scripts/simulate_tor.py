@@ -153,13 +153,28 @@ async def main() -> int:
         ok = await wait_for(lambda: "reply over tor" in texts(a), 60)
         check("reply delivered back over the same Tor session", ok)
         src = base / "photo.jpg"
-        src.write_bytes(os.urandom(3_000_000))
+        src.write_bytes(os.urandom(8_000_000))
+        start = time.monotonic()
         sent = await a.send_file(bh, src)
         tid = sent["id"] if sent else ""
-        ok = await wait_for(lambda: tid in b._transfers
-                            and b._transfers[tid].state == "complete", 120)
-        check("3 MB file delivered over Tor", ok and b._incoming_paths[tid].read_bytes()
-              == src.read_bytes())
+        lanes_seen = 0
+
+        def done() -> bool:
+            nonlocal lanes_seen
+            lanes_seen = max(lanes_seen, len(a._tor_lanes.get(bh, [])))
+            return tid in b._transfers and b._transfers[tid].state == "complete"
+
+        ok = await wait_for(done, 180)
+        took = time.monotonic() - start
+        check("8 MB file delivered over Tor", ok and b._incoming_paths[tid].read_bytes()
+              == src.read_bytes(), f"{took:.1f}s, {8 / took:.2f} MB/s")
+        check("file data spread over parallel Tor circuits (lanes)", lanes_seen >= 2,
+              f"{lanes_seen} lanes")
+        ok = await wait_for(lambda: a._transfers[tid].state == "complete", 20)
+        check("sender sees the file verified by the receiver", ok)
+        await b.send_message(ah, "chat after a file over tor")
+        ok = await wait_for(lambda: "chat after a file over tor" in texts(a), 30)
+        check("chat still flows on the main circuit", ok)
 
         # A stranger who somehow knows Alice's onion address gets nothing.
         m.trusted.add(TrustedPeer(hash_id=ah, name="alice", public_key=a.identities[
