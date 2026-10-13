@@ -247,6 +247,13 @@ class ConnectMixin:
                 await self._teardown_link(hash_id)
                 existing = None
             else:
+                pending = self._pending_handshakes.get(hash_id)
+                if pending is not None and time.time() - pending.timestamp < 10:
+                    # A handshake on this connection is already in flight. A
+                    # second one would replace our key half while the peer
+                    # answers the first: both sides end up with different
+                    # keys and nothing decrypts. Let the first one finish.
+                    return True
                 try:
                     await self._initiate_handshake(hash_id)
                     return True
