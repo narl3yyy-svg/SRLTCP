@@ -17,10 +17,14 @@ card owner then trusts the scanner too, so a single scan pairs both sides.
 from __future__ import annotations
 
 import base64
+import contextlib
+import hashlib
 import json
+import os
 import secrets
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from srltcp.core.protocol.crypto import identity_hash, load_public_key, verify_bytes
@@ -153,8 +157,33 @@ class PairingMixin:
     """Create/import contact cards and complete mutual pairing."""
 
     def _init_pairing(self: MessagingBackend) -> None:
+        # sha256(token) -> expiry. Saved (owner-only) so a QR you showed still
+        # pairs both ways if this app restarts before the scanner gets through.
         self._pairing_tokens: dict[str, float] = {}
-        self._outgoing_pair_tokens: dict[str, str] = {}
+        self._load_pairing_tokens()
+
+    def _pairing_tokens_path(self: MessagingBackend) -> Path:
+        return self.trusted.path.parent / "pairing_tokens.json"
+
+    def _load_pairing_tokens(self: MessagingBackend) -> None:
+        with contextlib.suppress(OSError, ValueError, AttributeError):
+            raw = json.loads(self._pairing_tokens_path().read_text(encoding="utf-8"))
+            now = time.time()
+            self._pairing_tokens = {
+                str(k): float(v) for k, v in dict(raw).items() if float(v) > now
+            }
+
+    def _save_pairing_tokens(self: MessagingBackend) -> None:
+        path = self._pairing_tokens_path()
+        with contextlib.suppress(OSError):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self._pairing_tokens, f)
+
+    @staticmethod
+    def _token_key(token: str) -> str:
+        return hashlib.sha256(token.encode()).hexdigest()
 
     def _card_endpoints(self: MessagingBackend) -> list[tuple[str, int]]:
         """Every address we can be reached on — VPN first, then LAN/mobile."""
@@ -182,7 +211,8 @@ class PairingMixin:
         self._pairing_tokens = {t: exp for t, exp in self._pairing_tokens.items() if exp > now}
         if one_time:
             token = secrets.token_urlsafe(16)
-            self._pairing_tokens[token] = now + PAIRING_TOKEN_TTL
+            self._pairing_tokens[self._token_key(token)] = now + PAIRING_TOKEN_TTL
+            self._save_pairing_tokens()
         uri = encode_card(
             private_key=identity.private_key,
             public_key=identity.public_bytes(),
@@ -237,7 +267,9 @@ class PairingMixin:
         peer = self._trust_from_card(card)
         self.discovery.remove(card.hash_id)
         if card.token:
-            self._outgoing_pair_tokens[card.hash_id] = card.token
+            # Kept on disk until delivered: the scanned device may only be
+            # reachable later (other network, app restarted in between).
+            self.trusted.update(card.hash_id, pair_token_out=card.token)
         log.info("Paired with %s (%s) from contact card", peer.name, card.hash_id[:8])
         if connect:
             link = self.get_link(card.hash_id)
@@ -248,7 +280,8 @@ class PairingMixin:
         return peer.public_dict()
 
     async def _send_pending_pair(self: MessagingBackend, hash_id: str) -> None:
-        token = self._outgoing_pair_tokens.get(hash_id)
+        peer = self.trusted.get(hash_id)
+        token = peer.pair_token_out if peer else ""
         link = self.get_link(hash_id)
         if not token or not link or not link.handshake_complete:
             return
@@ -257,14 +290,14 @@ class PairingMixin:
         try:
             packet = self._seal(link, MessageType.PAIR, body)
             await self._send_raw(link.transport_peer_id, link.transport, packet)
-            self._outgoing_pair_tokens.pop(hash_id, None)
+            self.trusted.update(hash_id, pair_token_out="")
         except (KeyError, OSError, RuntimeError, ConnectionError) as exc:
             log.debug("Pair confirmation to %s not sent yet: %s", hash_id[:8], exc)
 
     async def _handle_pair(self: MessagingBackend, link: PeerLink, body: bytes) -> None:
         data = decode_payload(body)
         token = str(data.get("token", ""))
-        expiry = self._pairing_tokens.get(token)
+        expiry = self._pairing_tokens.get(self._token_key(token)) if token else None
         if not token or expiry is None or expiry < time.time():
             # Old or reused code: still a verified peer who added us, so ask the user.
             log.info("Pair request from %s with unknown/expired token", link.hash_id[:8])
@@ -279,7 +312,8 @@ class PairingMixin:
         if card.hash_id != link.hash_id:
             log.warning("Pair card identity does not match session peer %s", link.hash_id[:8])
             return
-        del self._pairing_tokens[token]  # single use
+        del self._pairing_tokens[self._token_key(token)]  # single use
+        self._save_pairing_tokens()
         try:
             peer = self._trust_from_card(card)
         except PairingError as exc:

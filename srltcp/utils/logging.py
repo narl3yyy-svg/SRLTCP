@@ -15,11 +15,8 @@ class _QuietAsyncioSSLFilter(logging.Filter):
         if "SSL connection is closed" in record.getMessage():
             return False
         exc = record.exc_info[1] if record.exc_info else None
-        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)) and (
-            "_call_connection_lost" in record.getMessage()
-        ):
-            return False
-        return True
+        reset = isinstance(exc, (ConnectionResetError, ConnectionAbortedError))
+        return not (reset and "_call_connection_lost" in record.getMessage())
 
 
 def setup_logging(level: str = "INFO", *, debug: bool = False) -> None:

@@ -405,3 +405,55 @@ async def test_connect_falls_back_to_alternate_address(pair) -> None:  # type: i
     assert await a.connect_to_peer(bh)
     assert await a.wait_for_handshake(bh)
     assert a.trusted.get(bh).tcp_host == "127.0.0.1"
+
+
+async def test_qr_pairing_survives_both_apps_restarting(tmp_path: Path) -> None:
+    """Scanner can't reach the scanned device at first (other network) and both
+    apps restart before they meet: a single scan still pairs both ways."""
+    a = make_node(tmp_path, "alice")
+    b = make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    a._card_endpoints = lambda: [("127.0.0.1", 9)]  # type: ignore[method-assign]
+    card = a.create_pairing_card()
+    ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+    await b.import_pairing_card(card["uri"], connect=False)
+    assert b.is_trusted(ah) and not a.is_trusted(bh)
+    await a.stop()
+    await b.stop()
+    a2 = make_node(tmp_path, "alice")
+    b2 = make_node(tmp_path, "bob")
+    await a2.start()
+    await b2.start()
+    try:
+        b2.trusted.update(ah, tcp_host="127.0.0.1", tcp_port=a2.config.tcp_port)
+        await b2.connect_to_peer(ah)
+        assert await wait_for(lambda: a2.is_trusted(bh), timeout=10)
+        assert not b2.trusted.get(ah).pair_token_out  # delivered once
+        assert not a2._pairing_tokens  # single use, also on disk
+    finally:
+        await a2.stop()
+        await b2.stop()
+
+
+async def test_overlapping_connects_keep_one_session(tmp_path: Path) -> None:
+    """Auto-reconnect and a user action dialing at the same time must not send
+    two handshakes on one connection (keys diverged, nothing decrypted)."""
+    a = make_node(tmp_path, "alice")
+    b = make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    try:
+        trust(a, b)
+        trust(b, a)
+        ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+        await asyncio.gather(*(b.connect_to_peer(ah) for _ in range(3)))
+        assert await b.wait_for_handshake(ah, timeout=8.0)
+        await asyncio.sleep(0.3)
+        await b.send_message(ah, "one")
+        assert await wait_for(lambda: "one" in texts(a))
+        await a.send_message(bh, "two")
+        assert await wait_for(lambda: "two" in texts(b))
+    finally:
+        await a.stop()
+        await b.stop()

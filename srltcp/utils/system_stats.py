@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, tzinfo
-from datetime import timezone as dt_timezone
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -111,7 +110,7 @@ def _query_ntp(server: str, *, timeout: float = 2.0) -> datetime | None:
         seconds = struct.unpack("!I", data[40:44])[0]
         fraction = struct.unpack("!I", data[44:48])[0]
         ntp = seconds + fraction / 2**32 - 2208988800
-        return datetime.fromtimestamp(ntp, tz=dt_timezone.utc)
+        return datetime.fromtimestamp(ntp, tz=UTC)
     except Exception:
         return None
 
@@ -127,7 +126,7 @@ def local_time_info(
     # "tzdata" package there. Without it, fall back to the OS's own local time
     # (which already knows the right offset), never crash.
     tz_name = timezone.strip()
-    local_tz = datetime.now().astimezone().tzinfo or dt_timezone.utc
+    local_tz = datetime.now().astimezone().tzinfo or UTC
     tz: tzinfo
     if not tz_name:
         tz, tz_name = local_tz, str(local_tz)

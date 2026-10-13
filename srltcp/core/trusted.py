@@ -65,6 +65,9 @@ class TrustedPeer:
     pair_own: str = ""
     pair_peer: str = ""
     relay_code_peer: str = ""
+    # One-time token from their QR/link that we still have to send back
+    # (inside the encrypted session) so they add us too. Cleared once sent.
+    pair_token_out: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -72,7 +75,7 @@ class TrustedPeer:
     def public_dict(self) -> dict[str, Any]:
         """What the local UI/API may see: no pair secrets or relay keys."""
         data = asdict(self)
-        for key in ("pair_own", "pair_peer", "relay_code_peer"):
+        for key in ("pair_own", "pair_peer", "relay_code_peer", "pair_token_out"):
             data.pop(key, None)
         data["relay_ready"] = bool(self.pair_own and self.pair_peer)
         return data
@@ -184,6 +187,7 @@ class TrustedStore:
         pair_own: str | None = None,
         pair_peer: str | None = None,
         relay_code_peer: str | None = None,
+        pair_token_out: str | None = None,
     ) -> TrustedPeer | None:
         peer = self._peers.get(hash_id)
         if not peer:
@@ -212,5 +216,7 @@ class TrustedStore:
             peer.pair_peer = pair_peer
         if relay_code_peer is not None:
             peer.relay_code_peer = relay_code_peer
+        if pair_token_out is not None:
+            peer.pair_token_out = pair_token_out
         self.save()
         return peer
