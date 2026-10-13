@@ -1,5 +1,16 @@
 # SRLTCP Release Notes
 
+## v0.8.1 (2026-10-13)
+
+- **"Upload failed" now says why.** When a file can't be sent, the message
+  names the reason: the phone couldn't read the file (for example it was
+  still downloading, or was moved), storage is full, or the file stopped
+  arriving part-way. The same reason is written to *Settings → Advanced →
+  Activity*.
+- The app recreates its upload folder if it's missing, instead of failing.
+- Installs over 0.8.0 (same signing key); contacts and chats are kept.
+- Android: one APK for phones (arm64).
+
 ## v0.8.0 (2026-10-13)
 
 **Update both devices**: 0.8 uses a new handshake version (5) and doesn't

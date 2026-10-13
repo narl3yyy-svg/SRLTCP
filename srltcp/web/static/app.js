@@ -1870,13 +1870,20 @@
     toast(`Uploading ${file.name}…`);
     const form = new FormData();
     form.append("file", file);
-    const { ok: upOk, data: uploaded } = await safeFetch(
+    const { ok: upOk, status, data: uploaded, error } = await safeFetch(
       "/api/upload",
       { method: "POST", body: form },
       { fallback: {} }
     );
     if (!upOk || !uploaded?.path) {
-      toast(uploaded?.error || "Upload failed", "error");
+      // Say why: "Upload failed" alone can't be acted on.
+      const why = uploaded?.error
+        || (status === 0
+          ? `couldn't read ${file.name} on this device${error?.message ? ` (${error.message})` : ""}. `
+            + "If it's still downloading, wait until it's finished, or pick it again from Files"
+          : `the app answered ${status}`);
+      toast(why.startsWith("Upload failed") ? why : `Upload failed: ${why}`, "error");
+      logActivity(`Upload of ${file.name} failed: ${why}`);
       return false;
     }
     const { ok, data: sent } = await apiPost("/api/transfer", {

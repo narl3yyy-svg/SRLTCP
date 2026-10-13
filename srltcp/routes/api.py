@@ -337,8 +337,14 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         )
 
     async def upload_file(request: web.Request) -> web.Response:
-        reader = await request.multipart()
-        field = await reader.next()
+        try:
+            reader = await request.multipart()
+            field = await reader.next()
+        except (ValueError, AssertionError, OSError) as exc:
+            log.warning("Upload rejected: %s", exc)
+            return web.json_response(
+                {"error": "Upload failed: the file didn't arrive in one piece"}, status=400
+            )
         if field is None or field.name != "file":
             return web.json_response({"error": "file field required"}, status=400)
         from srltcp.utils.files import safe_filename
@@ -352,6 +358,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             suffix = dest.suffix
             dest = upload_dir / f"{stem}_{int(time.time())}{suffix}"
         try:
+            upload_dir.mkdir(parents=True, exist_ok=True)
             with dest.open("wb") as f:
                 while True:
                     chunk = await field.read_chunk()
@@ -363,6 +370,13 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             log.warning("Upload of %s failed: %s", filename, exc)
             reason = "device storage is full" if exc.errno == 28 else "could not save the file"
             return web.json_response({"error": f"Upload failed: {reason}"}, status=507)
+        except Exception as exc:  # noqa: BLE001 - the page must learn why
+            dest.unlink(missing_ok=True)
+            log.warning("Upload of %s broke off: %s", filename, exc)
+            return web.json_response(
+                {"error": f"Upload failed: the file stopped arriving ({type(exc).__name__})"},
+                status=400,
+            )
         return web.json_response(
             {"path": str(dest), "filename": filename, "size": dest.stat().st_size}
         )
