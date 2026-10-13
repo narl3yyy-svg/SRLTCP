@@ -285,3 +285,42 @@ def test_lane_join_accepts_session_key_only(backend: MessagingBackend) -> None:
         backend._handle_text.assert_not_called()
 
     asyncio.run(run())
+
+
+async def test_early_chunks_cannot_exhaust_memory(
+    backend: MessagingBackend, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sender holding back the first chunk can't make us buffer the rest."""
+    monkeypatch.setattr(tr, "RX_BUFFER_MAX", 4 * 1024 * 1024)
+    incoming(backend, tmp_path, b"\0" * (64 * 1024 * 1024))
+    block = os.urandom(1024 * 1024)
+    for i in range(1, 12):
+        await backend._handle_file_chunk(SENDER, pack_file_chunk(TID, i * len(block), block))
+    rx = backend._in[TID]
+    assert rx.ahead_bytes <= 4 * 1024 * 1024
+    assert rx.expected == 0
+
+
+async def test_ack_from_another_contact_is_ignored(
+    backend: MessagingBackend, tmp_path: Path
+) -> None:
+    backend.identities["tcp"] = backend.identity_store.load_or_create("me", "tcp")
+    src = tmp_path / "out.bin"
+    src.write_bytes(b"x" * 1000)
+    transfer = backend._new_outgoing("b" * 32, src, "tcp", None)
+    transfer.state = TransferState.TRANSFERRING
+    backend._out[transfer.id] = tr._Outgoing()
+    body = encode_payload({"transfer_id": transfer.id, "offset": 1000, "ok": True})
+    await backend._handle_file_ack("c" * 32, body)  # not the recipient
+    assert backend._out[transfer.id].acked == 0
+    assert backend._out[transfer.id].result is None
+
+
+async def test_lane_join_refused_off_tor(backend: MessagingBackend) -> None:
+    class FakeTcp:
+        def is_tor(self, peer_id: str) -> bool:
+            return False
+
+    backend.tcp_transport = FakeTcp()  # type: ignore[assignment]
+    await backend._handle_lane_join(TransportPeer("lan-x", "10.0.0.2:1", "tcp"), 0, b"\0" * 64)
+    assert backend.lane_owner("lan-x") is None

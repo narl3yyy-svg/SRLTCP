@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "srltcp"
-version = "0.7.2"
+version = "0.8.0"
 description = "Fast, secure peer-to-peer communication and file transfer over Serial (USB) and TCP/IP"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
@@ -24,11 +24,9 @@ classifiers = [
 ]
 dependencies = [
     "aiohttp>=3.9",
-    "aiofiles>=24.1",
     "cryptography>=42.0",
     "pyserial>=3.5",
     "zstandard>=0.22",
-    "noiseprotocol>=0.3.1",
     "tzdata>=2024.1; sys_platform == 'win32'",  # time zone names on Windows
 ]
 

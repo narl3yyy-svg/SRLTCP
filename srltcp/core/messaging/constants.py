@@ -22,10 +22,8 @@ TRANSFER_STALL = 12.0  # no confirmation this long: resend from the last confirm
 TRANSFER_STALL_SLOW = 40.0  # the same over Tor, the relay or serial
 PROGRESS_EMIT_INTERVAL = 0.3  # seconds between UI progress updates
 COMPRESS_THRESHOLD = 64 * 1024  # compress chat payloads >= 64 KiB
-LINK_TIMEOUT = 30.0
 OFFER_TIMEOUT = 30.0  # unanswered file offer: re-offer once, then queue
 INCOMING_IDLE = 120.0  # incoming file with no data this long: paused, link re-checked
 TRANSFER_COOLDOWN = 45.0  # seconds to treat link as stable after transfer ends
 PING_INTERVAL = 10.0
 ANNOUNCE_INTERVAL = 5.0
-MAX_MESSAGE_SIZE = 16 * 1024 * 1024

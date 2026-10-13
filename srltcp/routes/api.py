@@ -49,6 +49,14 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     store = SettingsStore()
     upload_dir = data_dir() / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
+    # Copies of files sent from the browser, and folder zips, only matter
+    # while their transfer can run, and transfers don't survive a restart:
+    # don't keep a second copy of everything ever sent.
+    from srltcp.utils.files import folder_zip_temp_dir, purge_dir
+
+    purged = purge_dir(upload_dir) + purge_dir(folder_zip_temp_dir())
+    if purged:
+        log.info("Removed %d leftover copies of sent files", purged)
 
     async def status(_request: web.Request) -> web.Response:
         return web.json_response(node.status())

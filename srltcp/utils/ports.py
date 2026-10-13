@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import errno
-import socket
 from collections.abc import Callable
 from typing import Any
 
@@ -12,19 +11,6 @@ from srltcp.utils.logging import get_logger
 log = get_logger(__name__)
 
 DEFAULT_PORT_ATTEMPTS = 20
-
-
-def port_in_use(host: str, port: int) -> bool:
-    """Return True if a TCP port is already bound."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            sock.bind((host, port))
-            return False
-        except OSError as exc:
-            if exc.errno in (errno.EADDRINUSE, errno.EACCES):
-                return True
-            raise
 
 
 async def start_tcp_server(

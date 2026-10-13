@@ -61,7 +61,6 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 RELAY_PEER_PREFIX = "relay:"
-RELAY_PING_EVERY = 25.0  # keeps carrier NAT mappings alive
 RELAY_DEAD_AFTER = 70.0
 RELAY_CONNECT_TIMEOUT = 10.0
 OFFLINE_AFTER_NACK = 20.0  # don't retry a contact the relay says isn't there

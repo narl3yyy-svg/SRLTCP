@@ -323,43 +323,18 @@ def test_card_tampering_detected(tmp_path: Path) -> None:
         decode_card("srltcp://pair#garbage")
 
 
-async def test_noise_xx_mode_end_to_end(tmp_path: Path) -> None:
-    a = make_node(tmp_path, "alice", handshake_protocol="noise_xx")
-    b = make_node(tmp_path, "bob", handshake_protocol="noise_xx")
-    await a.start()
-    await b.start()
-    try:
-        trust(a, b)
-        trust(b, a)
-        ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
-        await a.send_message(bh, "noise hello")
-        assert await wait_for(lambda: "noise hello" in texts(b), timeout=10)
-        assert await wait_for(lambda: a.get_messages()[-1]["status"] == "delivered")
-        await b.send_message(ah, "noise reply")
-        assert await wait_for(lambda: "noise reply" in texts(a))
-        # Keys must not be derivable from the (public) handshake hash.
-        link = a.get_link(bh)
-        assert link is not None and link.crypto.ready
-    finally:
-        await a.stop()
-        await b.stop()
+async def test_retired_noise_handshake_is_refused(pair) -> None:  # type: ignore[no-untyped-def]
+    """Only the signed identity handshake exists; a Noise XX hello is refused."""
+    from unittest.mock import AsyncMock
 
+    from srltcp.core.protocol.messages import encode_payload
 
-async def test_stale_noise_setting_still_links(tmp_path: Path) -> None:
-    """A device with the retired Noise XX setting saved must still connect
-    (it used to be unable to talk to every default device)."""
-    a = make_node(tmp_path, "alice", handshake_protocol="noise_xx")
-    b = make_node(tmp_path, "bob")
-    await a.start()
-    await b.start()
-    try:
-        trust(a, b)
-        trust(b, a)
-        await a.connect_to_peer(b.identities["tcp"].hash_id)
-        assert await a.wait_for_handshake(b.identities["tcp"].hash_id, timeout=8.0)
-    finally:
-        await a.stop()
-        await b.stop()
+    a, b = pair
+    b._reject_connection = AsyncMock()
+    await b._handle_handshake("peer-x", encode_payload({"protocol": "noise_xx", "noise": "00"}))
+    b._reject_connection.assert_awaited_once_with("peer-x")
+    await a.connect_to_peer(b.identities["tcp"].hash_id)
+    assert await a.wait_for_handshake(b.identities["tcp"].hash_id, timeout=8.0)
 
 
 async def test_unicast_announce_gets_reply_both_discover(pair) -> None:  # type: ignore[no-untyped-def]

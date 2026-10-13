@@ -93,7 +93,6 @@ class SRLTCPNode:
         )
         self.config.tor_enabled = settings.tor_enabled
         self.config.tor_path = settings.tor_path
-        self.config.handshake_protocol = settings.handshake_protocol
         incoming = str(settings.resolved_incoming_dir())
         self.config.incoming_dir = incoming
         if hasattr(self.backend, "_transfer_dir"):

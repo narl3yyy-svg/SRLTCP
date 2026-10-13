@@ -119,6 +119,6 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 
 ## Dependency Security
 
-Runtime dependencies are declared in `pyproject.toml` with minimum versions (`aiohttp`, `aiofiles`, `cryptography`, `pyserial`, `zstandard`, `noiseprotocol`). Dev tools: `ruff`, `mypy`, `pytest`. Android adds Chaquopy-managed pip packages at APK build time.
+Runtime dependencies are declared in `pyproject.toml` with minimum versions (`aiohttp`, `cryptography`, `pyserial`, `zstandard`). Dev tools: `ruff`, `mypy`, `pytest`. Android adds Chaquopy-managed pip packages at APK build time.
 
 Report dependency or supply-chain issues through the same vulnerability channel.

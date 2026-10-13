@@ -4,7 +4,6 @@ from srltcp.utils.files import (
     ensure_dir,
     human_size,
     safe_filename,
-    sha256_file,
     walk_directory,
 )
 from srltcp.utils.logging import get_logger, setup_logging
@@ -19,6 +18,5 @@ __all__ = [
     "is_android",
     "safe_filename",
     "setup_logging",
-    "sha256_file",
     "walk_directory",
 ]

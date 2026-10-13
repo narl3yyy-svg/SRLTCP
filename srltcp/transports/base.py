@@ -86,15 +86,6 @@ class Transport(ABC):
     def peers(self) -> list[TransportPeer]:
         ...
 
-    @staticmethod
-    def encode_frame(payload: bytes) -> bytes:
-        return FrameWriter.write(payload)
-
-    @staticmethod
-    def decode_frames(buffer: bytes, reader: FrameReader) -> list[bytes]:
-        return reader.feed(buffer)
-
-
 class Connection:
     """Helper for a single peer connection with framed I/O."""
 

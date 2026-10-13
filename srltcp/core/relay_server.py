@@ -20,7 +20,6 @@ import hmac
 import os
 import secrets
 import ssl
-import struct
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -349,9 +348,4 @@ async def run_relay(host: str, port: int, public_host: str, base_dir: str | None
 
 
 # Wire helpers shared with the client.
-def hello_frame(access_key: bytes) -> bytes:
-    return pack_frame(bytes([R_HELLO, RELAY_VERSION]) + access_key)
 
-
-def ping_frame() -> bytes:
-    return pack_frame(bytes([R_PING]) + struct.pack(">d", time.time()))

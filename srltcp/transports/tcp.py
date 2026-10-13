@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import socket
 import uuid
-from typing import Any
 
 from srltcp.core.messaging.constants import DISCOVERY_PORT
 from srltcp.transports.base import (
@@ -72,16 +71,12 @@ class TCPTransport(Transport):
         self._discovery_protocol: _DiscoveryProtocol | None = None
         self._discovery_transport: asyncio.DatagramTransport | None = None
         self._connections: dict[str, Connection] = {}
-        self._announce_payload: bytes = b""
         self._running = False
         # Connections that came in through our onion service or were dialed
         # over Tor: only trusted contacts may use them (see backend).
         self._tor_peers: set[str] = set()
         self._onion_server: asyncio.Server | None = None
         self.onion_port = 0
-
-    def set_announce_payload(self, payload: bytes) -> None:
-        self._announce_payload = payload
 
     async def start(self) -> None:
         if self._running:
@@ -349,14 +344,6 @@ class TCPTransport(Transport):
             return ""
         sockname = conn.writer.get_extra_info("sockname")
         return str(sockname[0]) if sockname else ""
-
-    def update_peer_id(self, old_id: str, new_id: str, metadata: dict[str, Any]) -> None:
-        conn = self._connections.pop(old_id, None)
-        if not conn:
-            return
-        conn.peer.peer_id = new_id
-        conn.peer.metadata.update(metadata)
-        self._connections[new_id] = conn
 
     async def broadcast_discovery(self, payload: bytes) -> bool:
         if not self._discovery_transport:

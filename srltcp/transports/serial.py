@@ -35,8 +35,6 @@ class SerialTransport(Transport):
         self._frame_reader = FrameReader()
         self._running = False
         self._write_lock = asyncio.Lock()
-        self._bytes_rx = 0
-        self._bytes_tx = 0
         self._frame_errors = 0
         self._ping_ok = 0
         self._ping_fail = 0
@@ -91,7 +89,6 @@ class SerialTransport(Transport):
                 if not data:
                     await asyncio.sleep(0.01)
                     continue
-                self._bytes_rx += len(data)
                 for frame in self._frame_reader.feed(data):
                     if self._peer:
                         await self._emit_frame(self._peer, frame)
@@ -117,7 +114,6 @@ class SerialTransport(Transport):
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._serial.write, frame)
             await loop.run_in_executor(None, self._serial.flush)
-            self._bytes_tx += len(frame)
 
     async def broadcast(self, payload: bytes) -> None:
         if self._peer:
@@ -129,10 +125,6 @@ class SerialTransport(Transport):
     def has_peer(self, peer_id: str) -> bool:
         return self._peer is not None and self._peer.peer_id == peer_id
 
-    def update_peer_metadata(self, metadata: dict[str, Any]) -> None:
-        if self._peer:
-            self._peer.metadata.update(metadata)
-
     def record_ping_success(self, rtt_ms: float) -> None:
         self._ping_ok += 1
         smoothed = (
@@ -141,12 +133,6 @@ class SerialTransport(Transport):
             else (self._last_rtt_ms * 0.75) + (rtt_ms * 0.25)
         )
         self._last_rtt_ms = smoothed
-
-    def record_ping_fail(self) -> None:
-        self._ping_fail += 1
-
-    def last_rtt_ms(self) -> float | None:
-        return self._last_rtt_ms
 
     def link_quality_pct(self) -> float:
         """Estimate serial link quality from smoothed RTT and errors (not true RF RSSI)."""

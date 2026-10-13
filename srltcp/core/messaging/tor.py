@@ -202,7 +202,6 @@ class TorMixin:
         self._tor_detail = ""
         self._tor_progress = 0
         self._tor_task: asyncio.Task[None] | None = None
-        self._tor_lock = asyncio.Lock()
         # Lanes: extra Tor connections carrying file chunks for a session.
         self._tor_lanes: dict[str, list[str]] = {}  # contact -> our lane peer ids
         self._lane_owner: dict[str, str] = {}  # lane peer id (either side) -> contact

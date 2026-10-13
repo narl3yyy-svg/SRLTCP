@@ -188,7 +188,6 @@ class AnnounceMixin:
             if not self.tcp_transport:
                 raise AnnounceError(transport_name, "TCP transport is not enabled")
             else:
-                self.tcp_transport.set_announce_payload(payload)
                 if not await self.tcp_transport.broadcast_discovery(payload):
                     raise AnnounceError(
                         transport_name,

@@ -55,7 +55,6 @@ srltcp/
       framing.py            # Length + CRC32 frames
       messages.py           # Binary message types
       crypto.py             # E2EE: Ed25519, X25519, AES-GCM, replay window
-      noise_handshake.py    # Optional Noise XX handshake
       signed.py             # Signed payload helpers
     messaging/              # Mixin-composed backend
       backend.py            # Orchestrator
@@ -92,7 +91,7 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 2. **Session keys** — HKDF-SHA256 from the X25519 shared secret (salted with both ephemeral keys), separate keys per direction; new keys every session (forward secrecy)
 3. **Payloads** — AES-256-GCM with 64-bit counter nonces and a sliding replay window; the message type and flags are authenticated. All chat text, receipts, file offers, call signalling and metadata are encrypted, and unencrypted application messages are rejected
 4. **Trust** — only trusted contacts' messages, files and share requests are accepted; anyone else becomes a contact request
-5. **File chunks** — Each chunk is encrypted before it leaves your node; TCP may apply zstd compression **before** encryption (flag bit). Larger 1 MiB TCP chunks improve throughput only — they do **not** weaken encryption.
+5. **File chunks** — Each chunk is encrypted before it leaves your node; it may be zstd-compressed **before** encryption (flag bit). Chunk size (1 MiB direct, 64 KiB Tor, 128 KiB relay) affects throughput only — not encryption.
 
 ### How data is transferred
 
@@ -106,7 +105,7 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 | **NFC pairing** | Contact cards (public key, name, LAN address) | Public data; requires phones a few cm apart |
 | **Internet relay (7827, TLS)** | Rotating mailbox tokens + padded blobs sealed with the pair key, inside the E2EE session | Yes — three layers; the relay sees only IPs, timing and rough volume |
 
-**File transfer flow:** upload to local staging → (queued while the contact is unreachable) → `FILE_OFFER` (encrypted JSON) → `FILE_ACCEPT` → encrypted `FILE_CHUNK` stream → `FILE_COMPLETE` with SHA-256 verify. The receiver writes to your configured incoming folder; the Web UI serves completed files from disk for preview/download.
+**File transfer flow:** upload to local staging → (queued while the contact is unreachable) → `FILE_OFFER` (encrypted JSON) → `FILE_ACCEPT` → encrypted `FILE_CHUNK` stream, confirmed by `FILE_ACK` (a sliding window: the sender keeps a limited amount unconfirmed and resends from the last confirmed byte after a lost piece, a path change or a re-key) → `FILE_COMPLETE` with the SHA-256, computed while streaming → the receiver, which hashed while writing, answers with a final `FILE_ACK` (verified or not). The receiver writes strictly in order to your configured incoming folder; a cancelled or damaged download is deleted. Either side can cancel (`FILE_REJECT`). Over Tor the chunks are spread over 4 extra circuits ("lanes") joined with a session-key proof; chat stays on the main circuit.
 
 **WAN use:** Forward **TCP 7825** to your node. Traffic after handshake is E2EE. An observer on the internet can still see connection timing, packet sizes, and your public IP — verify peer hash IDs out-of-band before trusting. Set WAN host/port per contact (Add contact or contact menu → WAN).
 
@@ -513,17 +512,18 @@ SRLTCP listens on **TCP 7825** by default for encrypted P2P messaging (handshake
 
 | Setting | Value | Rationale |
 |---------|-------|-----------|
-| Chunk size | 1 MiB TCP / 8 KiB serial | Higher LAN throughput; E2EE unchanged |
-| Compression | zstd level 3, ≥ 64 KiB | Fast ratio for text/logs; skips already-compressed data |
+| Chunk / window | 1 MiB / 24 MiB direct · 64 KiB / 4 MiB Tor · 128 KiB / 2 MiB relay · 8 KiB serial | Keeps each path full without flooding it |
+| Tor | 4 parallel circuits for file data | One circuit tops out around 0.5 MB/s |
+| Compression | zstd (level 1 direct, 3 on slow paths) | Skipped for photos, videos, archives and data that doesn't shrink |
 | Frame CRC | CRC32 | Cheap integrity check per frame |
-| Async I/O | aiofiles + asyncio | Non-blocking disk and network |
-| Memory | Streaming only | Never loads full file into RAM |
+| Hashing | SHA-256 while streaming, both sides | No extra pass over the file before or after |
+| Off the event loop | read/hash/compress/encrypt and write/hash in worker threads | Chat, calls and UI stay responsive during big transfers |
+| Memory | Streaming; bounded reorder buffer (48 MiB) | Never loads the full file into RAM |
 
 **Tips for maximum speed:**
 
 - Use wired Ethernet or USB 3 serial adapters at 115200+ baud
 - Direct LAN/VPN paths are used automatically whenever they work (one less hop than the relay)
-- Disable compression for pre-compressed archives (future: per-file flag)
 - Run the relay on a low-latency host close to your users (calls go through it when there's no direct path)
 
 ---

@@ -22,7 +22,6 @@ class PeerLink:
     crypto: CryptoBox = field(default_factory=CryptoBox)
     connected: bool = False
     handshake_complete: bool = False
-    last_ping: float = 0.0
     rtt_ms: float | None = None
     link_quality_pct: float | None = None
     peer_name: str = ""
@@ -98,8 +97,3 @@ class PeerLinkMixin:
             link.handshake_complete = True
             link.connected = True
             link.last_seen = time.monotonic()
-
-    def touch_link(self: MessagingBackend, hash_id: str) -> None:
-        link = self._links.get(hash_id)
-        if link:
-            link.last_ping = time.time()

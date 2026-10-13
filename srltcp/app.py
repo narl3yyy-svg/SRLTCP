@@ -131,7 +131,6 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         lan_ip=settings.lan_ip,
         incoming_dir=str(settings.resolved_incoming_dir()),
         message_retention_hours=settings.message_retention_hours,
-        handshake_protocol=settings.handshake_protocol,
     )
 
 

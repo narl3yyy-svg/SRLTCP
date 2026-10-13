@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from srltcp.core.identity import Identity
 from srltcp.core.protocol.crypto import CryptoBox, KeyExchange, identity_hash
-from srltcp.core.protocol.framing import FrameReader, pack_frame, unpack_frame
+from srltcp.core.protocol.framing import FrameReader, pack_frame
 from srltcp.core.protocol.messages import (
     MessageType,
     build_header,
@@ -18,10 +18,7 @@ from srltcp.core.protocol.messages import (
 
 def test_frame_roundtrip() -> None:
     payload = b"hello srltcp"
-    frame = pack_frame(payload)
-    decoded, remainder = unpack_frame(frame)
-    assert decoded == payload
-    assert remainder == b""
+    assert FrameReader().feed(pack_frame(payload)) == [payload]
 
 
 def test_frame_reader_incremental() -> None:

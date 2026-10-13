@@ -12,8 +12,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 68
-        versionName = "0.7.2"
+        versionCode = 69
+        versionName = "0.8.0"
 
         ndk {
             // -PsrltcpAbis=arm64-v8a builds a smaller phone-only APK
@@ -60,12 +60,10 @@ chaquopy {
         buildPython(py)
         pip {
             install("aiohttp")
-            install("aiofiles")
             install("cryptography")
             install("pyserial")
             install("zstandard")
             install("tzdata")
-            install("noiseprotocol")
         }
     }
 }

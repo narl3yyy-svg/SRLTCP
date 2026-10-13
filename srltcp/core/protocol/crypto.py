@@ -7,7 +7,6 @@ import hmac
 import struct
 import time
 from dataclasses import dataclass
-from typing import Any
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -248,10 +247,3 @@ def public_key_bytes(public_key: Ed25519PublicKey) -> bytes:
 def load_public_key(raw: bytes) -> Ed25519PublicKey:
     return Ed25519PublicKey.from_public_bytes(raw)
 
-
-def keys_to_dict(keys: SessionKeys) -> dict[str, Any]:
-    return {
-        "send_key": keys.send_key.hex(),
-        "recv_key": keys.recv_key.hex(),
-        "salt": keys.salt.hex(),
-    }

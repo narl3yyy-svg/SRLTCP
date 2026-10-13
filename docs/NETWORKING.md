@@ -85,7 +85,12 @@ forwarding.
   relay). The app keeps checking and moves back to a direct path as soon as
   one works.
 - **Speed:** fine for messages and files; the first connection takes a few
-  seconds. Calls work but can be choppier than on a direct path.
+  seconds. One Tor circuit carries roughly 0.5 MB/s, so a file is spread over
+  4 extra circuits ("lanes", each routed separately, opened for file data
+  only and closed a minute after the last file). Messages and calls stay on
+  the main circuit and don't queue behind the file. Calls work but can be
+  choppier than on a direct path. When both devices get on the same network,
+  the session moves to the direct path, even in the middle of a file.
 
 Privacy: only your trusted contacts get your onion address, and connections
 through it are only accepted from trusted contacts. A stranger who somehow

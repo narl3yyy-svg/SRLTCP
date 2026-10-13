@@ -69,3 +69,13 @@ def test_list_transfers_active_only(backend: MessagingBackend) -> None:
     )
     assert len(backend.list_transfers(active_only=True)) == 1
     assert len(backend.list_transfers(active_only=False)) == 2
+
+def test_purge_dir_removes_files_only(tmp_path: Path) -> None:
+    from srltcp.utils.files import purge_dir
+
+    (tmp_path / "a.bin").write_bytes(b"x")
+    (tmp_path / "b.txt").write_text("y")
+    (tmp_path / "keep").mkdir()
+    assert purge_dir(tmp_path) == 2
+    assert [p.name for p in tmp_path.iterdir()] == ["keep"]
+    assert purge_dir(tmp_path / "missing") == 0

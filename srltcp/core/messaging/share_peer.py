@@ -320,14 +320,6 @@ class SharePeerMixin:
         self._prune_share_grants()
         return [g.to_public_dict(remote=True) for g in self._remote_share_grants.values()]
 
-    def revoke_share_grant(self: MessagingBackend, grant_id: str) -> bool:
-        grant = self._share_grants.get(grant_id)
-        if not grant or grant.revoked:
-            return False
-        grant.revoked = True
-        self._prune_share_grants()
-        return True
-
     async def notify_share_revoked(
         self: MessagingBackend, grant_id: str, recipient_hash: str
     ) -> bool:
@@ -397,26 +389,6 @@ class SharePeerMixin:
             else:
                 self._kick_connect(recipient)
         return [self._share_grants[g["grant_id"]].to_public_dict(remote=False) for g in out]
-
-    async def offer_share_folder(
-        self: MessagingBackend,
-        recipient_hash: str,
-        *,
-        folder: Path | None = None,
-        label: str = "shared",
-        ttl_preset: str = "1h",
-        download_limit_preset: str = "unlimited",
-        password: str = "",
-    ) -> dict[str, Any] | None:
-        grants = await self.offer_share(
-            [recipient_hash],
-            folder=folder or self._share_root(),
-            label=label,
-            ttl_preset=ttl_preset,
-            download_limit_preset=download_limit_preset,
-            password=password,
-        )
-        return grants[0] if grants else None
 
     async def send_pending_share_offers(self: MessagingBackend, recipient_hash: str) -> None:
         """Deliver offers made while this contact was away (called on link-up)."""

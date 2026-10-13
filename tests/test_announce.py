@@ -15,7 +15,6 @@ class _AnnounceBackend(AnnounceMixin):
         self._init_announce()
         self.tcp_transport = MagicMock()
         self.tcp_transport.discovery_port = 7826
-        self.tcp_transport.set_announce_payload = MagicMock()
         self.tcp_transport.broadcast_discovery = AsyncMock(return_value=True)
         self.serial_transport = MagicMock()
         self.serial_transport.broadcast = AsyncMock()

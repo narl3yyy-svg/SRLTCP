@@ -1,5 +1,77 @@
 # SRLTCP Release Notes
 
+## v0.8.0 (2026-10-13)
+
+**Update both devices**: 0.8 uses a new handshake version (5) and doesn't
+talk to 0.7.x.
+
+### Fixed: cancelling a file didn't stop it on the other device
+- Cancelling on the sending side left the receiving device showing the file
+  as still transferring, and it kept writing data. Cancel now works from
+  either side, shows on both, and the half-received file is deleted. If the
+  cancel is lost (connection dropping at that moment), the other device is
+  told again as soon as it sends anything for that file, or on reconnect.
+
+### Fixed: large files could arrive damaged
+- Pieces of a file were written by several tasks at once, and a piece could
+  cut off the one written just before it. Big files then failed the final
+  check ("Transfer failed"); in our test a 512 MB file failed every time.
+  Files are now written strictly in order through one open file, and checked
+  while they're written.
+
+### Faster file transfers
+- **Over the LAN / VPN**: the sender no longer waits for each piece to leave
+  before preparing the next, and the receiver no longer opens and closes the
+  file for every piece. Reading, checking, compressing and encrypting run
+  next to the network instead of in turn. No more extra pass over the whole
+  file before sending or after receiving. 512 MB between two processes:
+  ~90 MB/s, verified (it used to end damaged).
+- **Over Tor**: one Tor circuit tops out at roughly 0.5 MB/s. A file is now
+  spread over 4 extra Tor circuits at once (each separately routed, opened
+  only for file data and closed a minute after the last file). Messages,
+  calls and acknowledgements stay on the main circuit, so chat doesn't stall
+  behind a file. Lanes are joined with a proof from the session key, so
+  only your contact can attach one.
+- **Relay or Tor -> same Wi-Fi**: a session on the relay or Tor now moves to
+  the direct path even while a file is moving (it carries on from where it
+  was), and right away when the contact shows up on your network instead of
+  up to 45 s later.
+- Already-compressed files (photos, videos, zips, …) aren't compressed again,
+  saving CPU and battery on phones.
+
+### Clearer progress
+- The progress, live speed (measured over the last moments, not averaged
+  since the start) and a cancel button are in the file's own bubble, in the
+  chat with the contact it's going to or coming from. The panel above the
+  message box that showed every transfer in whichever chat was open (a file
+  to Bob appeared in Carol's chat) is gone, as is the duplicate list in
+  Settings.
+- The sender's progress shows what the other device has actually saved, and
+  "complete" only once it has verified the file.
+
+### Reliability
+- Lost pieces (a path change, a re-key, a dropped connection) are resent
+  from the last piece the receiver confirmed; a transfer that gets no answer
+  at all reconnects instead of hanging.
+- A device low on storage refuses a file it can't hold instead of filling up.
+- Chat messages no longer wait behind a file's data on the same connection.
+
+### Privacy and cleanup
+- Copies of files sent from the browser (kept in the app's uploads folder)
+  and temporary folder zips are deleted at startup; they were never cleaned
+  up before.
+- Removed the retired Noise XX handshake code (unreachable since 0.6.1) and
+  two unused dependencies (`noiseprotocol`, `aiofiles`), plus other dead code.
+
+### Testing
+- New tests: out-of-order pieces, a damaged file is refused and deleted,
+  cancel from either side, a lost piece is resent, a re-key mid-transfer, a
+  file moving from the relay to the direct path mid-transfer, Tor lane
+  joining (forged joins refused), memory bounded against a flooding sender.
+- Private Tor network test: an 8 MB file over 4 parallel circuits, chat still
+  flowing. Browser simulation: cancel from the bubble shows on both sides.
+  167 tests pass; app pentest 66/0.
+
 ## v0.7.2 (2026-10-13)
 
 ### Fixed: sending files failed

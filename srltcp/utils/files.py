@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 import re
 import tempfile
 import zipfile
-from collections.abc import AsyncIterator
 from pathlib import Path
-
-import aiofiles
 
 from srltcp.utils.platform import data_dir
 
@@ -64,6 +60,23 @@ def human_size(num: int) -> str:
 def folder_zip_temp_dir() -> Path:
     """Persistent temp directory for folder zips (avoids small /tmp quotas)."""
     return ensure_dir(data_dir() / "transfers" / ".zip-temp")
+
+
+def purge_dir(directory: Path) -> int:
+    """Delete the files directly inside ``directory``; returns how many."""
+    removed = 0
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        try:
+            if entry.is_file() or entry.is_symlink():
+                entry.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def folder_payload_size(path: Path) -> int:
@@ -132,51 +145,6 @@ async def zip_path_to_temp_async(path: Path, *, temp_dir: Path | None = None) ->
     return await asyncio.to_thread(zip_path_to_temp, path, temp_dir=temp_dir)
 
 
-async def sha256_file(path: Path, chunk_size: int = CHUNK_SIZE) -> str:
-    digest = hashlib.sha256()
-    async with aiofiles.open(path, "rb") as f:
-        while True:
-            block = await f.read(chunk_size)
-            if not block:
-                break
-            digest.update(block)
-    return digest.hexdigest()
-
-
-async def read_file_chunk(path: Path, offset: int, length: int) -> bytes:
-    async with aiofiles.open(path, "rb") as f:
-        await f.seek(offset)
-        data: bytes = await f.read(length)
-        return data
-
-
-async def write_file_chunk(path: Path, offset: int, data: bytes, *, fsync: bool = False) -> None:
-    """Write a chunk at offset. Fsync is optional — callers fsync on transfer complete."""
-    ensure_dir(path.parent)
-    existed = path.exists()
-    async with aiofiles.open(path, "r+b" if existed else "w+b") as f:
-        end = offset + len(data)
-        current = path.stat().st_size if existed else 0
-        if end > current:
-            await f.truncate(end)
-        await f.seek(offset)
-        await f.write(data)
-        await f.flush()
-        if fsync:
-            await asyncio.to_thread(os.fsync, f.fileno())
-
-
-async def fsync_file(path: Path) -> None:
-    def _sync() -> None:
-        fd = os.open(path, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-
-    await asyncio.to_thread(_sync)
-
-
 def walk_directory(root: Path) -> list[dict[str, object]]:
     """Return a flat listing of files under root (relative paths).
 
@@ -205,14 +173,3 @@ def walk_directory(root: Path) -> list[dict[str, object]]:
             entries.append({"name": rel.as_posix(), "type": "file", "size": size})
     return entries
 
-
-async def stream_file(
-    path: Path, offset: int = 0, chunk_size: int = CHUNK_SIZE
-) -> AsyncIterator[bytes]:
-    async with aiofiles.open(path, "rb") as f:
-        await f.seek(offset)
-        while True:
-            block = await f.read(chunk_size)
-            if not block:
-                break
-            yield block
