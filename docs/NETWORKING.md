@@ -101,7 +101,6 @@ Change these only if you know you need to.
 | **TCP peer port** | Where contacts connect to you. Must be the same on all your devices. Hole punching uses this port + 3. | 7825 |
 | **UDP discovery port** | Used to find devices on the LAN/VPN. Must be the same on all your devices. | 7826 |
 | **Use exact ports** | If a port is busy, fail instead of quietly using the next one. That keeps devices compatible. | On |
-| **Handshake protocol** | *Identity* is the default and is tested. *Noise XX* is experimental, and both sides must match. | Identity |
 | **External call relay (STUN/TURN)** | Not needed: calls travel inside the SRLTCP connection. This is only a fallback for unusual networks. | Empty |
 | **I port-forward TCP 7825** | The old manual setup for direct internet connections. The relay and hole punching make it unnecessary. | Off |
 

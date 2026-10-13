@@ -33,7 +33,6 @@
 | **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected |
 | **Contact requests** | Unknown peers can't message you; they appear as "wants to chat" until you accept |
 | **Chat history** | Saved locally (owner-only file permissions), pruned by your retention setting |
-| **Noise XX handshake** | Optional experimental handshake protocol in Settings → Network |
 | **Trusted peers** | Trust-before-message security model |
 | **Ping / RTT** | Latency in ms; serial link quality % (RTT-based estimate, not RF RSSI) |
 | **Cross-platform** | Linux, macOS, Windows CLI + Android (Chaquopy APK) |
@@ -88,7 +87,7 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 
 ### End-to-end encryption
 
-1. **Handshake** — Default: fresh ephemeral X25519 keys, signed (with a timestamp) by the Ed25519 identity key. Each side checks that the peer's hash ID is derived from the key it presents and that it matches the pinned contact key, so contacts cannot be impersonated; replayed handshakes are rejected. Optional **Noise XX** (`Noise_XX_25519_ChaChaPoly_SHA256`) in Settings → Network binds the Ed25519 identity to the Noise session — both peers must use the same protocol
+1. **Handshake** — Default: fresh ephemeral X25519 keys, signed (with a timestamp) by the Ed25519 identity key. Each side checks that the peer's hash ID is derived from the key it presents and that it matches the pinned contact key, so contacts cannot be impersonated; replayed handshakes are rejected. (The experimental Noise XX option was removed in 0.6.1: a device set to it couldn't talk to any other device.)
 2. **Session keys** — HKDF-SHA256 from the X25519 shared secret (salted with both ephemeral keys), separate keys per direction; new keys every session (forward secrecy)
 3. **Payloads** — AES-256-GCM with 64-bit counter nonces and a sliding replay window; the message type and flags are authenticated. All chat text, receipts, file offers, call signalling and metadata are encrypted, and unencrypted application messages are rejected
 4. **Trust** — only trusted contacts' messages, files and share requests are accepted; anyone else becomes a contact request
@@ -158,7 +157,6 @@ On first launch, the web UI shows a setup wizard. Settings persist in `~/.srltcp
 | WAN port-forward | Advanced: acknowledge you will forward TCP **7825** for direct WAN peers |
 | Timezone | Region for the status clock (time shown at top of sidebar) |
 | Show clock | Toggle live clock in the UI |
-| Handshake protocol | Identity (default) or Noise XX — both peers must match |
 | Advanced: external call relay | Optional STUN/TURN server; only used if the built-in relay is unavailable (leave empty) |
 
 Change port from CLI: `./run.sh web --port 9999`

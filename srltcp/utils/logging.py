@@ -7,8 +7,19 @@ import sys
 
 
 class _QuietAsyncioSSLFilter(logging.Filter):
+    """Drop asyncio noise about connections the other side already closed:
+    TLS shutdown races, and on Windows "WinError 10054" from the proactor
+    loop each time a browser tab closes a keep-alive connection."""
+
     def filter(self, record: logging.LogRecord) -> bool:
-        return "SSL connection is closed" not in record.getMessage()
+        if "SSL connection is closed" in record.getMessage():
+            return False
+        exc = record.exc_info[1] if record.exc_info else None
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)) and (
+            "_call_connection_lost" in record.getMessage()
+        ):
+            return False
+        return True
 
 
 def setup_logging(level: str = "INFO", *, debug: bool = False) -> None:

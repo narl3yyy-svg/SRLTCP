@@ -724,8 +724,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         updated.relay_code = relay_text
         if updated.clock_source not in ("system", "ntp"):
             updated.clock_source = "system"
-        if updated.handshake_protocol not in ("identity", "noise_xx"):
-            updated.handshake_protocol = "identity"
+        updated.handshake_protocol = "identity"  # the only supported handshake
         stun = str(updated.call_stun_server or "").strip()
         if stun and (
             not stun.startswith(("stun:", "stuns:", "turn:", "turns:"))
