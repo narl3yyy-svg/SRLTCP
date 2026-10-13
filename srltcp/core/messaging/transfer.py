@@ -1,76 +1,215 @@
-"""High-performance chunked file transfer mixin."""
+"""File transfers inside an end-to-end encrypted session.
+
+Protocol (every message travels inside the session)::
+
+    sender                                   receiver
+    FILE_OFFER    {id, filename, size}  -->
+                                        <--  FILE_ACCEPT {id, offset}
+    FILE_CHUNK    (id, offset, data)    -->  written in order, hashed while written
+                                        <--  FILE_ACK    {id, offset}      on disk
+    FILE_COMPLETE {id, sha256}          -->
+                                        <--  FILE_ACK    {id, offset=size, ok}
+    FILE_REJECT   {id, reason}          <->  cancel / refuse, either side
+
+- Window: the sender keeps at most one path's window of unconfirmed bytes in
+  flight. That keeps a fast link busy, bounds the receiver's memory and makes
+  the sender's progress bar show what has really arrived.
+- Recovery: no confirmation for a while, a path switch (Tor/relay -> LAN) or
+  a lost Tor lane makes the sender go back to the last confirmed byte; the
+  receiver drops what it already has. A transfer survives link drops and
+  path changes without corrupting the file.
+- Order: chunks may arrive out of order (parallel Tor circuits). The receiver
+  holds early ones in memory (bounded) and writes strictly sequentially
+  through one file handle, so the file never has holes, and both sides hash
+  while streaming: no extra pass over the file before or after.
+- Work off the event loop: reading, hashing, compressing and encrypting a
+  chunk (sender) and writing + hashing (receiver) run in worker threads, so
+  chat, calls and the UI stay responsive during big transfers.
+- Cancel: FILE_REJECT both ways. A side that gets data, an offer or an
+  accept for a transfer it cancelled answers with FILE_REJECT again, so a
+  cancel lost with a dropping link still gets through. A cancelled or
+  corrupt download is deleted.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
+import shutil
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, BinaryIO
 
 import zstandard as zstd
 
-from srltcp.core.messaging.constants import (
-    CHUNK_SEND_DELAY,
-    CHUNK_SIZE,
-    COMPRESS_THRESHOLD,
-    OFFER_TIMEOUT,
-    PROGRESS_EMIT_INTERVAL,
-    RELAY_CHUNK_SIZE,
-    SERIAL_CHUNK_DELAY,
-    SERIAL_CHUNK_SIZE,
-    TRANSFER_COOLDOWN,
-)
+from srltcp.core.messaging import constants as C
 from srltcp.core.messaging.models import FileTransfer, TransferState
+from srltcp.core.protocol.framing import pack_frame
 from srltcp.core.protocol.messages import (
     Flags,
     MessageType,
+    build_header,
     decode_payload,
     encode_payload,
+    header_aad,
     normalize_transfer_id,
     pack_file_chunk,
     unpack_file_chunk,
 )
-from srltcp.utils.files import (
-    ensure_dir,
-    fsync_file,
-    safe_filename,
-    sha256_file,
-    unique_dest_path,
-    write_file_chunk,
-)
+from srltcp.utils.files import ensure_dir, safe_filename, unique_dest_path
 from srltcp.utils.logging import get_logger
 from srltcp.utils.platform import data_dir
 
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
+    from srltcp.core.messaging.links import PeerLink
 
 log = get_logger(__name__)
 
+TERMINAL = frozenset(
+    {TransferState.COMPLETE, TransferState.CANCELLED, TransferState.FAILED, TransferState.REJECTED}
+)
+ACTIVE = frozenset({TransferState.OFFERED, TransferState.ACCEPTED, TransferState.TRANSFERRING})
+MAX_CHUNK = 1024 * 1024  # largest chunk a receiver accepts (after decompression)
+RX_BUFFER_MAX = 48 * 1024 * 1024  # early + unwritten bytes kept per incoming file
+ACK_BYTES = 1024 * 1024  # confirm at least every MiB written…
+ACK_INTERVAL = 0.1  # …and never leave newer bytes unconfirmed longer than this
+REJECT_REPEAT = 2.0  # answer stray data for a cancelled transfer at most this often
+LINK_WAIT = 10.0  # a sender waits this long for a dropped session before pausing
+MiB = 1024 * 1024
+
+# Already-compressed formats: compressing them only burns CPU (and battery).
+_NO_COMPRESS = frozenset({
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".avif",
+    ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi",
+    ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac",
+    ".zip", ".gz", ".tgz", ".bz2", ".xz", ".zst", ".7z", ".rar", ".apk", ".jar",
+    ".docx", ".xlsx", ".pptx", ".odt", ".pdf", ".woff2",
+})
+
+
+@dataclass(frozen=True)
+class PathParams:
+    chunk: int
+    window: int
+    stall: float
+    level: int  # zstd level, 0 = never compress
+    delay: float = 0.0
+
+
+@dataclass
+class _Outgoing:
+    """Sender state of one transfer (lives across pauses and reconnects)."""
+
+    acked: int = 0  # bytes the receiver has on disk
+    next: int = 0  # next byte to send
+    hashed: int = 0  # bytes fed to the hasher (file order)
+    hasher: Any = field(default_factory=hashlib.sha256)
+    result: bool | None = None  # receiver's verdict on the finished file
+    complete_sent: bool = False
+    progress_at: float = field(default_factory=time.monotonic)
+    stalls: int = 0
+    rewind: bool = False
+    wake: asyncio.Event = field(default_factory=asyncio.Event)
+    compress: bool = True
+    skip: int = 0  # chunks to send uncompressed before trying again
+    cctx: Any = None
+    level: int = 0
+
+
+@dataclass
+class _Incoming:
+    """Receiver state of one transfer."""
+
+    path: Path
+    expected: int = 0  # contiguous bytes received (queued or written)
+    written: int = 0  # bytes on disk and hashed
+    hasher: Any = field(default_factory=hashlib.sha256)
+    ahead: dict[int, bytes] = field(default_factory=dict)  # arrived early
+    ahead_bytes: int = 0
+    queue: list[bytes] = field(default_factory=list)  # in order, not yet written
+    queued_bytes: int = 0
+    fh: BinaryIO | None = None
+    writer: asyncio.Task[None] | None = None
+    sha256: str = ""  # announced by FILE_COMPLETE
+    acked: int = -1
+    acked_at: float = 0.0
+    ack_task: asyncio.Task[None] | None = None
+    last_data: float = field(default_factory=time.monotonic)
+    closed: bool = False
+
+
+def _valid_sha(value: str) -> bool:
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def _write_blocks(rx: _Incoming, blocks: list[bytes]) -> None:
+    """Worker thread: append blocks to the file and the running hash."""
+    if rx.fh is None:
+        fh = open(rx.path, "r+b" if rx.path.exists() else "wb")  # noqa: SIM115
+        fh.seek(rx.written)
+        fh.truncate()
+        rx.fh = fh
+    for block in blocks:
+        rx.fh.write(block)
+        rx.hasher.update(block)
+
+
+def _close_file(rx: _Incoming, *, sync: bool) -> None:
+    fh, rx.fh = rx.fh, None
+    if fh is None:
+        return
+    try:
+        fh.flush()
+        if sync:
+            import os
+
+            os.fsync(fh.fileno())
+    finally:
+        fh.close()
+
 
 class TransferMixin:
-    """Streaming, resumable, optionally compressed file transfers."""
+    """Windowed, resumable, verified file transfers."""
 
     _transfers: dict[str, FileTransfer]
     _incoming_paths: dict[str, Path]
     _transfer_tasks: dict[str, asyncio.Task[None]]
-    _pending_chunk_tasks: dict[str, set[asyncio.Task[None]]]
 
     def _init_transfer(self: MessagingBackend) -> None:
         self._transfers = {}
         self._incoming_paths = {}
         self._transfer_tasks = {}
-        self._pending_chunk_tasks = {}
+        self._out: dict[str, _Outgoing] = {}
+        self._in: dict[str, _Incoming] = {}
         if self.config.incoming_dir:
             self._transfer_dir = Path(self.config.incoming_dir)
         else:
             self._transfer_dir = data_dir() / "transfers"
         ensure_dir(self._transfer_dir)
-        self._transfer_started: dict[str, float] = {}
         self._transfer_cooldown_until: dict[str, float] = {}
         self._transfer_progress_emit: dict[str, float] = {}
+        self._speed_sample: dict[str, tuple[float, int]] = {}
+        self._reject_sent_at: dict[str, float] = {}
         # Outgoing offers not yet accepted: transfer id -> (sent at, tries).
         self._offer_sent_at: dict[str, tuple[float, int]] = {}
+
+    async def stop_transfers(self: MessagingBackend) -> None:
+        tasks = [t for t in self._transfer_tasks.values() if not t.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._transfer_tasks.clear()
+        for rx in list(self._in.values()):
+            await self._rx_close(rx, delete=False)
+        self._transfer_cooldown_until.clear()
+        self._transfer_progress_emit.clear()
+
+    # ── Queries ──
 
     def transfer_file_path(self: MessagingBackend, transfer_id: str) -> Path | None:
         """Where a transfer's bytes live on disk (received copy or the sent original)."""
@@ -84,8 +223,31 @@ class TransferMixin:
             return transfer.path
         return None
 
+    def list_transfers(self: MessagingBackend, *, active_only: bool = False) -> list[dict]:
+        items = list(self._transfers.values())
+        if active_only:
+            items = [t for t in items if t.state in ACTIVE or t.state == TransferState.PAUSED]
+        return [t.to_dict() for t in items]
+
+    def peers_with_queued_files(self: MessagingBackend) -> set[str]:
+        """Contacts we still have outgoing files waiting for."""
+        own = self._own_hash_ids()
+        return {
+            t.recipient_hash
+            for t in self._transfers.values()
+            if t.state == TransferState.PAUSED and t.sender_hash in own
+        }
+
+    def has_active_transfer_for(self: MessagingBackend, hash_id: str) -> bool:
+        # PAUSED is not "active": a paused transfer needs the link back, so it
+        # must not suppress reconnects or dead-link detection.
+        return any(
+            t.state in ACTIVE and hash_id in (t.recipient_hash, t.sender_hash)
+            for t in self._transfers.values()
+        )
+
     def _mark_transfer_cooldown(self: MessagingBackend, *hash_ids: str) -> None:
-        deadline = time.monotonic() + TRANSFER_COOLDOWN
+        deadline = time.monotonic() + C.TRANSFER_COOLDOWN
         for hash_id in hash_ids:
             if hash_id:
                 self._transfer_cooldown_until[hash_id] = deadline
@@ -99,66 +261,109 @@ class TransferMixin:
             return False
         return True
 
-    def _maybe_compress(
-        self: MessagingBackend, data: bytes, *, transport: str = "tcp"
-    ) -> tuple[bytes, bool]:
-        if transport == "serial" or len(data) < COMPRESS_THRESHOLD:
-            return data, False
-        cctx = zstd.ZstdCompressor(level=3)
-        compressed = cctx.compress(data)
-        if len(compressed) < len(data):
-            return compressed, True
-        return data, False
+    def _own_hash_ids(self: MessagingBackend) -> set[str]:
+        return {i.hash_id for i in self.identities.values()}
 
-    def _chunk_params(self: MessagingBackend, transport: str) -> tuple[int, float]:
-        if transport == "serial":
-            return SERIAL_CHUNK_SIZE, SERIAL_CHUNK_DELAY
-        if transport == "relay":
-            return RELAY_CHUNK_SIZE, CHUNK_SEND_DELAY  # fits the relay's frame limit
-        return CHUNK_SIZE, CHUNK_SEND_DELAY
+    def _is_outgoing(self: MessagingBackend, transfer: FileTransfer) -> bool:
+        return transfer.sender_hash in self._own_hash_ids()
+
+    def _peer_hash_for_transfer(self: MessagingBackend, transfer: FileTransfer) -> str:
+        return transfer.recipient_hash if self._is_outgoing(transfer) else transfer.sender_hash
+
+    def _path_params(self: MessagingBackend, link: PeerLink) -> PathParams:
+        if link.transport == "serial":
+            return PathParams(
+                C.SERIAL_CHUNK_SIZE, C.SERIAL_WINDOW, C.TRANSFER_STALL_SLOW, 0,
+                C.SERIAL_CHUNK_DELAY,
+            )
+        if link.transport == "relay":
+            return PathParams(C.RELAY_CHUNK_SIZE, C.RELAY_WINDOW, C.TRANSFER_STALL_SLOW, 3)
+        if self._link_on_tor(link):
+            return PathParams(C.TOR_CHUNK_SIZE, C.TOR_WINDOW, C.TRANSFER_STALL_SLOW, 3)
+        return PathParams(C.CHUNK_SIZE, C.CHUNK_WINDOW, C.TRANSFER_STALL, 1)
+
+    # ── Progress ──
 
     async def _emit_transfer_progress(
         self: MessagingBackend, transfer: FileTransfer, *, force: bool = False
     ) -> None:
         now = time.monotonic()
+        terminal = transfer.state in TERMINAL
         last = self._transfer_progress_emit.get(transfer.id, 0.0)
-        terminal = transfer.state in (
-            TransferState.COMPLETE,
-            TransferState.FAILED,
-            TransferState.CANCELLED,
-        )
-        if not force and not terminal and (now - last) < PROGRESS_EMIT_INTERVAL:
+        if not force and not terminal and (now - last) < C.PROGRESS_EMIT_INTERVAL:
             return
         self._transfer_progress_emit[transfer.id] = now
+        # Speed over the last moment, smoothed — not the average since the
+        # start, which pauses and slow starts would drag down for good.
+        if transfer.state == TransferState.TRANSFERRING:
+            sample = self._speed_sample.get(transfer.id)
+            if sample is None:
+                self._speed_sample[transfer.id] = (now, transfer.offset)
+            elif now - sample[0] >= 0.25:
+                rate = max(0.0, (transfer.offset - sample[1]) / (now - sample[0]) / MiB)
+                transfer.speed_mbps = (
+                    rate if not transfer.speed_mbps else 0.5 * rate + 0.5 * transfer.speed_mbps
+                )
+                self._speed_sample[transfer.id] = (now, transfer.offset)
+        else:
+            transfer.speed_mbps = 0.0
+            self._speed_sample.pop(transfer.id, None)
+        if terminal:
+            self._transfer_progress_emit.pop(transfer.id, None)
         payload = transfer.to_dict()
         if self._on_transfer_progress:
             await self._on_transfer_progress(payload)
-        await self._update_file_message(payload, notify=terminal)
+        await self._update_file_message(payload, notify=terminal or force)
 
-    def _maybe_decompress(
-        self: MessagingBackend, data: bytes, compressed: bool, *, max_size: int = 0
-    ) -> bytes:
-        if not compressed:
-            return data
-        dctx = zstd.ZstdDecompressor()
-        # Bound output so a tiny compressed chunk cannot expand without limit.
-        return dctx.decompress(data, max_output_size=max(1, max_size or CHUNK_SIZE))
+    # ── Small senders ──
 
-    def _own_hash_ids(self: MessagingBackend) -> set[str]:
-        return {i.hash_id for i in self.identities.values()}
+    async def _send_control(
+        self: MessagingBackend, hash_id: str, kind: MessageType, data: dict[str, Any]
+    ) -> bool:
+        link = self.get_link(hash_id)
+        if not link or not link.handshake_complete:
+            return False
+        try:
+            packet = self._seal(link, kind, encode_payload(data))
+            await self._send_raw(link.transport_peer_id, link.transport, packet)
+        except (KeyError, OSError, RuntimeError, ConnectionError) as exc:
+            log.debug("%s to %s not sent: %s", kind.name, hash_id[:8], exc)
+            return False
+        return True
 
-    def _peer_hash_for_transfer(self: MessagingBackend, transfer: FileTransfer) -> str:
-        if transfer.sender_hash in self._own_hash_ids():
-            return transfer.recipient_hash
-        return transfer.sender_hash
+    async def _send_reject(
+        self: MessagingBackend, hash_id: str, tid: str, reason: str = "cancelled"
+    ) -> bool:
+        self._reject_sent_at[tid] = time.monotonic()
+        return await self._send_control(
+            hash_id, MessageType.FILE_REJECT, {"transfer_id": tid, "reason": reason}
+        )
 
-    def _cleanup_temp_zip(self: MessagingBackend, transfer: FileTransfer) -> None:
-        temp_zip = transfer.metadata.get("temp_zip_path")
-        if not temp_zip:
+    async def _repeat_reject(self: MessagingBackend, hash_id: str, transfer: FileTransfer) -> None:
+        """The peer still acts on a transfer we ended: tell it again (rate-limited)."""
+        if time.monotonic() - self._reject_sent_at.get(transfer.id, 0.0) < REJECT_REPEAT:
             return
-        with contextlib.suppress(OSError):
-            Path(temp_zip).unlink(missing_ok=True)
-        transfer.metadata.pop("temp_zip_path", None)
+        reason = "failed" if transfer.state == TransferState.FAILED else "cancelled"
+        await self._send_reject(hash_id, transfer.id, reason)
+
+    # ── Starting a transfer ──
+
+    def _new_outgoing(
+        self: MessagingBackend,
+        recipient_hash: str,
+        path: Path,
+        transport: str,
+        filename: str | None,
+    ) -> FileTransfer:
+        transfer = FileTransfer.create(
+            self._identity_for_transport(transport).hash_id, recipient_hash, path, transport
+        )
+        if filename:
+            transfer.filename = safe_filename(filename)
+        if Path(transfer.filename).suffix.lower() in _NO_COMPRESS:
+            transfer.metadata["no_compress"] = True
+        self._transfers[transfer.id] = transfer
+        return transfer
 
     async def offer_file(
         self: MessagingBackend,
@@ -172,22 +377,11 @@ class TransferMixin:
         if not link or not link.handshake_complete:
             log.warning("No encrypted link to %s", recipient_hash[:8])
             return None
-
-        file_hash = await sha256_file(path)
-        transfer = FileTransfer.create(
-            self._identity_for_transport(link.transport).hash_id,
-            recipient_hash,
-            path,
-            link.transport,
-            sha256=file_hash,
-        )
-        if filename:
-            from srltcp.utils.files import safe_filename
-
-            transfer.filename = safe_filename(filename)
-        self._transfers[transfer.id] = transfer
-        await self._send_file_offer(link, transfer)
+        # No hashing up front: the hash is computed while the file streams
+        # and sent at the end, so a large file starts moving immediately.
+        transfer = self._new_outgoing(recipient_hash, path, link.transport, filename)
         transfer.state = TransferState.OFFERED
+        await self._send_file_offer(link, transfer)
         return transfer
 
     async def queue_file(
@@ -202,53 +396,37 @@ class TransferMixin:
 
         It waits PAUSED (offset 0) and is offered by resume_transfer when the
         contact's session comes up."""
-        file_hash = await sha256_file(path)
-        transfer = FileTransfer.create(
-            self._identity_for_transport(transport).hash_id,
-            recipient_hash,
-            path,
-            transport,
-            sha256=file_hash,
-        )
-        if filename:
-            from srltcp.utils.files import safe_filename
-
-            transfer.filename = safe_filename(filename)
+        transfer = self._new_outgoing(recipient_hash, path, transport, filename)
         transfer.state = TransferState.PAUSED
-        self._transfers[transfer.id] = transfer
         log.info("Contact %s unreachable — file %s queued", recipient_hash[:8], transfer.id)
         return transfer
 
     async def _send_file_offer(
-        self: MessagingBackend, link: object, transfer: FileTransfer
+        self: MessagingBackend, link: PeerLink, transfer: FileTransfer
     ) -> None:
-        chunk_size, _ = self._chunk_params(link.transport)  # type: ignore[attr-defined]
-        body = encode_payload(
-            {
-                "transfer_id": transfer.id,
-                "filename": transfer.filename,
-                "size": transfer.size,
-                "sha256": transfer.sha256,
-                "chunk_size": chunk_size,
-            }
-        )
         _, tries = self._offer_sent_at.get(transfer.id, (0.0, 0))
         self._offer_sent_at[transfer.id] = (time.monotonic(), tries + 1)
-        packet = await self._encrypt_for_link(link, MessageType.FILE_OFFER, body)
-        await self._send_raw(link.transport_peer_id, link.transport, packet)  # type: ignore[attr-defined]
+        body = encode_payload(
+            {"transfer_id": transfer.id, "filename": transfer.filename, "size": transfer.size}
+        )
+        packet = self._seal(link, MessageType.FILE_OFFER, body)
+        await self._send_raw(link.transport_peer_id, link.transport, packet)
 
     async def _check_stale_offers(self: MessagingBackend) -> None:
-        """Offers nobody answered (lost with a dropping link) must not count as
+        """Periodic upkeep (ping loop).
+
+        Offers nobody answered (lost with a dropping link) must not count as
         an active transfer forever: that would stop pings, dead-link detection
         and reconnects for the contact. Re-offer once, then queue the file
-        again (PAUSED) so it is offered on the next link-up."""
+        again (PAUSED) so it is offered on the next link-up. Incoming files
+        that stopped receiving data are paused for the same reason."""
         now = time.monotonic()
         for tid, (sent_at, tries) in list(self._offer_sent_at.items()):
             transfer = self._transfers.get(tid)
             if not transfer or transfer.state != TransferState.OFFERED:
                 self._offer_sent_at.pop(tid, None)
                 continue
-            if now - sent_at < OFFER_TIMEOUT:
+            if now - sent_at < C.OFFER_TIMEOUT:
                 continue
             link = self.get_link(transfer.recipient_hash)
             if tries < 2 and link and link.handshake_complete:
@@ -260,10 +438,20 @@ class TransferMixin:
             self._offer_sent_at.pop(tid, None)
             transfer.state = TransferState.PAUSED
             await self._emit_transfer_progress(transfer, force=True)
+        for tid, rx in list(self._in.items()):
+            transfer = self._transfers.get(tid)
+            if (
+                transfer
+                and transfer.state in (TransferState.ACCEPTED, TransferState.TRANSFERRING)
+                and now - rx.last_data > C.INCOMING_IDLE
+            ):
+                log.info("No data for %s in %.0f s — paused", transfer.filename, C.INCOMING_IDLE)
+                transfer.state = TransferState.PAUSED
+                await self._emit_transfer_progress(transfer, force=True)
 
     async def _pause_outgoing_for_peer(self: MessagingBackend, peer_hash: str) -> None:
         """Link to a contact went down: outgoing files not yet streaming wait
-        for the next session (the chunk loop pauses streaming ones itself)."""
+        for the next session (the send loop pauses streaming ones itself)."""
         own = self._own_hash_ids()
         for tid, transfer in list(self._transfers.items()):
             if transfer.recipient_hash != peer_hash or transfer.sender_hash not in own:
@@ -273,58 +461,77 @@ class TransferMixin:
                 transfer.state = TransferState.PAUSED
                 await self._emit_transfer_progress(transfer, force=True)
 
+    # ── Receiver: offer, data, completion ──
+
     async def _handle_file_offer(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
         try:
             transfer_id = normalize_transfer_id(str(data["transfer_id"]))
             size = int(data["size"])
-            sha256 = str(data["sha256"]).lower()
             filename = str(data.get("filename") or "file")[:255]
         except (KeyError, ValueError, TypeError) as exc:
             log.warning("Invalid file offer from %s: %s", hash_id[:8], exc)
             return
-        if size < 0 or len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
-            log.warning("Invalid file offer metadata from %s", hash_id[:8])
+        if size < 0 or size > 2**50:
+            log.warning("Invalid file offer size from %s", hash_id[:8])
             return
         existing = self._transfers.get(transfer_id)
         if existing and existing.sender_hash != hash_id:
             log.warning("Transfer id collision from %s — offer ignored", hash_id[:8])
             return
-        link = self.get_link(hash_id)
-        if not link:
+        if not self.get_link(hash_id):
             return
         if existing:
-            # Re-offer of a transfer we already know (e.g. after reconnect): resume.
-            dest = self._incoming_paths.get(transfer_id, existing.path)
-            offset = dest.stat().st_size if dest.is_file() else 0
-            accept_body = encode_payload({"transfer_id": transfer_id, "offset": offset})
-            packet = await self._encrypt_for_link(link, MessageType.FILE_ACCEPT, accept_body)
-            await self._send_raw(link.transport_peer_id, link.transport, packet)
+            # Re-offer of a transfer we know (reconnect, lost answer).
+            if existing.state == TransferState.COMPLETE:
+                await self._send_control(
+                    hash_id, MessageType.FILE_ACK,
+                    {"transfer_id": transfer_id, "offset": existing.size, "ok": True},
+                )
+            elif existing.state in TERMINAL:
+                await self._send_reject(
+                    hash_id, transfer_id,
+                    "failed" if existing.state == TransferState.FAILED else "cancelled",
+                )
+            else:
+                rx = self._in.get(transfer_id)
+                await self._send_control(
+                    hash_id, MessageType.FILE_ACCEPT,
+                    {"transfer_id": transfer_id, "offset": rx.expected if rx else 0},
+                )
+            return
+        try:
+            free = shutil.disk_usage(self._transfer_dir).free
+        except OSError:
+            free = size + 1
+        if free < size + 16 * MiB:
+            log.warning("No room for %s (%d bytes) from %s", filename, size, hash_id[:8])
+            await self._send_reject(hash_id, transfer_id, "no_space")
             return
         filename = safe_filename(filename).lstrip(".") or "file"
         dest = unique_dest_path(self._transfer_dir, filename)
-        identity_hash = self._identity_for_transport(link.transport).hash_id
+        link = self.get_link(hash_id)
+        assert link is not None
         transfer = FileTransfer(
             id=transfer_id,
             sender_hash=hash_id,
-            recipient_hash=identity_hash,
+            recipient_hash=self._identity_for_transport(link.transport).hash_id,
             filename=filename,
             path=dest,
             size=size,
-            sha256=sha256,
+            sha256="",
             transport=link.transport,
-            state=TransferState.OFFERED,
+            state=TransferState.ACCEPTED,
         )
         self._transfers[transfer_id] = transfer
         self._incoming_paths[transfer_id] = dest
+        self._in[transfer_id] = _Incoming(path=dest)
         # Reserve the name so concurrent offers with the same filename don't collide.
         with contextlib.suppress(OSError):
             dest.touch(exist_ok=True)
-
-        accept_body = encode_payload({"transfer_id": transfer_id, "offset": 0})
-        packet = await self._encrypt_for_link(link, MessageType.FILE_ACCEPT, accept_body)
-        await self._send_raw(link.transport_peer_id, link.transport, packet)
-        transfer.state = TransferState.ACCEPTED
+        await self._send_control(
+            hash_id, MessageType.FILE_ACCEPT, {"transfer_id": transfer_id, "offset": 0}
+        )
         if self._on_file_offer:
             await self._on_file_offer(transfer.to_dict())
         await self._append_file_message(
@@ -334,55 +541,304 @@ class TransferMixin:
             transfer=transfer.to_dict(),
             direction="in",
         )
-        if size == 0:
-            await self._maybe_finalize_incoming_transfer(transfer_id, peer_hash=hash_id)
+
+    async def _handle_file_chunk(
+        self: MessagingBackend, hash_id: str, body: bytes, *, compressed: bool = False
+    ) -> None:
+        """One decrypted chunk of an *incoming* transfer from its sender."""
+        try:
+            tid, offset, data = unpack_file_chunk(body)
+        except ValueError as exc:
+            log.warning("Malformed file chunk from %s: %s", hash_id[:8], exc)
+            return
+        transfer = self._transfers.get(tid)
+        if not transfer or transfer.sender_hash != hash_id:
+            log.debug("Unexpected chunk for transfer %s from %s", tid, hash_id[:8])
+            return
+        if transfer.state in TERMINAL:
+            if transfer.state != TransferState.COMPLETE:
+                await self._repeat_reject(hash_id, transfer)
+            return
+        rx = self._in.get(tid)
+        if rx is None or rx.closed:
+            return
+        if offset >= transfer.size or offset < 0:
+            log.warning("Chunk outside file bounds for %s from %s", tid, hash_id[:8])
+            return
+        limit = min(MAX_CHUNK, transfer.size - offset)
+        if compressed:
+            try:
+                data = zstd.ZstdDecompressor().decompress(data, max_output_size=limit)
+            except zstd.ZstdError as exc:
+                log.warning("File chunk decompress failed for %s: %s", tid, exc)
+                return
+        if not data or len(data) > limit:
+            log.warning("Chunk outside file bounds for %s from %s", tid, hash_id[:8])
+            return
+        rx.last_data = time.monotonic()
+        if transfer.state != TransferState.TRANSFERRING:
+            transfer.state = TransferState.TRANSFERRING
+        end = offset + len(data)
+        if end <= rx.expected or offset in rx.ahead:
+            # A resend of what we have: our confirmations were lost (path
+            # change, re-key). Confirm again so the sender moves on.
+            if time.monotonic() - rx.acked_at >= ACK_INTERVAL:
+                await self._rx_ack(transfer, rx)
+            return
+        if offset < rx.expected:
+            data, offset = data[rx.expected - offset:], rx.expected  # overlaps what we have
+        if offset > rx.expected:
+            if rx.ahead_bytes + rx.queued_bytes + len(data) > RX_BUFFER_MAX:
+                return  # the sender resends it once the gap is filled
+            rx.ahead[offset] = data
+            rx.ahead_bytes += len(data)
+            return
+        self._rx_append(rx, data)
+        self._rx_take_ahead(rx)
+        if rx.writer is None or rx.writer.done():
+            rx.writer = asyncio.create_task(self._rx_write_loop(transfer, rx))
+
+    def _rx_append(self: MessagingBackend, rx: _Incoming, data: bytes) -> None:
+        rx.queue.append(data)
+        rx.queued_bytes += len(data)
+        rx.expected += len(data)
+
+    def _rx_take_ahead(self: MessagingBackend, rx: _Incoming) -> None:
+        """Move early chunks that now follow on into the write queue."""
+        while rx.ahead:
+            block = rx.ahead.pop(rx.expected, None)
+            if block is not None:
+                rx.ahead_bytes -= len(block)
+                self._rx_append(rx, block)
+                continue
+            # Drop what is now behind us (resent with a different chunk size
+            # after a path change); keep the part of a block that is still new.
+            stale = [k for k in rx.ahead if k < rx.expected]
+            if not stale:
+                return
+            for k in stale:
+                block = rx.ahead.pop(k)
+                rx.ahead_bytes -= len(block)
+                tail = k + len(block) - rx.expected
+                if tail > 0 and rx.expected not in rx.ahead:
+                    rx.ahead[rx.expected] = block[-tail:]
+                    rx.ahead_bytes += tail
+
+    async def _rx_write_loop(self: MessagingBackend, transfer: FileTransfer, rx: _Incoming) -> None:
+        try:
+            while rx.queue and not rx.closed:
+                blocks, rx.queue = rx.queue, []
+                count = sum(len(b) for b in blocks)
+                await asyncio.to_thread(_write_blocks, rx, blocks)
+                rx.queued_bytes -= count
+                rx.written += count
+                transfer.offset = rx.written
+                await self._rx_progress(transfer, rx)
+            if not rx.closed and rx.sha256 and rx.written >= transfer.size:
+                await self._rx_finalize(transfer, rx)  # hash arrived while writing
+        except OSError as exc:
+            log.warning("Writing %s failed: %s", transfer.filename, exc)
+            if transfer.state not in TERMINAL:
+                transfer.state = TransferState.FAILED
+                await self._rx_close(rx, delete=True, wait=False)
+                await self._send_reject(
+                    transfer.sender_hash, transfer.id,
+                    "no_space" if exc.errno == 28 else "failed",
+                )
+                await self._emit_transfer_progress(transfer, force=True)
+
+    async def _rx_progress(self: MessagingBackend, transfer: FileTransfer, rx: _Incoming) -> None:
+        if rx.written >= transfer.size and rx.sha256:
+            await self._rx_finalize(transfer, rx)
+            return
+        if (
+            rx.written >= transfer.size
+            or rx.written - rx.acked >= ACK_BYTES
+            or time.monotonic() - rx.acked_at >= ACK_INTERVAL
+        ):
+            await self._rx_ack(transfer, rx)
+        elif rx.ack_task is None or rx.ack_task.done():
+            # Confirm the rest shortly: the sender may be waiting on exactly
+            # these bytes (its window is full).
+            rx.ack_task = asyncio.create_task(self._rx_ack(transfer, rx, delay=ACK_INTERVAL))
+        await self._emit_transfer_progress(transfer)
+
+    async def _rx_ack(
+        self: MessagingBackend, transfer: FileTransfer, rx: _Incoming, *, delay: float = 0.0
+    ) -> None:
+        if delay:
+            await asyncio.sleep(delay)
+            if rx.closed or rx.written <= rx.acked:
+                return
+        rx.acked, rx.acked_at = rx.written, time.monotonic()
+        await self._send_control(
+            transfer.sender_hash, MessageType.FILE_ACK,
+            {"transfer_id": transfer.id, "offset": rx.written},
+        )
+
+    async def _rx_finalize(self: MessagingBackend, transfer: FileTransfer, rx: _Incoming) -> None:
+        """All bytes written and the sender's hash known: verify, then tell the sender."""
+        if rx.closed:
+            return
+        rx.closed = True  # set before any await: finalize runs once
+        self._in.pop(transfer.id, None)
+        try:
+            await asyncio.to_thread(_close_file, rx, sync=True)
+            ok = hmac.compare_digest(rx.hasher.hexdigest(), rx.sha256)
+        except OSError as exc:
+            log.warning("Finishing %s failed: %s", transfer.filename, exc)
+            ok = False
+        if transfer.state in TERMINAL:
+            return  # cancelled meanwhile
+        transfer.offset = transfer.size
+        if ok:
+            transfer.sha256 = rx.sha256
+            transfer.state = TransferState.COMPLETE
+            log.info("Transfer complete: %s", transfer.filename)
+            self._mark_transfer_cooldown(transfer.sender_hash, transfer.recipient_hash)
+        else:
+            transfer.state = TransferState.FAILED
+            log.error("SHA256 mismatch for %s — discarded", transfer.filename)
+            with contextlib.suppress(OSError):
+                rx.path.unlink(missing_ok=True)
+        await self._send_control(
+            transfer.sender_hash, MessageType.FILE_ACK,
+            {"transfer_id": transfer.id, "offset": transfer.size, "ok": ok},
+        )
+        await self._emit_transfer_progress(transfer, force=True)
+        if ok and self._on_transfer_complete:
+            await self._on_transfer_complete(transfer.to_dict())
+
+    async def _rx_close(
+        self: MessagingBackend, rx: _Incoming, *, delete: bool, wait: bool = True
+    ) -> None:
+        rx.closed = True
+        rx.queue.clear()
+        rx.ahead.clear()
+        rx.queued_bytes = rx.ahead_bytes = 0
+        writer = rx.writer
+        if wait and writer and not writer.done() and writer is not asyncio.current_task():
+            with contextlib.suppress(Exception):
+                await writer
+        with contextlib.suppress(OSError):
+            await asyncio.to_thread(_close_file, rx, sync=False)
+        if delete:
+            with contextlib.suppress(OSError):
+                rx.path.unlink(missing_ok=True)
+        for tid, other in list(self._in.items()):
+            if other is rx:
+                self._in.pop(tid, None)
+
+    async def _handle_file_complete(self: MessagingBackend, hash_id: str, body: bytes) -> None:
+        data = decode_payload(body)
+        try:
+            tid = normalize_transfer_id(str(data["transfer_id"]))
+        except (KeyError, ValueError):
+            return
+        transfer = self._transfers.get(tid)
+        if not transfer or transfer.sender_hash != hash_id or self._is_outgoing(transfer):
+            return
+        if transfer.state == TransferState.COMPLETE:
+            await self._send_control(
+                hash_id, MessageType.FILE_ACK,
+                {"transfer_id": tid, "offset": transfer.size, "ok": True},
+            )
+            return
+        if transfer.state in TERMINAL:
+            await self._repeat_reject(hash_id, transfer)
+            return
+        rx = self._in.get(tid)
+        sha = str(data.get("sha256", "")).lower()
+        if rx is None or not _valid_sha(sha):
+            return
+        rx.sha256 = sha
+        if rx.written >= transfer.size and (rx.writer is None or rx.writer.done()):
+            await self._rx_finalize(transfer, rx)
+
+    async def _recover_incoming_transfers_for_peer(self: MessagingBackend, peer_hash: str) -> None:
+        """The sender's link dropped: incoming files wait for it (PAUSED)."""
+        for transfer in list(self._transfers.values()):
+            if transfer.sender_hash != peer_hash or transfer.state not in ACTIVE:
+                continue
+            if self._is_outgoing(transfer):
+                continue
+            transfer.state = TransferState.PAUSED
+            await self._emit_transfer_progress(transfer, force=True)
+            log.info(
+                "Incoming transfer paused after disconnect: %s (%d/%d bytes)",
+                transfer.filename, transfer.offset, transfer.size,
+            )
+
+    # ── Sender: accept, acks, the send loop ──
 
     async def _handle_file_accept(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
         try:
-            transfer_id = normalize_transfer_id(str(data["transfer_id"]))
-        except (KeyError, ValueError) as exc:
+            tid = normalize_transfer_id(str(data["transfer_id"]))
+            offset = int(data.get("offset", 0))
+        except (KeyError, ValueError, TypeError) as exc:
             log.warning("Invalid file accept from %s: %s", hash_id[:8], exc)
             return
-        transfer = self._transfers.get(transfer_id)
-        if not transfer or transfer.recipient_hash != hash_id:
+        transfer = self._transfers.get(tid)
+        if not transfer or transfer.recipient_hash != hash_id or not self._is_outgoing(transfer):
             return
-        if transfer.sender_hash not in self._own_hash_ids():
+        if transfer.state in (TransferState.CANCELLED, TransferState.FAILED):
+            await self._repeat_reject(hash_id, transfer)
             return
-        try:
-            offset = int(data.get("offset", 0))
-        except (TypeError, ValueError):
+        if transfer.state in TERMINAL:
             return
         offset = max(0, min(offset, transfer.size))
-        if transfer.state in (
-            TransferState.COMPLETE,
-            TransferState.CANCELLED,
-            TransferState.FAILED,
-            TransferState.REJECTED,
-        ):
-            return
-        existing = self._transfer_tasks.get(transfer_id)
-        if existing and not existing.done():
-            if offset > transfer.offset:
-                transfer.offset = offset
-            return
-        if existing and existing.done():
-            self._transfer_tasks.pop(transfer_id, None)
-        self._offer_sent_at.pop(transfer_id, None)
-        transfer.state = TransferState.TRANSFERRING
-        # The receiver's offset is authoritative: it is what is on its disk.
+        out = self._out.setdefault(tid, _Outgoing())
+        # The receiver's offset is authoritative: it is what it has.
+        out.acked = out.next = offset
+        out.progress_at = time.monotonic()
+        out.stalls = 0
+        out.complete_sent = False
         transfer.offset = offset
-        self._transfer_started[transfer_id] = time.time()
+        self._offer_sent_at.pop(tid, None)
+        transfer.state = TransferState.TRANSFERRING
+        task = self._transfer_tasks.get(tid)
+        if task and not task.done():
+            out.wake.set()
+            return
         await self._emit_transfer_progress(transfer, force=True)
-        task = asyncio.create_task(self._send_file_chunks(hash_id, transfer))
-        self._transfer_tasks[transfer_id] = task
+        self._transfer_tasks[tid] = asyncio.create_task(self._send_file_chunks(hash_id, transfer))
+
+    async def _handle_file_ack(self: MessagingBackend, hash_id: str, body: bytes) -> None:
+        data = decode_payload(body)
+        try:
+            tid = normalize_transfer_id(str(data["transfer_id"]))
+            offset = int(data.get("offset", 0))
+        except (KeyError, ValueError, TypeError):
+            return
+        transfer = self._transfers.get(tid)
+        if not transfer or transfer.recipient_hash != hash_id or not self._is_outgoing(transfer):
+            return
+        if transfer.state in (TransferState.CANCELLED, TransferState.FAILED):
+            await self._repeat_reject(hash_id, transfer)
+            return
+        out = self._out.get(tid)
+        if transfer.state in TERMINAL or out is None:
+            return
+        offset = max(0, min(offset, transfer.size))
+        if offset > out.acked:
+            out.acked = offset
+            out.progress_at = time.monotonic()
+            out.stalls = 0
+            transfer.offset = offset
+        out.next = max(out.next, out.acked)
+        if "ok" in data and offset >= transfer.size:
+            out.result = bool(data.get("ok"))
+        out.wake.set()
+        if transfer.state == TransferState.TRANSFERRING:
+            await self._emit_transfer_progress(transfer)
 
     async def _handle_file_resume(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         """FILE_RESUME after a reconnect.
 
         To the sender it means "continue from my offset" (same as an accept).
         To the receiver it means "the sender is back": answer with our own
-        on-disk offset, which is authoritative, and the sender restarts.
+        offset, which is authoritative, and the sender restarts.
         """
         data = decode_payload(body)
         try:
@@ -390,278 +846,199 @@ class TransferMixin:
         except ValueError:
             return
         transfer = self._transfers.get(tid)
-        own = self._own_hash_ids()
-        if transfer and transfer.sender_hash == hash_id and transfer.recipient_hash in own:
-            if transfer.state not in (
-                TransferState.COMPLETE, TransferState.CANCELLED,
-                TransferState.FAILED, TransferState.REJECTED,
-            ):
+        if transfer and transfer.sender_hash == hash_id and not self._is_outgoing(transfer):
+            if transfer.state not in TERMINAL:
                 await self.resume_transfer(tid)
             return
         await self._handle_file_accept(hash_id, body)
 
+    async def _await_link(
+        self: MessagingBackend, hash_id: str, transfer: FileTransfer
+    ) -> PeerLink | None:
+        deadline = time.monotonic() + LINK_WAIT
+        while time.monotonic() < deadline:
+            if transfer.state == TransferState.CANCELLED:
+                return None
+            link = self.get_link(hash_id)
+            if link and link.handshake_complete:
+                return link
+            await asyncio.sleep(0.25)
+        return None
+
+    def _prep_chunk(
+        self: MessagingBackend,
+        fh: BinaryIO,
+        out: _Outgoing,
+        transfer: FileTransfer,
+        offset: int,
+        length: int,
+        level: int,
+        nonce: bytes,
+        aes: Any,
+        framed: bool,
+    ) -> tuple[bytes, int]:
+        """Worker thread: read, hash, maybe compress, encrypt (and frame) one chunk."""
+        if out.hashed < offset:  # resumed past what we hashed (never in practice)
+            fh.seek(out.hashed)
+            while out.hashed < offset:
+                block = fh.read(min(MiB, offset - out.hashed))
+                if not block:
+                    raise OSError("file shrank while sending")
+                out.hasher.update(block)
+                out.hashed += len(block)
+        fh.seek(offset)
+        data = fh.read(length)
+        if not data:
+            raise OSError("file shrank while sending")
+        if offset == out.hashed:
+            out.hasher.update(data)
+            out.hashed += len(data)
+        payload, flags = data, 0
+        if level and out.compress and len(data) >= 4096:
+            if out.skip:
+                out.skip -= 1
+            else:
+                if out.cctx is None or out.level != level:
+                    out.cctx, out.level = zstd.ZstdCompressor(level=level), level
+                packed = out.cctx.compress(data)
+                if len(packed) < len(data) * 0.92:
+                    payload, flags = packed, Flags.COMPRESSED
+                else:
+                    out.skip = 16  # incompressible here: don't keep trying every chunk
+        flags |= Flags.ENCRYPTED | Flags.E2EE
+        body = pack_file_chunk(transfer.id, offset, payload)
+        sealed = nonce + aes.encrypt(nonce, body, header_aad(MessageType.FILE_CHUNK, flags))
+        packet = build_header(MessageType.FILE_CHUNK, flags=flags, body=sealed)
+        return (pack_frame(packet) if framed else packet), len(data)
+
     async def _send_file_chunks(
         self: MessagingBackend, hash_id: str, transfer: FileTransfer
     ) -> None:
-        link = self.get_link(hash_id)
-        if not link:
-            transfer.state = TransferState.FAILED
-            return
-
-        import aiofiles
-
-        chunk_size, chunk_delay = self._chunk_params(transfer.transport)
-
+        out = self._out.setdefault(transfer.id, _Outgoing())
+        out.compress = not transfer.metadata.get("no_compress")
+        fh: BinaryIO | None = None
+        path_key: tuple[str, int] | None = None
         try:
-            async with aiofiles.open(transfer.path, "rb") as f:
-                await f.seek(transfer.offset)
-                while transfer.offset < transfer.size:
-                    if transfer.state == TransferState.CANCELLED:
-                        return
-                    link = self.get_link(hash_id)
-                    if not link or not link.handshake_complete:
-                        for _ in range(40):
-                            await asyncio.sleep(0.25)
-                            if transfer.state == TransferState.CANCELLED:
-                                return
-                            link = self.get_link(hash_id)
-                            if link and link.handshake_complete:
-                                break
-                        if not link or not link.handshake_complete:
+            fh = await asyncio.to_thread(open, transfer.path, "rb")
+            while True:
+                if transfer.state == TransferState.CANCELLED:
+                    return
+                if out.result is not None:
+                    break
+                link = self.get_link(hash_id)
+                if not link or not link.handshake_complete:
+                    link = await self._await_link(hash_id, transfer)
+                    if link is None:
+                        if transfer.state != TransferState.CANCELLED:
                             log.warning(
                                 "Link lost during transfer %s at %d/%d — paused",
-                                transfer.id,
-                                transfer.offset,
-                                transfer.size,
+                                transfer.id, out.acked, transfer.size,
                             )
                             transfer.state = TransferState.PAUSED
                             await self._emit_transfer_progress(transfer, force=True)
-                            return
-                    # The path can change mid-transfer (direct <-> relay).
-                    chunk_size, chunk_delay = self._chunk_params(link.transport)
-                    chunk = await f.read(chunk_size)
-                    if not chunk:
-                        break
-                    payload, compressed = self._maybe_compress(
-                        chunk, transport=transfer.transport
+                        return
+                key = (link.transport_peer_id, link.crypto.epoch)
+                if key != path_key:
+                    if path_key is not None:
+                        out.next = out.acked  # new path or keys: in-flight data is gone
+                        out.complete_sent = False
+                    path_key = key
+                if out.rewind:
+                    out.rewind = False
+                    out.next = out.acked
+                params = self._path_params(link)
+                if out.next < transfer.size and out.next - out.acked < params.window:
+                    lanes = self._send_lanes(hash_id, link)
+                    length = min(params.chunk, transfer.size - out.next)
+                    nonce, aes = link.crypto.reserve()
+                    framed = link.transport == "tcp"
+                    frame, sent = await asyncio.to_thread(
+                        self._prep_chunk, fh, out, transfer, out.next, length,
+                        params.level, nonce, aes, framed,
                     )
-                    raw = pack_file_chunk(transfer.id, transfer.offset, payload)
-                    flags = Flags.COMPRESSED if compressed else 0
-                    packet = self._seal(link, MessageType.FILE_CHUNK, raw, flags)
-                    await self._send_raw(link.transport_peer_id, link.transport, packet)
-                    transfer.offset += len(chunk)
-                    started = self._transfer_started.get(transfer.id, time.time())
-                    elapsed = max(time.time() - started, 0.001)
-                    transfer.speed_mbps = (transfer.offset / elapsed) / (1024 * 1024)
-                    await self._emit_transfer_progress(transfer)
-                    if chunk_delay > 0:
-                        await asyncio.sleep(chunk_delay)
+                    if transfer.state == TransferState.CANCELLED:
+                        return
+                    try:
+                        if framed and self.tcp_transport:
+                            target = (
+                                min(lanes, key=self.tcp_transport.buffered)
+                                if lanes else link.transport_peer_id
+                            )
+                            await self.tcp_transport.send_framed(target, frame)
+                        else:
+                            await self._send_raw(link.transport_peer_id, link.transport, frame)
+                    except (KeyError, OSError, ConnectionError) as exc:
+                        log.debug("Chunk send to %s failed: %s", hash_id[:8], exc)
+                        out.next = out.acked
+                        await asyncio.sleep(0.2)
+                        continue
+                    out.next += sent
+                    if params.delay:
+                        await asyncio.sleep(params.delay)
+                    continue
+                now = time.monotonic()
+                all_sent = out.next >= transfer.size and out.hashed >= transfer.size
+                if all_sent and not out.complete_sent:
+                    transfer.sha256 = out.hasher.hexdigest()
+                    out.complete_sent = await self._send_control(
+                        hash_id, MessageType.FILE_COMPLETE,
+                        {"transfer_id": transfer.id, "sha256": transfer.sha256},
+                    )
+                out.wake.clear()
+                wait = params.stall - (now - out.progress_at)
+                if wait > 0:
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(out.wake.wait(), timeout=wait)
+                    continue
+                # Nothing confirmed for a while: resend from the last confirmed byte.
+                out.stalls += 1
+                out.progress_at = now
+                out.next = out.acked
+                out.complete_sent = False
+                if out.stalls >= 3:
+                    log.warning(
+                        "No answer from %s for %s — reconnecting", hash_id[:8], transfer.filename
+                    )
+                    transfer.state = TransferState.PAUSED
+                    await self._emit_transfer_progress(transfer, force=True)
+                    await self._teardown_link(hash_id)
+                    self._schedule_reconnect(hash_id)
+                    return
+                log.info("Transfer %s stalled at %d — resending", transfer.id, out.acked)
 
-            if transfer.state == TransferState.CANCELLED:
-                return
-            link = self.get_link(hash_id)
-            if not link or not link.handshake_complete:
-                transfer.state = TransferState.PAUSED
+            if out.result:
+                transfer.state = TransferState.COMPLETE
+                transfer.offset = transfer.size
+                log.info("Transfer complete: %s", transfer.filename)
+                self._mark_transfer_cooldown(hash_id, transfer.recipient_hash)
                 await self._emit_transfer_progress(transfer, force=True)
-                return
-            complete_body = encode_payload(
-                {"transfer_id": transfer.id, "sha256": transfer.sha256}
-            )
-            packet = await self._encrypt_for_link(link, MessageType.FILE_COMPLETE, complete_body)
-            await self._send_raw(link.transport_peer_id, link.transport, packet)
-            transfer.state = TransferState.COMPLETE
-            log.info("Transfer complete: %s", transfer.filename)
-            self._mark_transfer_cooldown(hash_id, transfer.recipient_hash)
-            await self._emit_transfer_progress(transfer, force=True)
-            if self._on_transfer_complete:
-                await self._on_transfer_complete(transfer.to_dict())
+                if self._on_transfer_complete:
+                    await self._on_transfer_complete(transfer.to_dict())
+            else:
+                log.warning("%s arrived damaged at %s", transfer.filename, hash_id[:8])
+                transfer.state = TransferState.FAILED
+                await self._emit_transfer_progress(transfer, force=True)
         except asyncio.CancelledError:
-            transfer.state = TransferState.CANCELLED
-            await self._emit_transfer_progress(transfer, force=True)
+            if transfer.state not in TERMINAL:
+                transfer.state = TransferState.CANCELLED
             raise
         except Exception as exc:
             log.warning("Transfer failed for %s: %s", transfer.filename, exc)
             transfer.state = TransferState.FAILED
+            await self._repeat_reject(hash_id, transfer)
             await self._emit_transfer_progress(transfer, force=True)
-            self._cleanup_temp_zip(transfer)
         finally:
-            self._transfer_tasks.pop(transfer.id, None)
-            self._transfer_progress_emit.pop(transfer.id, None)
-            if transfer.state in (
-                TransferState.COMPLETE,
-                TransferState.CANCELLED,
-                TransferState.FAILED,
-            ):
+            if fh is not None:
+                with contextlib.suppress(OSError):
+                    fh.close()
+            if self._transfer_tasks.get(transfer.id) is asyncio.current_task():
+                self._transfer_tasks.pop(transfer.id, None)
+            if transfer.state in TERMINAL:
+                self._out.pop(transfer.id, None)
                 self._cleanup_temp_zip(transfer)
+            self._lanes_maybe_idle(hash_id)
 
-    async def _handle_file_chunk(
-        self: MessagingBackend, hash_id: str, body: bytes, *, compressed: bool = False
-    ) -> None:
-        """Write one decrypted chunk of an *incoming* transfer from its sender."""
-        try:
-            transfer_id, offset, data = unpack_file_chunk(body)
-        except ValueError as exc:
-            log.warning("Malformed file chunk from %s: %s", hash_id[:8], exc)
-            return
-
-        transfer = self._transfers.get(transfer_id)
-        dest = self._incoming_paths.get(transfer_id)
-        if not transfer or dest is None or transfer.sender_hash != hash_id:
-            log.warning("Unexpected chunk for transfer %s from %s", transfer_id, hash_id[:8])
-            return
-        if transfer.state in (
-            TransferState.COMPLETE,
-            TransferState.CANCELLED,
-            TransferState.FAILED,
-            TransferState.REJECTED,
-        ):
-            return
-
-        try:
-            limit = max(0, transfer.size - offset)
-            data = self._maybe_decompress(data, compressed, max_size=limit)
-        except Exception as exc:
-            log.warning("File chunk decompress failed for %s: %s", transfer_id, exc)
-            return
-        if offset < 0 or offset + len(data) > transfer.size:
-            log.warning("Chunk outside file bounds for %s from %s", transfer_id, hash_id[:8])
-            return
-
-        await write_file_chunk(dest, offset, data)
-        transfer.offset = max(transfer.offset, offset + len(data))
-        transfer.state = TransferState.TRANSFERRING
-        started = self._transfer_started.setdefault(transfer_id, time.time())
-        elapsed = max(time.time() - started, 0.001)
-        transfer.speed_mbps = (transfer.offset / elapsed) / (1024 * 1024)
-        await self._emit_transfer_progress(transfer)
-        if transfer.offset >= transfer.size:
-            await self._maybe_finalize_incoming_transfer(
-                transfer_id, peer_hash=hash_id
-            )
-
-    async def _maybe_finalize_incoming_transfer(
-        self: MessagingBackend,
-        transfer_id: str,
-        *,
-        peer_hash: str | None = None,
-    ) -> bool:
-        """Mark a received file complete when all bytes are on disk."""
-        transfer = self._transfers.get(transfer_id)
-        if not transfer:
-            return False
-        if transfer.state == TransferState.COMPLETE:
-            return True
-        if transfer.state in (TransferState.FAILED, TransferState.CANCELLED):
-            return False
-        if peer_hash and transfer.sender_hash != peer_hash:
-            return False
-
-        dest = self._incoming_paths.get(transfer_id, transfer.path)
-        if not dest.is_file():
-            return False
-        on_disk = dest.stat().st_size
-        if on_disk < transfer.size or transfer.offset < transfer.size:
-            return False
-
-        await fsync_file(dest)
-        actual = await sha256_file(dest)
-        if actual != transfer.sha256:
-            transfer.state = TransferState.FAILED
-            log.error("SHA256 mismatch for %s", transfer.filename)
-            await self._emit_transfer_progress(transfer, force=True)
-            self._transfer_progress_emit.pop(transfer_id, None)
-            return False
-
-        transfer.state = TransferState.COMPLETE
-        transfer.offset = transfer.size
-        log.info("Transfer complete: %s", transfer.filename)
-        self._mark_transfer_cooldown(transfer.sender_hash, transfer.recipient_hash)
-        await self._emit_transfer_progress(transfer, force=True)
-        if self._on_transfer_complete:
-            await self._on_transfer_complete(transfer.to_dict())
-        self._transfer_progress_emit.pop(transfer_id, None)
-        return True
-
-    def _track_chunk_task(
-        self: MessagingBackend, peer_hash: str, task: asyncio.Task[None]
-    ) -> None:
-        pending = self._pending_chunk_tasks.setdefault(peer_hash, set())
-        pending.add(task)
-
-        def _done(done_task: asyncio.Task[None]) -> None:
-            pending.discard(done_task)
-            if not pending:
-                self._pending_chunk_tasks.pop(peer_hash, None)
-
-        task.add_done_callback(_done)
-
-    async def _drain_pending_chunk_tasks(
-        self: MessagingBackend, peer_hash: str, *, timeout: float = 5.0
-    ) -> None:
-        pending = list(self._pending_chunk_tasks.get(peer_hash, ()))
-        if not pending:
-            return
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(*pending, return_exceptions=True),
-                timeout=timeout,
-            )
-        except TimeoutError:
-            log.warning(
-                "Timed out waiting for %d pending file chunks from %s",
-                len(pending),
-                peer_hash[:8],
-            )
-
-    async def _recover_incoming_transfers_for_peer(
-        self: MessagingBackend, peer_hash: str
-    ) -> None:
-        """Finalize incoming transfers when the sender link drops."""
-        await self._drain_pending_chunk_tasks(peer_hash)
-        for transfer_id, transfer in list(self._transfers.items()):
-            if transfer.sender_hash != peer_hash:
-                continue
-            if transfer.state in (
-                TransferState.COMPLETE,
-                TransferState.FAILED,
-                TransferState.CANCELLED,
-            ):
-                continue
-            if await self._maybe_finalize_incoming_transfer(
-                transfer_id, peer_hash=peer_hash
-            ):
-                continue
-            if transfer.state in (
-                TransferState.TRANSFERRING,
-                TransferState.ACCEPTED,
-            ):
-                # PAUSED so it resumes on the next link-up (either side may dial).
-                transfer.state = TransferState.PAUSED
-                await self._emit_transfer_progress(transfer, force=True)
-                log.info(
-                    "Incoming transfer paused after disconnect: %s (%d/%d bytes)",
-                    transfer.filename,
-                    transfer.offset,
-                    transfer.size,
-                )
-
-    async def _handle_file_complete(self: MessagingBackend, hash_id: str, body: bytes) -> None:
-        data = decode_payload(body)
-        try:
-            transfer_id = normalize_transfer_id(str(data["transfer_id"]))
-        except (KeyError, ValueError):
-            return
-        transfer = self._transfers.get(transfer_id)
-        dest = self._incoming_paths.get(transfer_id)
-        if not transfer or dest is None or transfer.sender_hash != hash_id:
-            return
-        await self._drain_pending_chunk_tasks(hash_id)
-        await fsync_file(dest)
-        if dest.is_file():
-            transfer.offset = max(transfer.offset, dest.stat().st_size)
-        await self._maybe_finalize_incoming_transfer(
-            transfer_id, peer_hash=hash_id
-        )
+    # ── Resume, cancel ──
 
     async def resume_transfer(self: MessagingBackend, transfer_id: str) -> bool:
         try:
@@ -669,51 +1046,43 @@ class TransferMixin:
         except ValueError:
             return False
         transfer = self._transfers.get(tid)
-        if not transfer:
-            return False
-        if transfer.state in (
-            TransferState.COMPLETE,
-            TransferState.CANCELLED,
-            TransferState.FAILED,
-            TransferState.REJECTED,
-        ):
+        if not transfer or transfer.state in TERMINAL:
             return False
         peer_hash = self._peer_hash_for_transfer(transfer)
         link = self.get_link(peer_hash)
         if not link or not link.handshake_complete:
             return False
-        if transfer.sender_hash in self._own_hash_ids():
+        if self._is_outgoing(transfer):
             # Re-send the full offer: the receiver may never have got it (file
             # queued while offline, or the link dropped right after offering).
             # A receiver that already knows the transfer answers with its
-            # on-disk offset, so this also resumes a partial transfer.
+            # offset, so this also resumes a partial transfer.
             if transfer.state == TransferState.PAUSED:
                 transfer.state = TransferState.OFFERED
             await self._send_file_offer(link, transfer)
             await self._emit_transfer_progress(transfer, force=True)
             return True
-        else:
-            dest = self._incoming_paths.get(tid, transfer.path)
-            if dest.exists():
-                transfer.offset = max(transfer.offset, dest.stat().st_size)
-        body = encode_payload({"transfer_id": tid, "offset": transfer.offset})
-        packet = await self._encrypt_for_link(link, MessageType.FILE_RESUME, body)
-        await self._send_raw(link.transport_peer_id, link.transport, packet)
-        # The sender restarts its chunk loop when the receiver answers with its
-        # offset (_handle_file_accept), so no state change here.
-        return True
-
-    def list_transfers(self: MessagingBackend, *, active_only: bool = False) -> list[dict]:
-        active_states = (
-            TransferState.OFFERED,
-            TransferState.ACCEPTED,
-            TransferState.TRANSFERRING,
-            TransferState.PAUSED,
+        rx = self._in.get(tid)
+        offset = rx.expected if rx else 0
+        # The sender restarts from this offset when it answers (accept).
+        return await self._send_control(
+            peer_hash, MessageType.FILE_RESUME, {"transfer_id": tid, "offset": offset}
         )
-        items = list(self._transfers.values())
-        if active_only:
-            items = [t for t in items if t.state in active_states]
-        return [t.to_dict() for t in items]
+
+    async def _resume_paused_transfers_for_peer(self: MessagingBackend, peer_hash: str) -> None:
+        for tid, transfer in list(self._transfers.items()):
+            if self._peer_hash_for_transfer(transfer) != peer_hash:
+                continue
+            if transfer.metadata.pop("reject_unsent", None) and transfer.state in TERMINAL:
+                # Cancelled while the contact was away: tell them now.
+                await self._send_reject(peer_hash, tid)
+                continue
+            if transfer.state != TransferState.PAUSED:
+                continue
+            try:
+                await self.resume_transfer(tid)
+            except Exception as exc:  # noqa: BLE001 - one bad transfer must not stop the rest
+                log.warning("Resume failed for %s after reconnect: %s", tid, exc)
 
     async def cancel_transfer(self: MessagingBackend, transfer_id: str) -> bool:
         try:
@@ -721,93 +1090,63 @@ class TransferMixin:
         except ValueError:
             return False
         transfer = self._transfers.get(tid)
-        if not transfer:
-            return False
-        if transfer.state in (
-            TransferState.COMPLETE,
-            TransferState.CANCELLED,
-            TransferState.FAILED,
-            TransferState.REJECTED,
-        ):
+        if not transfer or transfer.state in TERMINAL:
             return False
         transfer.state = TransferState.CANCELLED
-        task = self._transfer_tasks.pop(tid, None)
-        if task and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        self._offer_sent_at.pop(tid, None)
+        await self._stop_transfer_work(transfer)
         peer_hash = self._peer_hash_for_transfer(transfer)
-        link = self.get_link(peer_hash)
-        if link and link.handshake_complete:
-            body = encode_payload({"transfer_id": tid, "reason": "cancelled"})
-            try:
-                packet = await self._encrypt_for_link(
-                    link, MessageType.FILE_REJECT, body
-                )
-                await self._send_raw(
-                    link.transport_peer_id, link.transport, packet
-                )
-            except (KeyError, RuntimeError, OSError) as exc:
-                log.warning("Could not notify cancel to peer: %s", exc)
+        if not await self._send_reject(peer_hash, tid):
+            transfer.metadata["reject_unsent"] = True
         await self._emit_transfer_progress(transfer, force=True)
-        self._transfer_progress_emit.pop(tid, None)
-        self._cleanup_temp_zip(transfer)
+        log.info("Transfer cancelled: %s", transfer.filename)
         return True
+
+    async def _stop_transfer_work(self: MessagingBackend, transfer: FileTransfer) -> None:
+        """Stop the send loop or the writer; delete an unfinished download."""
+        task = self._transfer_tasks.pop(transfer.id, None)
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        self._out.pop(transfer.id, None)
+        rx = self._in.get(transfer.id)
+        if rx is not None:
+            await self._rx_close(rx, delete=True)
+        elif not self._is_outgoing(transfer):
+            path = self._incoming_paths.get(transfer.id)
+            if path and transfer.state != TransferState.COMPLETE:
+                with contextlib.suppress(OSError):
+                    path.unlink(missing_ok=True)
+        self._cleanup_temp_zip(transfer)
 
     async def _handle_file_reject(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
         try:
-            transfer_id = normalize_transfer_id(str(data.get("transfer_id", "")))
+            tid = normalize_transfer_id(str(data.get("transfer_id", "")))
         except ValueError:
             return
-        transfer = self._transfers.get(transfer_id)
+        transfer = self._transfers.get(tid)
         if not transfer or self._peer_hash_for_transfer(transfer) != hash_id:
             return
-        if transfer.state in (TransferState.COMPLETE, TransferState.CANCELLED):
+        if transfer.state in TERMINAL:
             return
-        transfer.state = TransferState.CANCELLED
-        task = self._transfer_tasks.pop(transfer_id, None)
-        if task and not task.done():
-            task.cancel()
+        reason = str(data.get("reason", ""))
+        if reason in ("failed", "no_space"):
+            transfer.state = TransferState.FAILED
+            transfer.metadata["reason"] = reason
+        else:
+            transfer.state = TransferState.CANCELLED
+        self._offer_sent_at.pop(tid, None)
+        self._reject_sent_at[tid] = time.monotonic()  # no echo back
+        await self._stop_transfer_work(transfer)
+        log.info(
+            "Transfer %s ended by %s (%s)", transfer.filename, hash_id[:8], reason or "cancelled"
+        )
         await self._emit_transfer_progress(transfer, force=True)
-        self._transfer_progress_emit.pop(transfer_id, None)
 
-    async def _resume_paused_transfers_for_peer(
-        self: MessagingBackend, peer_hash: str
-    ) -> None:
-        for transfer_id, transfer in list(self._transfers.items()):
-            if transfer.state != TransferState.PAUSED:
-                continue
-            if self._peer_hash_for_transfer(transfer) != peer_hash:
-                continue
-            try:
-                await self.resume_transfer(transfer_id)
-            except Exception as exc:
-                log.warning(
-                    "Resume failed for %s after reconnect: %s",
-                    transfer_id,
-                    exc,
-                )
-
-    def peers_with_queued_files(self: MessagingBackend) -> set[str]:
-        """Contacts we still have outgoing files waiting for."""
-        own = self._own_hash_ids()
-        return {
-            t.recipient_hash
-            for t in self._transfers.values()
-            if t.state == TransferState.PAUSED and t.sender_hash in own
-        }
-
-    def has_active_transfer_for(self: MessagingBackend, hash_id: str) -> bool:
-        for transfer in self._transfers.values():
-            # PAUSED is not "active": a paused transfer needs the link back, so it
-            # must not suppress reconnects or dead-link detection.
-            if transfer.state not in (
-                TransferState.TRANSFERRING,
-                TransferState.ACCEPTED,
-                TransferState.OFFERED,
-            ):
-                continue
-            if transfer.recipient_hash == hash_id or transfer.sender_hash == hash_id:
-                return True
-        return False
+    def _cleanup_temp_zip(self: MessagingBackend, transfer: FileTransfer) -> None:
+        temp_zip = transfer.metadata.pop("temp_zip_path", None)
+        if temp_zip:
+            with contextlib.suppress(OSError):
+                Path(temp_zip).unlink(missing_ok=True)

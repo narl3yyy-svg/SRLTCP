@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-import srltcp.core.messaging.transfer as tr
+from srltcp.core.messaging import constants as C
 from srltcp.core.messaging.models import TransferState
 from tests.test_e2e_nodes import make_node, trust, wait_for
 
@@ -87,7 +87,7 @@ async def test_unanswered_offer_is_requeued_and_resent(
         # held "busy" any more.
         for _ in range(2):
             sent_at, tries = a._offer_sent_at[tid]
-            a._offer_sent_at[tid] = (time.monotonic() - tr.OFFER_TIMEOUT - 1, tries)
+            a._offer_sent_at[tid] = (time.monotonic() - C.OFFER_TIMEOUT - 1, tries)
             await a._check_stale_offers()
         assert a._transfers[tid].state == TransferState.PAUSED
         assert not a.has_active_transfer_for(bh)

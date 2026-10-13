@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import struct
 import time
 from dataclasses import dataclass
@@ -159,6 +160,7 @@ class CryptoBox:
         self._send_counter = 0
         self._recv_highest = -1
         self._recv_seen: set[int] = set()
+        self.epoch = 0  # bumped on every re-key: data sealed before it is lost
         if keys:
             self.set_keys(keys)
 
@@ -170,19 +172,37 @@ class CryptoBox:
         self._keys = keys
         self._send_aes = AESGCM(keys.send_key)
         self._recv_aes = AESGCM(keys.recv_key)
+        self.epoch += 1
         self._send_counter = 0
         self._recv_highest = -1
         self._recv_seen = set()
 
-    def encrypt(self, plaintext: bytes, aad: bytes = b"") -> bytes:
+    def reserve(self) -> tuple[bytes, AESGCM]:
+        """Take the next nonce together with the key it belongs to.
+
+        Lets bulk data be encrypted in a worker thread: the pair is fixed
+        here, on the event loop, so a re-key in between can never make two
+        messages share a nonce under one key."""
         if not self._keys:
             raise RuntimeError("session keys not established")
         counter = self._send_counter
         if counter >= 2**63:
             raise RuntimeError("nonce space exhausted — rekey required")
         self._send_counter += 1
-        nonce = b"\x00\x00\x00\x00" + struct.pack(">Q", counter)
-        return nonce + self._send_aes.encrypt(nonce, plaintext, aad)
+        return b"\x00\x00\x00\x00" + struct.pack(">Q", counter), self._send_aes
+
+    def encrypt(self, plaintext: bytes, aad: bytes = b"") -> bytes:
+        nonce, aes = self.reserve()
+        return nonce + aes.encrypt(nonce, plaintext, aad)
+
+    def lane_hint(self, *, outgoing: bool) -> bytes:
+        """16-byte tag naming this session to the peer without revealing it
+        to anyone else (derived from a session key). Extra Tor connections
+        that carry file data for the session start with it."""
+        if not self._keys:
+            raise RuntimeError("session keys not established")
+        key = self._keys.send_key if outgoing else self._keys.recv_key
+        return hmac.new(key, b"srltcp-lane-hint-v1", hashlib.sha256).digest()[:16]
 
     def decrypt(self, ciphertext: bytes, aad: bytes = b"") -> bytes:
         if not self._keys:

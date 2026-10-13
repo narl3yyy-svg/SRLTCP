@@ -26,6 +26,8 @@ class MessageType(IntEnum):
     FILE_CHUNK = 0x33
     FILE_COMPLETE = 0x34
     FILE_RESUME = 0x35
+    FILE_ACK = 0x36  # receiver -> sender: bytes on disk (window), then verified
+    LANE_JOIN = 0x37  # extra Tor connection joins a session to carry file data
     SHARE_LIST = 0x40
     SHARE_REQUEST = 0x41
     RECEIPT = 0x21
@@ -62,6 +64,7 @@ SESSION_MESSAGE_TYPES = frozenset(
         MessageType.FILE_CHUNK,
         MessageType.FILE_COMPLETE,
         MessageType.FILE_RESUME,
+        MessageType.FILE_ACK,
         MessageType.SHARE_LIST,
         MessageType.SHARE_REQUEST,
         MessageType.CALL_SIGNAL,

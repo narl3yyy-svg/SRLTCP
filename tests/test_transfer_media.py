@@ -52,11 +52,15 @@ def test_has_active_transfer_for(backend: MessagingBackend) -> None:
     assert backend.has_active_transfer_for("ccc") is False
 
 
-def test_maybe_compress_skips_serial(backend: MessagingBackend) -> None:
-    data = b"x" * (128 * 1024)
-    payload, compressed = backend._maybe_compress(data, transport="serial")
-    assert payload == data
-    assert compressed is False
+def test_serial_path_never_compresses(backend: MessagingBackend) -> None:
+    from srltcp.core.messaging.links import PeerLink
+
+    link = PeerLink(
+        hash_id="a" * 32, transport_peer_id="s", transport="serial", address="", public_key=b""
+    )
+    params = backend._path_params(link)
+    assert params.level == 0
+    assert params.chunk == 8 * 1024
 
 
 @pytest.mark.asyncio

@@ -15,9 +15,10 @@ from tests.test_e2e_nodes import make_node, trust, wait_for
 async def test_transfer_resumes_after_link_drop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(tr, "CHUNK_SIZE", 32 * 1024)
-    monkeypatch.setattr(tr, "CHUNK_SEND_DELAY", 0.05)
     a, b = make_node(tmp_path, "alice"), make_node(tmp_path, "bob")
+    # Small, paced chunks so the link can be cut mid-transfer.
+    slow = tr.PathParams(chunk=32 * 1024, window=256 * 1024, stall=12.0, level=0, delay=0.05)
+    monkeypatch.setattr(a, "_path_params", lambda link: slow)
     await a.start()
     await b.start()
     trust(a, b)

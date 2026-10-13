@@ -34,6 +34,7 @@ async def start_tcp_server(
     *,
     max_attempts: int = DEFAULT_PORT_ATTEMPTS,
     strict: bool = False,
+    limit: int = 2**16,
 ) -> tuple[Any, int]:
     """
     Start an asyncio TCP server, trying successive ports if busy.
@@ -47,7 +48,7 @@ async def start_tcp_server(
         try_port = port + offset
         try:
             server = await asyncio.start_server(
-                factory, host, try_port, reuse_address=True
+                factory, host, try_port, reuse_address=True, limit=limit
             )
             if try_port == 0 and server.sockets:
                 try_port = int(server.sockets[0].getsockname()[1])

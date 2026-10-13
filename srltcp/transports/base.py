@@ -12,6 +12,15 @@ from typing import Any
 
 from srltcp.core.protocol.framing import FrameReader, FrameWriter
 
+# Stream tuning. Reads take what the socket has, up to READ_SIZE, so a 1 MiB
+# file chunk arrives in a few reads instead of sixteen. The write buffer may
+# hold WRITE_HIGH bytes before a sender has to wait: enough to keep a fast
+# link busy while the next chunk is prepared, small enough that a chat
+# message queued behind file data still goes out promptly.
+STREAM_LIMIT = 1024 * 1024
+READ_SIZE = 1024 * 1024
+WRITE_HIGH = 2 * 1024 * 1024
+
 
 @dataclass
 class TransportPeer:
@@ -103,8 +112,9 @@ class Connection:
         self._on_frame: FrameHandler | None = None
         self._on_close: Callable[[TransportPeer], Awaitable[None]] | None = None
         self._closed = False
-        self._send_lock = asyncio.Lock()
         self._enable_keepalive(writer)
+        with contextlib.suppress(AttributeError, RuntimeError):
+            writer.transport.set_write_buffer_limits(high=WRITE_HIGH)
 
     @staticmethod
     def _enable_keepalive(writer: asyncio.StreamWriter) -> None:
@@ -136,7 +146,7 @@ class Connection:
     async def _read_loop(self) -> None:
         try:
             while not self._closed:
-                data = await self.reader.read(65536)
+                data = await self.reader.read(READ_SIZE)
                 if not data:
                     break
                 for frame in self._frame_reader.feed(data):
@@ -150,10 +160,34 @@ class Connection:
             await self.close()
 
     async def send(self, payload: bytes) -> None:
-        frame = FrameWriter.write(payload)
-        async with self._send_lock:
-            self.writer.write(frame)
-            await self.writer.drain()
+        await self.send_framed(FrameWriter.write(payload))
+
+    async def send_framed(self, frame: bytes) -> None:
+        """Queue one complete frame. write() appends it whole, so frames from
+        concurrent senders never interleave; only the wait for buffer space
+        is shared (no lock: a chat message must not wait behind a file
+        sender's drain)."""
+        if self._closed:
+            raise ConnectionError("connection closed")
+        self.writer.write(frame)
+        await self.writer.drain()
+
+    def buffered(self) -> int:
+        """Bytes queued in user space, not yet handed to the kernel."""
+        try:
+            return int(self.writer.transport.get_write_buffer_size())
+        except (AttributeError, RuntimeError):
+            return 0
+
+    def tune_for_lane(self, high: int) -> None:
+        """Extra Tor connection carrying file data: keep little in flight on
+        it, so a slow circuit holds back as few bytes as possible."""
+        with contextlib.suppress(AttributeError, RuntimeError):
+            self.writer.transport.set_write_buffer_limits(high=high)
+        sock = self.writer.get_extra_info("socket")
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, high)
 
     async def close(self) -> None:
         if self._closed:

@@ -31,7 +31,8 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 PENDING_HANDSHAKE_TTL = 15.0
-HANDSHAKE_VERSION = 4  # v4: signature names the recipient (no cross-node replay)
+HANDSHAKE_VERSION = 5  # v5: windowed file transfers (FILE_ACK), Tor lanes
+# v4: signature names the recipient (no cross-node replay)
 
 
 class ConnectMixin:

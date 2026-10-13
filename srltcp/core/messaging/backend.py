@@ -20,7 +20,7 @@ from srltcp.core.messaging.connect import ConnectMixin
 from srltcp.core.messaging.constants import COMPRESS_THRESHOLD, DISCOVERY_PORT
 from srltcp.core.messaging.groups import GroupMixin
 from srltcp.core.messaging.links import PeerLink, PeerLinkMixin
-from srltcp.core.messaging.models import ChatMessage
+from srltcp.core.messaging.models import ChatMessage, FileTransfer
 from srltcp.core.messaging.pairing import PairingMixin
 from srltcp.core.messaging.ping import PingMixin
 from srltcp.core.messaging.punch import PunchMixin
@@ -53,7 +53,6 @@ EventCallback = Callable[..., Awaitable[None]]
 
 MAX_TEXT_BYTES = 65536
 HANDSHAKE_DEADLINE = 30.0  # seconds a TCP connection may stay unauthenticated
-MAX_PENDING_CHUNKS = 32  # incoming file chunks buffered per peer before we stop reading
 MAX_CONTACT_REQUESTS = 50  # pending requests from strangers kept at once
 
 
@@ -230,18 +229,7 @@ class MessagingBackend(
         if self._reconnect_tasks:
             await asyncio.gather(*self._reconnect_tasks.values(), return_exceptions=True)
         self._reconnect_tasks.clear()
-        tasks = list(self._transfer_tasks.values())
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._transfer_tasks.clear()
-        for peer_hash in list(self._pending_chunk_tasks.keys()):
-            await self._drain_pending_chunk_tasks(peer_hash, timeout=2.0)
-        self._pending_chunk_tasks.clear()
-        self._transfer_started.clear()
-        self._transfer_cooldown_until.clear()
-        self._transfer_progress_emit.clear()
+        await self.stop_transfers()
         self._pending_handshakes.clear()
         if self.tcp_transport:
             log.info(
@@ -383,6 +371,9 @@ class MessagingBackend(
             await self._handle_discovered(event.peer.address, "tcp", event.data)
         elif event.kind == "connected" and event.peer and event.peer.transport == "tcp":
             self._expire_if_unauthenticated(event.peer.peer_id)
+        elif event.kind == "disconnected" and event.peer and self.lane_owner(event.peer.peer_id):
+            self._lane_closed(event.peer.peer_id)
+            return  # an extra Tor lane, not the session itself
         elif event.kind == "disconnected" and event.peer:
             stale = self.get_link_by_peer_id(event.peer.peer_id)
             link_name = stale.peer_name if stale else ""
@@ -435,7 +426,7 @@ class MessagingBackend(
             link = self.get_link_by_peer_id(peer_id)
             if link and link.handshake_complete:
                 return
-            if self.upgrade_for_peer_id(peer_id):
+            if self.upgrade_for_peer_id(peer_id) or self.lane_owner(peer_id):
                 return
             if self.tcp_transport:
                 log.info("Closing connection %s: no handshake in time", peer_id[:8])
@@ -462,6 +453,8 @@ class MessagingBackend(
                 if peer.transport == "serial":
                     log.info("Serial ANNOUNCE received on %s", peer.address)
                 await self._handle_discovered(peer.address, peer.transport, body)
+            elif msg_type == MessageType.LANE_JOIN:
+                await self._handle_lane_join(peer, flags, body)
             elif msg_type == MessageType.HANDSHAKE:
                 await self._handle_handshake(peer.peer_id, body)
             elif msg_type == MessageType.HANDSHAKE_ACK:
@@ -485,6 +478,9 @@ class MessagingBackend(
     ) -> None:
         """Decrypt and route a message that must travel inside an E2EE session."""
         link = self.get_link_by_peer_id(peer.peer_id)
+        if link is None and msg_type == MessageType.FILE_CHUNK:
+            owner = self.lane_owner(peer.peer_id)  # file data on an extra Tor lane
+            link = self.get_link(owner) if owner else None
         if not link or not link.handshake_complete:
             log.debug("Dropping %s from %s — no session", msg_type.name, peer.peer_id[:8])
             return
@@ -519,21 +515,11 @@ class MessagingBackend(
         elif msg_type == MessageType.FILE_REJECT:
             await self._handle_file_reject(hash_id, body)
         elif msg_type == MessageType.FILE_CHUNK:
-            compressed = bool(flags & Flags.COMPRESSED)
-
-            async def _process_chunk() -> None:
-                try:
-                    await self._handle_file_chunk(hash_id, body, compressed=compressed)
-                except Exception as exc:
-                    log.warning("File chunk handler failed from %s: %s", hash_id[:8], exc)
-
-            # Back-pressure: if the disk can't keep up, stop reading from this
-            # peer until some chunks are written (TCP then slows the sender).
-            pending = self._pending_chunk_tasks.get(hash_id)
-            if pending and len(pending) >= MAX_PENDING_CHUNKS:
-                await asyncio.wait(set(pending), return_when=asyncio.FIRST_COMPLETED)
-            task = asyncio.create_task(_process_chunk())
-            self._track_chunk_task(hash_id, task)
+            await self._handle_file_chunk(
+                hash_id, body, compressed=bool(flags & Flags.COMPRESSED)
+            )
+        elif msg_type == MessageType.FILE_ACK:
+            await self._handle_file_ack(hash_id, body)
         elif msg_type == MessageType.FILE_COMPLETE:
             await self._handle_file_complete(hash_id, body)
         elif msg_type == MessageType.FILE_RESUME:
@@ -1205,6 +1191,7 @@ class MessagingBackend(
             return None
         link = self.get_link(recipient_hash)
         effective_transport = link.transport if link else transport
+        transfer: FileTransfer | None
         if not link or not link.handshake_complete:
             # No session right now (other network, Tor still connecting, phone
             # asleep): queue the file like a message and dial in the

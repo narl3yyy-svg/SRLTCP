@@ -16,6 +16,13 @@ Privacy and safety rules:
 - The session inside is the normal signed SRLTCP handshake, so Tor is just a
   pipe: an onion address can't be used to impersonate a contact.
 - Each contact gets its own Tor circuit (SOCKS isolation).
+- Speed: one Tor circuit tops out around 0.5 MB/s, so a file is spread over
+  ``TOR_LANES`` extra circuits ("lanes", each a separate connection with its
+  own SOCKS isolation). A lane opens with ``LANE_JOIN``: a tag derived from
+  the session key plus a message sealed with it, so only the contact can
+  attach a lane to the session and lanes carry nothing but encrypted file
+  chunks. Chat, calls and acknowledgements stay on the main circuit and never
+  queue behind file data.
 
 Tor itself: on Android it's bundled (tor-android's TorService). On a PC the
 app starts an installed ``tor`` (Tor Browser's or the Tor Expert Bundle's, or
@@ -28,23 +35,33 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import hmac
 import os
 import re
+import secrets
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from srltcp.core.messaging.constants import TOR_LANES
+from srltcp.core.protocol.messages import Flags, MessageType, build_header, header_aad
+from srltcp.transports.base import TransportPeer
 from srltcp.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
+    from srltcp.core.messaging.links import PeerLink
 
 log = get_logger(__name__)
 
 ONION_VIRTUAL_PORT = 7825
 TOR_DIAL_TIMEOUT = 60.0
 TOR_BOOTSTRAP_TIMEOUT = 180.0
+LANE_RETRY = 60.0  # wait this long before dialing lanes again after a failure
+LANE_IDLE = 60.0  # close a contact's lanes this long after its last transfer
+LANE_TAG = b"srltcp-lane"
 _ONION_RE = re.compile(r"^[a-z2-7]{56}\.onion$")
 
 
@@ -186,6 +203,12 @@ class TorMixin:
         self._tor_progress = 0
         self._tor_task: asyncio.Task[None] | None = None
         self._tor_lock = asyncio.Lock()
+        # Lanes: extra Tor connections carrying file chunks for a session.
+        self._tor_lanes: dict[str, list[str]] = {}  # contact -> our lane peer ids
+        self._lane_owner: dict[str, str] = {}  # lane peer id (either side) -> contact
+        self._lane_dialing: dict[str, asyncio.Task[None]] = {}
+        self._lane_tried: dict[str, float] = {}
+        self._lane_idle: dict[str, asyncio.TimerHandle] = {}
 
     # ── Settings / status ──
 
@@ -492,6 +515,144 @@ class TorMixin:
             self._tor_socks_port, onion, ONION_VIRTUAL_PORT,
             timeout=TOR_DIAL_TIMEOUT, isolation=isolation,
         )
+
+    # ── Lanes: parallel Tor circuits for file data ──
+
+    def _link_on_tor(self: MessagingBackend, link: PeerLink) -> bool:
+        return (
+            link.transport == "tcp"
+            and self.tcp_transport is not None
+            and self.tcp_transport.is_tor(link.transport_peer_id)
+        )
+
+    def _send_lanes(self: MessagingBackend, hash_id: str, link: PeerLink) -> list[str]:
+        """Lanes ready to carry this contact's file chunks (opening more if
+        needed). Empty off Tor, or until the first lane is up."""
+        if not self._link_on_tor(link) or TOR_LANES <= 0 or not self.tcp_transport:
+            if self._tor_lanes.get(hash_id):
+                self._close_lanes(hash_id)  # moved off Tor (e.g. to the LAN)
+            return []
+        idle = self._lane_idle.pop(hash_id, None)
+        if idle:
+            idle.cancel()
+        transport = self.tcp_transport
+        lanes = [p for p in self._tor_lanes.get(hash_id, []) if transport.has_peer(p)]
+        self._tor_lanes[hash_id] = lanes
+        dialing = self._lane_dialing.get(hash_id)
+        if (
+            len(lanes) < TOR_LANES
+            and (dialing is None or dialing.done())
+            and time.monotonic() - self._lane_tried.get(hash_id, 0.0) > LANE_RETRY
+            and self.tor_ready()
+            and self.peer_onion(hash_id)
+        ):
+            self._lane_tried[hash_id] = time.monotonic()
+            self._lane_dialing[hash_id] = asyncio.create_task(
+                self._open_lanes(hash_id, TOR_LANES - len(lanes))
+            )
+        return lanes
+
+    async def _open_lanes(self: MessagingBackend, hash_id: str, count: int) -> None:
+        async def one() -> None:
+            assert self.tcp_transport is not None
+            # A fresh isolation token = a fresh circuit, separate from the
+            # main one and from the other lanes.
+            peer_id = await self.tcp_transport.connect_socks(
+                self._tor_socks_port, self.peer_onion(hash_id), ONION_VIRTUAL_PORT,
+                timeout=TOR_DIAL_TIMEOUT, isolation="lane-" + secrets.token_hex(8),
+            )
+            link = self.get_link(hash_id)
+            if not link or not link.handshake_complete or not self._link_on_tor(link):
+                await self.tcp_transport.disconnect(peer_id)
+                return
+            self._lane_owner[peer_id] = hash_id
+            flags = Flags.ENCRYPTED | Flags.E2EE
+            sealed = link.crypto.encrypt(LANE_TAG, header_aad(MessageType.LANE_JOIN, flags))
+            body = link.crypto.lane_hint(outgoing=True) + sealed
+            await self.tcp_transport.send(
+                peer_id, build_header(MessageType.LANE_JOIN, flags=flags, body=body)
+            )
+            self._tor_lanes.setdefault(hash_id, []).append(peer_id)
+
+        results = await asyncio.gather(*(one() for _ in range(count)), return_exceptions=True)
+        failed = [r for r in results if isinstance(r, BaseException)]
+        up = len(self._tor_lanes.get(hash_id, []))
+        log.info("Tor lanes to %s: %d up%s", hash_id[:8], up,
+                 f", {len(failed)} failed ({failed[0]!r})" if failed else "")
+        if up:
+            self._lane_tried.pop(hash_id, None)  # partial: top up on the next chunk
+
+    async def _handle_lane_join(
+        self: MessagingBackend, peer: TransportPeer, flags: int, body: bytes
+    ) -> None:
+        """A contact attaches an extra Tor connection to its session."""
+        transport = self.tcp_transport
+        if peer.transport != "tcp" or not transport or not transport.is_tor(peer.peer_id):
+            return
+        if peer.peer_id in self._lane_owner or self.get_link_by_peer_id(peer.peer_id):
+            return
+        hint, sealed = body[:16], body[16:]
+        for hash_id, link in list(self._links.items()):
+            if not link.handshake_complete or not self.is_trusted(hash_id):
+                continue
+            if not hmac.compare_digest(link.crypto.lane_hint(outgoing=False), hint):
+                continue
+            try:
+                tag = link.crypto.decrypt(sealed, header_aad(MessageType.LANE_JOIN, flags))
+            except Exception:  # noqa: BLE001 - forged or replayed
+                return
+            if tag != LANE_TAG:
+                return
+            lanes = [p for p, h in self._lane_owner.items() if h == hash_id]
+            if len(lanes) >= TOR_LANES + 2:
+                await transport.disconnect(peer.peer_id)
+                return
+            self._lane_owner[peer.peer_id] = hash_id
+            transport.tune_for_lane(peer.peer_id, 256 * 1024)
+            log.info("Tor lane from %s joined (%d)", hash_id[:8], len(lanes) + 1)
+            return
+
+    def lane_owner(self: MessagingBackend, peer_id: str) -> str | None:
+        return self._lane_owner.get(peer_id)
+
+    def _lane_closed(self: MessagingBackend, peer_id: str) -> None:
+        """A lane went away: data in flight on it is lost, so the sender goes
+        back to the last confirmed byte."""
+        hash_id = self._lane_owner.pop(peer_id, None)
+        if not hash_id:
+            return
+        lanes = self._tor_lanes.get(hash_id)
+        if lanes and peer_id in lanes:
+            lanes.remove(peer_id)
+            for tid, out in self._out.items():
+                transfer = self._transfers.get(tid)
+                if transfer and transfer.recipient_hash == hash_id:
+                    out.rewind = True
+                    out.wake.set()
+
+    def _lanes_maybe_idle(self: MessagingBackend, hash_id: str) -> None:
+        """No more outgoing files for this contact: close its lanes soon."""
+        if not self._tor_lanes.get(hash_id) or hash_id in self._lane_idle:
+            return
+        if any(
+            self._transfers[tid].recipient_hash == hash_id
+            for tid, task in self._transfer_tasks.items()
+            if not task.done() and tid in self._transfers
+        ):
+            return
+        loop = asyncio.get_running_loop()
+        self._lane_idle[hash_id] = loop.call_later(LANE_IDLE, self._close_lanes, hash_id)
+
+    def _close_lanes(self: MessagingBackend, hash_id: str) -> None:
+        self._lane_idle.pop(hash_id, None)
+        lanes = self._tor_lanes.pop(hash_id, [])
+        transport = self.tcp_transport
+        for peer_id in lanes:
+            self._lane_owner.pop(peer_id, None)
+            if transport:
+                task = asyncio.ensure_future(transport.disconnect(peer_id))
+                self.__dict__.setdefault("_lane_close_tasks", set()).add(task)
+                task.add_done_callback(self.__dict__["_lane_close_tasks"].discard)
 
     def store_peer_onion(self: MessagingBackend, hash_id: str, data: dict[str, Any]) -> None:
         if "o" not in data:

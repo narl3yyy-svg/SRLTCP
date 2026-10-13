@@ -9,7 +9,13 @@ import uuid
 from typing import Any
 
 from srltcp.core.messaging.constants import DISCOVERY_PORT
-from srltcp.transports.base import Connection, Transport, TransportEvent, TransportPeer
+from srltcp.transports.base import (
+    STREAM_LIMIT,
+    Connection,
+    Transport,
+    TransportEvent,
+    TransportPeer,
+)
 from srltcp.utils.logging import get_logger
 from srltcp.utils.network import broadcast_targets
 from srltcp.utils.ports import bind_udp_port, start_tcp_server
@@ -37,6 +43,10 @@ def bound_socket(family: int, local_port: int) -> socket.socket:
     return sock
 
 
+# Tor connections keep little in flight: Tor reads them only as fast as the
+# circuit moves, and anything queued there delays chat behind file data.
+TOR_BUFFER = 256 * 1024
+
 # Hard cap on open TCP connections (a phone has a handful of contacts; a hub
 # a few hundred members).
 MAX_CONNECTIONS = 512
@@ -62,7 +72,6 @@ class TCPTransport(Transport):
         self._discovery_protocol: _DiscoveryProtocol | None = None
         self._discovery_transport: asyncio.DatagramTransport | None = None
         self._connections: dict[str, Connection] = {}
-        self._peer_by_writer_id: dict[int, str] = {}
         self._announce_payload: bytes = b""
         self._running = False
         # Connections that came in through our onion service or were dialed
@@ -85,7 +94,7 @@ class TCPTransport(Transport):
             await self._accept(reader, writer, via_tor=False)
 
         self._server, self.port = await start_tcp_server(
-            _handle, self.host, self.port, strict=self.strict_ports
+            _handle, self.host, self.port, strict=self.strict_ports, limit=STREAM_LIMIT
         )
         log.info("TCP transport listening on %s:%d", self.host, self.port)
 
@@ -119,8 +128,9 @@ class TCPTransport(Transport):
         conn = Connection(peer, reader, writer)
         conn.set_frame_handler(self._handle_frame)
         conn.set_close_handler(self._on_connection_closed)
+        if via_tor:
+            conn.tune_for_lane(TOR_BUFFER)
         self._connections[peer_id] = conn
-        self._peer_by_writer_id[id(writer)] = peer_id
         await conn.start_reading()
         await self._emit_event(TransportEvent(kind="connected", peer=peer))
         log.info("TCP peer connected: %s (%s)", peer_id[:8], address)
@@ -134,7 +144,9 @@ class TCPTransport(Transport):
         async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             await self._accept(reader, writer, via_tor=True)
 
-        self._onion_server = await asyncio.start_server(_handle, "127.0.0.1", port)
+        self._onion_server = await asyncio.start_server(
+            _handle, "127.0.0.1", port, limit=STREAM_LIMIT
+        )
         self.onion_port = int(self._onion_server.sockets[0].getsockname()[1])
         return self.onion_port
 
@@ -162,7 +174,9 @@ class TCPTransport(Transport):
         Tor circuit (IsolateSOCKSAuth)."""
 
         async def _dial() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-            reader, writer = await asyncio.open_connection("127.0.0.1", socks_port)
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", socks_port, limit=STREAM_LIMIT
+            )
             try:
                 user = (isolation or "srltcp").encode()[:255]
                 writer.write(b"\x05\x01\x02")  # SOCKS5, one method: user/pass
@@ -194,6 +208,7 @@ class TCPTransport(Transport):
         reader, writer = await asyncio.wait_for(_dial(), timeout=timeout)
         peer_id = await self._adopt(reader, writer, f"{host}:{port}")
         self._tor_peers.add(peer_id)
+        self.tune_for_lane(peer_id, TOR_BUFFER)
         return peer_id
 
     async def stop(self) -> None:
@@ -202,7 +217,6 @@ class TCPTransport(Transport):
         for conn in list(self._connections.values()):
             await conn.close()
         self._connections.clear()
-        self._peer_by_writer_id.clear()
         if self._discovery_transport:
             self._discovery_transport.close()
             self._discovery_transport = None
@@ -230,7 +244,7 @@ class TCPTransport(Transport):
     async def connect(self, host: str, port: int, *, timeout: float = 8.0) -> str:
         # Without a timeout an unreachable VPN/LAN host blocks for ~2 minutes.
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port), timeout=timeout
+            asyncio.open_connection(host, port, limit=STREAM_LIMIT), timeout=timeout
         )
         peer_id = str(uuid.uuid4())
         address = f"{host}:{port}"
@@ -254,7 +268,7 @@ class TCPTransport(Transport):
         loop = asyncio.get_running_loop()
         try:
             await asyncio.wait_for(loop.sock_connect(sock, (host, port)), timeout=timeout)
-            reader, writer = await asyncio.open_connection(sock=sock)
+            reader, writer = await asyncio.open_connection(sock=sock, limit=STREAM_LIMIT)
         except BaseException:
             sock.close()
             raise
@@ -300,6 +314,23 @@ class TCPTransport(Transport):
         if not conn:
             raise KeyError(f"unknown peer: {peer_id}")
         await conn.send(payload)
+
+    async def send_framed(self, peer_id: str, frame: bytes) -> None:
+        """Send a frame already built with ``pack_frame`` (file data framed
+        in a worker thread)."""
+        conn = self._connections.get(peer_id)
+        if not conn:
+            raise KeyError(f"unknown peer: {peer_id}")
+        await conn.send_framed(frame)
+
+    def buffered(self, peer_id: str) -> int:
+        conn = self._connections.get(peer_id)
+        return conn.buffered() if conn else 0
+
+    def tune_for_lane(self, peer_id: str, high: int) -> None:
+        conn = self._connections.get(peer_id)
+        if conn:
+            conn.tune_for_lane(high)
 
     async def broadcast(self, payload: bytes) -> None:
         for conn in self._connections.values():
