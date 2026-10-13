@@ -12,8 +12,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 66
-        versionName = "0.7.0"
+        versionCode = 67
+        versionName = "0.7.1"
 
         ndk {
             // -PsrltcpAbis=arm64-v8a builds a smaller phone-only APK

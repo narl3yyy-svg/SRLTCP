@@ -584,6 +584,7 @@
             `${data.name || "Contact"} disconnected — looking for another way to reach them; messages you send wait and go out as soon as they're back`,
             "down"
           );
+          explainIfStillDown(data.hash_id);
           notifyUser(
             "Disconnected",
             data.name || data.hash_id?.slice(0, 8) || "Peer",
@@ -3243,6 +3244,16 @@
     return (address || "").includes(".onion") || address === "tor";
   }
 
+  /* Still no path a while after a disconnect: say why, in the chat. */
+  function explainIfStillDown(hashId) {
+    clearTimeout((state.downTimers ||= {})[hashId]);
+    state.downTimers[hashId] = setTimeout(async () => {
+      if (isPeerLinked(hashId)) return;
+      const { ok, data } = await apiPost(`/api/trusted/${hashId}/diagnose?probe_tor=0`, {}, { silent: true });
+      if (ok && data?.summary && !isPeerLinked(hashId)) addChatNotice(hashId, data.summary, "down");
+    }, 45000);
+  }
+
   function pathLabel(transport, address) {
     if (transport === "relay") return "through your relay";
     if (isTorAddress(address)) return "over Tor";
@@ -4403,9 +4414,12 @@
       `<li class="${a.ok ? "ok" : "bad"}">${a.ok ? "✓" : "✗"} ${escapeHtml(a.address)} — ${escapeHtml(a.detail)}</li>`
     ).join("");
     const relay = data.relay?.connected ? "connected" : data.relay?.configured ? "not connected" : "not set up";
+    const tor = !data.tor?.enabled ? "off" : data.tor.state === "ready"
+      ? (data.tor.contact_has_address ? "ready" : "ready (contact's Tor address not known yet)")
+      : `${data.tor.state}${data.tor.detail ? ` — ${data.tor.detail}` : ""}`;
     out.innerHTML = `<p>${escapeHtml(data.summary || "")}</p>` +
       (rows ? `<ul>${rows}</ul>` : "") +
-      `<p class="muted">Now: ${escapeHtml(data.path || "not connected")} · Relay: ${escapeHtml(relay)} · Your addresses: ${escapeHtml((data.my_addresses || []).join(", ") || "none")}</p>`;
+      `<p class="muted">Now: ${escapeHtml(data.path || "not connected")} · Relay: ${escapeHtml(relay)} · Tor: ${escapeHtml(tor)} · Your addresses: ${escapeHtml((data.my_addresses || []).join(", ") || "none")}</p>`;
   });
   document.querySelectorAll(".share-tab").forEach((b) => {
     b.addEventListener("click", () => setShareTab(b.dataset.shareTab));

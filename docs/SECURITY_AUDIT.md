@@ -1,4 +1,4 @@
-# Security audit and penetration test (v0.7.0)
+# Security audit and penetration test (v0.7.1)
 
 Scope: the whole app — local web UI/API, peer protocol, file transfers and shared
 folders, discovery, pairing, group chats, the local call relay, the Android
@@ -113,6 +113,17 @@ onion address in RENDEZVOUS. Design and checks (private Tor network on
 | Anyone on the Tor path | read or alter traffic | sees only the SRLTCP E2EE session inside Tor's own encryption; impersonation needs the contact's pinned identity key |
 | Network observer / ISP | learn who talks to whom | sees Tor use only; contacts don't learn each other's IP; one circuit per contact (SOCKS isolation) |
 | Local apps on the device | use our onion listener / control port | onion listener on 127.0.0.1 accepts only trusted identities; Tor control port is cookie-authenticated with an owner-only cookie; onion key stored 0600 |
+
+**0.7.1 fix (Android, medium):** tor-android's TorService forces
+`--CookieAuthentication 0` on its command line. 0.7.0 asked it for an extra TCP
+control port, which would have had no authentication, so any app on the phone
+could have controlled that Tor. 0.7.1 uses TorService's control socket instead.
+That's a Unix socket inside the app's private storage, so only SRLTCP can reach
+it, and there's no TCP control port at all. 0.7.0 also started the service via
+`Class.forName`, which can fail when called from Python; now it uses an explicit
+component name. `simulate_tor.py --android-style` runs one node exactly the way
+TorService runs Tor (control socket, cookie auth off) against the private Tor
+network.
 
 Other notes: turning Tor off tells contacts first (they drop the address);
 the onion address persists across restarts; a Tor session upgrades to a

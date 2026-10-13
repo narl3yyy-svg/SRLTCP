@@ -81,6 +81,11 @@ class TorControl:
             asyncio.open_connection(host, port), timeout=10
         )
 
+    async def connect_unix(self, path: str) -> None:
+        self._reader, self._writer = await asyncio.wait_for(
+            asyncio.open_unix_connection(path), timeout=10
+        )
+
     @property
     def connected(self) -> bool:
         return bool(self._writer and not self._writer.is_closing())
@@ -200,6 +205,24 @@ class TorMixin:
             "onion": self._tor_onion,
         }
 
+    def tor_problem(self: MessagingBackend, hash_id: str) -> str:
+        """Why Tor can't carry this contact right now, in plain words ('' = it can)."""
+        if not getattr(self.config, "tor_enabled", False):
+            return "it's turned off on this device (Settings → Network)"
+        if self._tor_state in ("starting", "off"):
+            return f"still connecting to the Tor network on this device ({self._tor_progress}%)"
+        if self._tor_state in ("unavailable", "error"):
+            return f"not working on this device — {self._tor_detail or 'unknown error'}"
+        if not self.peer_onion(hash_id):
+            return ("this contact hasn't shared a Tor address yet — open this chat once while "
+                    "you're both on the same network, with Tor on and connected on both devices")
+        return ""
+
+    def _tor_on_android(self: MessagingBackend) -> bool:
+        from srltcp.utils.platform import is_android
+
+        return is_android()
+
     def _tor_dir(self: MessagingBackend) -> Path:
         path = self.trusted.path.parent / "tor"
         path.mkdir(parents=True, exist_ok=True)
@@ -243,9 +266,7 @@ class TorMixin:
         if self._tor_control:
             await self._tor_control.close()  # removes our (non-detached) onion
             self._tor_control = None
-        from srltcp.utils.platform import is_android
-
-        if is_android() and not self.tor_enabled():
+        if self._tor_on_android() and not self.tor_enabled():
             await asyncio.to_thread(self._tor_stop_android)
         if self._tor_proc and self._tor_proc.returncode is None:
             self._tor_proc.terminate()
@@ -294,27 +315,48 @@ class TorMixin:
         cookie = tor_dir / "control_auth_cookie"
         with contextlib.suppress(OSError):
             port_file.unlink()
-        from srltcp.utils.platform import is_android
-
-        if is_android():
-            await asyncio.to_thread(self._tor_start_android, tor_dir, port_file, cookie)
+        control = TorControl()
+        if self._tor_on_android():
+            # Bundled TorService: talk to it over its control socket, which lives
+            # in this app's private storage (no TCP control port at all —
+            # TorService turns cookie auth off, so a TCP port would be open to
+            # every app on the phone).
+            self._tor_detail = "starting the built-in Tor"
+            socket_path = await asyncio.to_thread(self._tor_start_android)
+            for _ in range(300):
+                if Path(socket_path).exists():
+                    break
+                await asyncio.sleep(0.2)
+            else:
+                raise RuntimeError("the built-in Tor did not start (no control socket)")
+            last: Exception | None = None
+            for _ in range(25):  # the socket file appears just before Tor listens
+                try:
+                    await control.connect_unix(socket_path)
+                    break
+                except OSError as exc:
+                    last = exc
+                    await asyncio.sleep(0.2)
+            else:
+                raise RuntimeError(f"couldn't reach the built-in Tor: {last}")
+            await control.command("AUTHENTICATE")
         else:
             await self._tor_start_process(tor_dir, port_file, cookie)
-        # Wait for Tor to write its control port.
-        for _ in range(300):
-            if port_file.exists() and port_file.read_text().strip():
-                break
-            if self._tor_proc and self._tor_proc.returncode is not None:
-                raise RuntimeError("tor exited at start — see the log")
-            await asyncio.sleep(0.2)
-        else:
-            raise RuntimeError("Tor did not start in time")
-        text = port_file.read_text().strip().splitlines()[0]  # PORT=127.0.0.1:1234
-        host, port = text.split("=", 1)[1].rsplit(":", 1)
-        control = TorControl()
-        await control.connect(host, int(port))
-        await control.authenticate(cookie)
+            # Wait for Tor to write its control port.
+            for _ in range(300):
+                if port_file.exists() and port_file.read_text().strip():
+                    break
+                if self._tor_proc and self._tor_proc.returncode is not None:
+                    raise RuntimeError("tor exited at start — see the log")
+                await asyncio.sleep(0.2)
+            else:
+                raise RuntimeError("Tor did not start in time")
+            text = port_file.read_text().strip().splitlines()[0]  # PORT=127.0.0.1:1234
+            host, port = text.split("=", 1)[1].rsplit(":", 1)
+            await control.connect(host, int(port))
+            await control.authenticate(cookie)
         self._tor_control = control
+        self._tor_detail = "connecting to the Tor network"
         # Bootstrap (connect to the Tor network).
         deadline = asyncio.get_running_loop().time() + TOR_BOOTSTRAP_TIMEOUT
         while True:
@@ -404,45 +446,33 @@ class TorMixin:
             **kwargs,
         )
 
-    def _tor_start_android(self: MessagingBackend, tor_dir: Path, port_file: Path,
-                           cookie: Path) -> None:
-        """Bundled Tor (tor-android): write its torrc, start TorService."""
+    def _tor_start_android(self: MessagingBackend) -> str:
+        """Bundled Tor (tor-android): write its torrc, start TorService, return
+        the path of its private control socket."""
         try:
             from java import jclass
 
-            python = jclass("com.chaquo.python.Python")
-            ctx = python.getPlatform().getApplication()
+            ctx = jclass("com.chaquo.python.Python").getPlatform().getApplication()
             tor_service = jclass("org.torproject.jni.TorService")
         except Exception as exc:  # noqa: BLE001
-            raise _TorUnavailable(f"bundled Tor not found ({exc})") from exc
+            raise _TorUnavailable(f"built-in Tor not found ({exc})") from exc
         torrc = Path(str(tor_service.getTorrc(ctx).getAbsolutePath()))
-        torrc.write_text(
-            "\n".join(
-                [
-                    "ControlPort 127.0.0.1:auto",
-                    f"ControlPortWriteToFile {port_file}",
-                    "CookieAuthentication 1",
-                    f"CookieAuthFile {cookie}",
-                    "SocksPort 127.0.0.1:auto",
-                    "ClientOnly 1",
-                ]
-            )
-            + "\n"
-        )
-        intent = jclass("android.content.Intent")(
-            ctx, jclass("java.lang.Class").forName("org.torproject.jni.TorService")
-        )
-        intent.setAction(tor_service.ACTION_START)
+        torrc.parent.mkdir(parents=True, exist_ok=True)
+        torrc.write_text("SocksPort 127.0.0.1:auto\nClientOnly 1\nAvoidDiskWrites 1\n")
+        base = Path(str(ctx.getDir("TorService", 0).getAbsolutePath()))
+        intent = jclass("android.content.Intent")()
+        intent.setClassName(ctx.getPackageName(), "org.torproject.jni.TorService")
+        intent.setAction("org.torproject.android.intent.action.START")
         ctx.startService(intent)
+        return str(base / "data" / "ControlSocket")
 
     def _tor_stop_android(self: MessagingBackend) -> None:
         with contextlib.suppress(Exception):
             from java import jclass
 
             ctx = jclass("com.chaquo.python.Python").getPlatform().getApplication()
-            intent = jclass("android.content.Intent")(
-                ctx, jclass("java.lang.Class").forName("org.torproject.jni.TorService")
-            )
+            intent = jclass("android.content.Intent")()
+            intent.setClassName(ctx.getPackageName(), "org.torproject.jni.TorService")
             ctx.stopService(intent)
 
     # ── Dialing ──
