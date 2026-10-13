@@ -447,6 +447,8 @@ class ConnectMixin:
         except Exception as exc:  # noqa: BLE001
             log.warning("Link-up UI callback failed for %s: %s", remote_hash[:8], exc)
         await self._send_pending_pair(remote_hash)
+        if self.is_trusted(remote_hash):
+            await self.send_pending_share_offers(remote_hash)
         await self.sync_groups_with(remote_hash)
         if self.is_trusted(remote_hash):
             await self.notify_contact_accepted(remote_hash)

@@ -448,32 +448,80 @@
 </div>
 <div class="modal-overlay" id="share-modal">
 <div class="modal-card wide">
-<h3>Shared folder (E2EE)</h3>
-<p class="modal-hint">Browse a peer's shared folder over the encrypted link. Downloads use secure file transfer.</p>
-<div id="share-offer-options" class="share-offer-options hidden">
-<label class="field"><span>Time limit</span>
+<h3>Share files (end-to-end encrypted)</h3>
+<div class="share-tabs" role="tablist">
+<button type="button" class="share-tab active" data-share-tab="new" role="tab">Share</button>
+<button type="button" class="share-tab" data-share-tab="incoming" role="tab">Shared with me <span id="share-incoming-count" class="share-count hidden"></span></button>
+<button type="button" class="share-tab" data-share-tab="mine" role="tab">My shares <span id="share-mine-count" class="share-count hidden"></span></button>
+</div>
+<div class="share-panel" data-share-panel="new">
+<div class="field">
+<span class="field-label">What to share</span>
+<div class="share-kind">
+<label><input type="radio" name="share-kind" value="folder" checked /> A folder</label>
+<label><input type="radio" name="share-kind" value="files" /> Files</label>
+</div>
+</div>
+<div class="field" id="share-folder-field">
+<div class="field-row">
+<input type="text" id="share-folder" placeholder="Your default shared folder" readonly />
+<button type="button" class="action-btn small" data-browse="share-folder">Choose folder</button>
+</div>
+<small>Recipients can browse this folder and download from it; nothing else on your device.</small>
+</div>
+<div class="field hidden" id="share-files-field">
+<input type="file" id="share-files" multiple />
+<small id="share-files-hint">Pick one or more files. A private copy is shared, so you can move or edit the originals.</small>
+</div>
+<div class="field">
+<span class="field-label">Share with</span>
+<select id="share-group">
+<option value="">Pick contacts below…</option>
+</select>
+<div id="share-recipients" class="share-recipients"></div>
+<small>Contacts who aren't connected now get it automatically the next time they are. For a group, every member who is your contact gets it.</small>
+</div>
+<label class="field"><span>Name (optional)</span>
+<input type="text" id="share-label" maxlength="128" placeholder="e.g. Holiday photos" autocomplete="off" />
+</label>
+<div class="field-row">
+<label class="field grow"><span>Available for</span>
 <select id="share-ttl">
-<option value="1m">1 minute</option>
-<option value="5m">5 minutes</option>
-<option value="1h" selected>1 hour</option>
-<option value="1d">1 day</option>
+<option value="1h">1 hour</option>
+<option value="1d" selected>1 day</option>
 <option value="1w">1 week</option>
-<option value="forever">Forever</option>
+<option value="5m">5 minutes</option>
+<option value="forever">Until I remove it</option>
 </select>
 </label>
-<label class="field"><span>Download limit</span>
+<label class="field grow"><span>Downloads per person</span>
 <select id="share-download-limit">
-<option value="1">1 download</option>
-<option value="2">2 downloads</option>
-<option value="5">5 downloads</option>
-<option value="10">10 downloads</option>
-<option value="25">25 downloads</option>
 <option value="unlimited" selected>Unlimited</option>
+<option value="1">1</option>
+<option value="2">2</option>
+<option value="5">5</option>
+<option value="10">10</option>
+<option value="25">25</option>
 </select>
 </label>
 </div>
-<div id="share-grants-list" class="share-grants-list"></div>
+<label class="field"><span>Password (optional)</span>
+<input type="password" id="share-password" maxlength="256" autocomplete="new-password" placeholder="Leave empty for none" />
+<small>Recipients must type it to open the share. Tell them another way (in person, a call). It only travels inside the encrypted connection; 5 wrong tries lock the share for 10 minutes.</small>
+</label>
+<button type="button" class="action-btn" id="share-submit">Share</button>
+</div>
+<div class="share-panel hidden" data-share-panel="incoming">
+<div id="share-incoming-list" class="share-grants-list"></div>
+<div id="share-password-row" class="field-row hidden">
+<input type="password" id="share-open-password" placeholder="Password for this share" autocomplete="off" />
+<button type="button" class="action-btn small" id="share-open-submit">Open</button>
+</div>
 <div id="share-entries" class="share-entries"></div>
+</div>
+<div class="share-panel hidden" data-share-panel="mine">
+<div id="share-mine-list" class="share-grants-list"></div>
+</div>
 <div class="modal-actions">
 <button type="button" class="action-btn secondary" id="share-close">Close</button>
 </div>
