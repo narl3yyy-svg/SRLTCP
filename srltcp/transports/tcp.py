@@ -65,6 +65,11 @@ class TCPTransport(Transport):
         self._peer_by_writer_id: dict[int, str] = {}
         self._announce_payload: bytes = b""
         self._running = False
+        # Connections that came in through our onion service or were dialed
+        # over Tor: only trusted contacts may use them (see backend).
+        self._tor_peers: set[str] = set()
+        self._onion_server: asyncio.Server | None = None
+        self.onion_port = 0
 
     def set_announce_payload(self, payload: bytes) -> None:
         self._announce_payload = payload
@@ -77,22 +82,7 @@ class TCPTransport(Transport):
         async def _handle(
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
-            if len(self._connections) >= MAX_CONNECTIONS:
-                log.warning("Too many TCP connections; refusing a new one")
-                writer.close()
-                return
-            peer_addr = writer.get_extra_info("peername")
-            address = f"{peer_addr[0]}:{peer_addr[1]}" if peer_addr else "unknown"
-            peer_id = str(uuid.uuid4())
-            peer = TransportPeer(peer_id=peer_id, address=address, transport="tcp")
-            conn = Connection(peer, reader, writer)
-            conn.set_frame_handler(self._handle_frame)
-            conn.set_close_handler(self._on_connection_closed)
-            self._connections[peer_id] = conn
-            self._peer_by_writer_id[id(writer)] = peer_id
-            await conn.start_reading()
-            await self._emit_event(TransportEvent(kind="connected", peer=peer))
-            log.info("TCP peer connected: %s (%s)", peer_id[:8], address)
+            await self._accept(reader, writer, via_tor=False)
 
         self._server, self.port = await start_tcp_server(
             _handle, self.host, self.port, strict=self.strict_ports
@@ -111,7 +101,103 @@ class TCPTransport(Transport):
         )
         log.info("UDP discovery on port %d", self.discovery_port)
 
+    async def _accept(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *, via_tor: bool
+    ) -> None:
+        if len(self._connections) >= MAX_CONNECTIONS:
+            log.warning("Too many TCP connections; refusing a new one")
+            writer.close()
+            return
+        peer_addr = writer.get_extra_info("peername")
+        address = f"{peer_addr[0]}:{peer_addr[1]}" if peer_addr else "unknown"
+        if via_tor:
+            address = "tor"  # Tor hides the caller's address (by design)
+        peer_id = str(uuid.uuid4())
+        if via_tor:
+            self._tor_peers.add(peer_id)
+        peer = TransportPeer(peer_id=peer_id, address=address, transport="tcp")
+        conn = Connection(peer, reader, writer)
+        conn.set_frame_handler(self._handle_frame)
+        conn.set_close_handler(self._on_connection_closed)
+        self._connections[peer_id] = conn
+        self._peer_by_writer_id[id(writer)] = peer_id
+        await conn.start_reading()
+        await self._emit_event(TransportEvent(kind="connected", peer=peer))
+        log.info("TCP peer connected: %s (%s)", peer_id[:8], address)
+
+    async def start_onion_listener(self, port: int = 0) -> int:
+        """Listen on 127.0.0.1 for connections Tor forwards from our onion
+        service. Separate from the LAN listener so we know they came via Tor."""
+        if self._onion_server:
+            return self.onion_port
+
+        async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            await self._accept(reader, writer, via_tor=True)
+
+        self._onion_server = await asyncio.start_server(_handle, "127.0.0.1", port)
+        self.onion_port = int(self._onion_server.sockets[0].getsockname()[1])
+        return self.onion_port
+
+    async def stop_onion_listener(self) -> None:
+        if self._onion_server:
+            self._onion_server.close()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._onion_server.wait_closed(), timeout=3.0)
+            self._onion_server = None
+
+    def is_tor(self, peer_id: str) -> bool:
+        return peer_id in self._tor_peers
+
+    async def connect_socks(
+        self,
+        socks_port: int,
+        host: str,
+        port: int,
+        *,
+        timeout: float = 60.0,
+        isolation: str = "",
+    ) -> str:
+        """Dial ``host`` (an .onion address) through Tor's SOCKS5 port.
+        ``isolation`` becomes the SOCKS username, so each contact gets its own
+        Tor circuit (IsolateSOCKSAuth)."""
+
+        async def _dial() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+            reader, writer = await asyncio.open_connection("127.0.0.1", socks_port)
+            try:
+                user = (isolation or "srltcp").encode()[:255]
+                writer.write(b"\x05\x01\x02")  # SOCKS5, one method: user/pass
+                await writer.drain()
+                if await reader.readexactly(2) != b"\x05\x02":
+                    raise ConnectionError("Tor SOCKS refused authentication method")
+                writer.write(b"\x01" + bytes([len(user)]) + user + b"\x01x")
+                await writer.drain()
+                if (await reader.readexactly(2))[1] != 0:
+                    raise ConnectionError("Tor SOCKS authentication failed")
+                name = host.encode("ascii")
+                writer.write(
+                    b"\x05\x01\x00\x03" + bytes([len(name)]) + name + port.to_bytes(2, "big")
+                )
+                await writer.drain()
+                head = await reader.readexactly(4)
+                if head[1] != 0:
+                    raise ConnectionError(f"Tor could not reach the contact (SOCKS code {head[1]})")
+                atyp = head[3]
+                skip = {1: 4, 4: 16}.get(atyp)
+                if skip is None:
+                    skip = (await reader.readexactly(1))[0]
+                await reader.readexactly(skip + 2)
+            except BaseException:
+                writer.close()
+                raise
+            return reader, writer
+
+        reader, writer = await asyncio.wait_for(_dial(), timeout=timeout)
+        peer_id = await self._adopt(reader, writer, f"{host}:{port}")
+        self._tor_peers.add(peer_id)
+        return peer_id
+
     async def stop(self) -> None:
+        await self.stop_onion_listener()
         self._running = False
         for conn in list(self._connections.values()):
             await conn.close()
@@ -133,6 +219,7 @@ class TCPTransport(Transport):
 
     async def _on_connection_closed(self, peer: TransportPeer) -> None:
         self._connections.pop(peer.peer_id, None)
+        self._tor_peers.discard(peer.peer_id)
         await self._emit_event(TransportEvent(kind="disconnected", peer=peer))
 
     async def disconnect(self, peer_id: str) -> None:

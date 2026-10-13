@@ -160,6 +160,8 @@ class PunchMixin:
         return {
             "a": self.local_candidates(),
             "u": [list(c) for c in public],
+            # Our onion address (Tor) — "" tells them Tor is off for us.
+            "o": self._tor_onion if self.tor_ready() else "",
         }
 
     async def addresses_changed(self: MessagingBackend) -> None:

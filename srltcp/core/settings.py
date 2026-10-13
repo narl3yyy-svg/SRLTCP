@@ -108,6 +108,10 @@ class AppSettings:
     # Direct connections across networks (hole punching). Shares your public
     # address with your contacts (only them, inside the encrypted session).
     direct_internet: bool = True
+    # Reach contacts over Tor when there's no other path (onion service; no
+    # server or port forwarding). Bundled on Android; needs Tor on a PC.
+    tor_enabled: bool = True
+    tor_path: str = ""
     handshake_protocol: str = "identity"
     call_stun_server: str = ""  # stun:/turn:/turns: URL (empty = direct only)
     call_turn_username: str = ""

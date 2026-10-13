@@ -647,6 +647,7 @@ class RelayMixin:
             return
         data = decode_payload(body)
         self.store_peer_addresses(hash_id, data)  # current LAN/VPN/public addresses
+        self.store_peer_onion(hash_id, data)  # their Tor onion address, if any
         contrib = str(data.get("c", "")).lower()
         try:
             if len(bytes.fromhex(contrib)) != 32:
@@ -705,7 +706,10 @@ class RelayMixin:
                 if self.tcp_transport and not self.get_link_by_peer_id(peer_id):
                     await self.tcp_transport.disconnect(peer_id)
         for hash_id, link in list(self._links.items()):
-            if link.transport != "relay" or not link.handshake_complete:
+            on_tor = link.transport == "tcp" and self.tcp_transport is not None and (
+                self.tcp_transport.is_tor(link.transport_peer_id)
+            )
+            if (link.transport != "relay" and not on_tor) or not link.handshake_complete:
                 continue
             # One side drives upgrades so both don't race each other.
             if self._me_hash() > hash_id or hash_id in self._upgrades:

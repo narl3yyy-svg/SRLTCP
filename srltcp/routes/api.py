@@ -785,6 +785,15 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         updated.discovery_port = max(1024, min(updated.discovery_port, 65535))
         updated.relay_enabled = bool(updated.relay_enabled)
         updated.direct_internet = bool(updated.direct_internet)
+        updated.tor_enabled = bool(updated.tor_enabled)
+        tor_path = str(updated.tor_path or "").strip()
+        if tor_path and not (Path(tor_path).is_file() and Path(tor_path).name.lower() in (
+            "tor", "tor.exe"
+        )):
+            return web.json_response(
+                {"error": "Tor path must point to the tor (tor.exe) program"}, status=400
+            )
+        updated.tor_path = tor_path
         relay_text = str(updated.relay_code or "").strip()
         if relay_text:
             try:
