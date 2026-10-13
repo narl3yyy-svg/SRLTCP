@@ -199,6 +199,7 @@ You normally never touch these, because the app learns addresses by itself.
 |---|---|
 | Not sure why a contact won't connect | *Edit contact* → **Check connection**: it tries every address the app knows for them and tells you what works and what to change. |
 | Different networks never connect, only the same Wi-Fi works | There's no meeting point. Turn on *Reach contacts anywhere over Tor* on both devices (on a PC, install Tor Browser first), or set up a relay. Then pair once while on the same network. |
+| Messages wait while one phone is on mobile data and the other on Wi-Fi | Open *Edit contact* → **Check connection**. It says whether Tor is working on this device and whether the contact has shared a Tor address yet. If not, open the chat once while both phones are on the same Wi-Fi, with Tor showing "connected" on both (Settings → Network). The chat also explains it by itself if a contact stays unreachable. |
 | Tor stays at "connecting…" | The network may block Tor (some workplaces and schools do). Check the PC's clock is correct; Tor refuses to work with a wrong clock. |
 | Contact always shows **relay**, never direct | Normal on mobile data (carrier NAT). On home networks, make sure *Direct internet connections* is on for both phones. Some routers block hole punching. |
 | VPN phone can't reach the home phone directly | The VPN client's `AllowedIPs` must include the home LAN, and the WireGuard server must route or NAT to the LAN. |

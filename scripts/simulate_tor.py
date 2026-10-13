@@ -35,14 +35,49 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         FAILS.append(name)
 
 
+ANDROID_STYLE = "--android-style" in sys.argv
+
+
+def _mimic_android(backend: MessagingBackend) -> None:
+    """Start tor the way tor-android's TorService does (private control socket,
+    --CookieAuthentication 0) and drive it through the Android code path."""
+    import subprocess
+
+    backend._tor_on_android = lambda: True  # type: ignore[method-assign]
+
+    def start() -> str:
+        d = backend._tor_dir() / "android"
+        (d / "data").mkdir(parents=True, exist_ok=True)
+        os.chmod(d / "data", 0o700)
+        sock = d / "data" / "ControlSocket"
+        torrc = d / "torrc"
+        torrc.write_text("SocksPort 127.0.0.1:auto\nClientOnly 1\nAvoidDiskWrites 1\n")
+        extra = Path(os.environ["SRLTCP_TOR_EXTRA_TORRC"]).read_text()
+        (d / "torrc-defaults").write_text(extra)
+        backend._android_tor = subprocess.Popen(  # type: ignore[attr-defined]
+            ["tor", "-f", str(torrc), "--defaults-torrc", str(d / "torrc-defaults"),
+             "--DataDirectory", str(d / "data"), "--ControlSocket", str(sock),
+             "--CookieAuthentication", "0", "--RunAsDaemon", "0",
+             "__OwningControllerProcess", str(os.getpid())],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return str(sock)
+
+    backend._tor_start_android = start  # type: ignore[method-assign]
+    backend._tor_stop_android = lambda: backend._android_tor.terminate()  # type: ignore
+
+
 def node(base: Path, name: str, tor: bool = True) -> MessagingBackend:
     data = base / name
     data.mkdir(parents=True, exist_ok=True)
     os.environ["SRLTCP_DATA_DIR"] = str(data)
-    return MessagingBackend(NodeConfig(
+    backend = MessagingBackend(NodeConfig(
         name=name, bind_host="127.0.0.1", tcp_port=0, discovery_port=0, strict_ports=True,
         incoming_dir=str(data / "in"), tor_enabled=tor, relay_enabled=False,
     ))
+    if ANDROID_STYLE and name == "alice":
+        _mimic_android(backend)
+    return backend
 
 
 def trust(a: MessagingBackend, b: MessagingBackend) -> None:
@@ -84,7 +119,7 @@ async def main() -> int:
     try:
         ok = await wait_for(lambda: a.tor_ready() and b.tor_ready(), 240)
         check("both nodes started Tor and published an onion service", ok,
-              f"alice={a.tor_status()['state']} {a.tor_status()['detail']}")
+              f"alice={a.tor_status()}, bob={b.tor_status()}")
         if not ok:
             return 1
         trust(a, b)
@@ -102,6 +137,12 @@ async def main() -> int:
         await a.disconnect_peer(bh)
         await b.disconnect_peer(ah)
         await asyncio.sleep(1)
+        start = time.monotonic()
+        # Nobody sends anything: they must find each other over Tor by themselves
+        # (what happens when one phone leaves the Wi-Fi for mobile data).
+        ok = await wait_for(lambda: bool(a.get_link(bh) and a.get_link(bh).handshake_complete), 120)
+        check("contacts reconnect over Tor by themselves after the direct path is gone", ok,
+              f"{time.monotonic() - start:.0f}s")
         start = time.monotonic()
         await a.send_message(bh, "hello over tor")
         ok = await wait_for(lambda: "hello over tor" in texts(b), 120)

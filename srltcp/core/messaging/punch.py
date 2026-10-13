@@ -358,7 +358,9 @@ class PunchMixin:
 
     # ── "Check connection" (Edit contact) ──
 
-    async def diagnose_contact(self: MessagingBackend, hash_id: str) -> dict[str, Any]:
+    async def diagnose_contact(
+        self: MessagingBackend, hash_id: str, *, probe_tor: bool = True
+    ) -> dict[str, Any]:
         """Try every address we know for a contact and explain the result in
         plain words. Opens plain TCP connections only (no data is sent)."""
         peer = self.trusted.get(hash_id)
@@ -390,35 +392,45 @@ class PunchMixin:
         link = self.get_link(hash_id)
         path = ""
         if link and link.handshake_complete:
-            path = "relay" if link.transport == "relay" else "direct"
+            on_tor = self.tcp_transport is not None and self.tcp_transport.is_tor(
+                link.transport_peer_id
+            )
+            path = "relay" if link.transport == "relay" else ("tor" if on_tor else "direct")
         relay_ok = self.relay_available_for(hash_id)
         relay_known = self.pair_relay(hash_id) is not None
         direct_ok = any(r["ok"] for r in results)
+        tor_ok, tor_problem = (path == "tor"), self.tor_problem(hash_id)
+        if not direct_ok and not relay_ok and not tor_ok and not tor_problem and probe_tor:
+            try:  # a real test over Tor (only when you press Check connection)
+                tor_peer = await self.dial_onion(hash_id)
+                tor_ok = True
+                if self.tcp_transport:
+                    await self.tcp_transport.disconnect(tor_peer)
+            except (OSError, TimeoutError, ConnectionError, asyncio.IncompleteReadError):
+                tor_problem = ("their Tor address didn't answer: their app may be closed, or "
+                               "Tor is still connecting on their side")
         if direct_ok:
             summary = "Reachable directly — no relay needed."
         elif relay_ok:
             summary = ("Not reachable directly from this network, but your relay connects you "
                        "(messages, files and calls all work).")
-        elif not hosts:
-            summary = ("No address known for this contact yet. Meet once on the same Wi-Fi or "
-                       "VPN, or set up a relay (Settings → Network).")
+        elif tor_ok:
+            summary = "Not on the same network, but reachable over Tor."
         else:
-            tips = [
-                "If one of you is on a VPN and the other on the home Wi-Fi: the VPN must include "
-                "the home network (WireGuard AllowedIPs, e.g. 10.0.100.0/24, 192.168.1.0/24).",
-                "Both devices need the same TCP peer port (Settings → Network → More options).",
-            ]
-            if not relay_known:
-                tips.append("To stay in touch from any network, run a relay and paste its code in "
-                            "Settings → Network on one device.")
-            else:
-                tips.append("Your relay isn't connected right now — check Settings → Network.")
-            summary = "Can't reach this contact right now. " + " ".join(tips)
+            summary = "Can't reach this contact right now."
+            if tor_problem:
+                summary += f" Tor: {tor_problem}."
+            if hosts:
+                summary += (" If one of you is on a VPN and the other on the home Wi-Fi, the VPN "
+                            "must include the home network (WireGuard AllowedIPs).")
+            if relay_known and not relay_ok:
+                summary += " Your relay isn't connected right now — check Settings → Network."
         return {
             "hash_id": hash_id,
             "path": path,
             "addresses": results,
             "relay": {"configured": relay_known, "connected": relay_ok},
             "my_addresses": self.local_candidates(),
+            "tor": {**self.tor_status(), "contact_has_address": bool(self.peer_onion(hash_id))},
             "summary": summary,
         }
