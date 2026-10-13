@@ -1441,6 +1441,8 @@
     }
     const hashEl = $("#edit-contact-hash");
     if (hashEl) hashEl.textContent = formatSafetyNumber(hashId);
+    const checkEl = $("#edit-contact-check-result");
+    if (checkEl) { checkEl.innerHTML = ""; checkEl.classList.add("hidden"); }
     const adv = $("#edit-contact-modal details");
     if (adv) adv.open = !!(peer.wan_host || peer.connection_mode === "wan");
     openModal($("#edit-contact-modal"));
@@ -4311,6 +4313,25 @@
   $("#btn-share-folder")?.addEventListener("click", () => openShareModal("offer"));
   $("#share-close")?.addEventListener("click", closeShareModal);
   $("#share-submit")?.addEventListener("click", submitShare);
+  $("#edit-contact-check")?.addEventListener("click", async () => {
+    const hashId = state.editContactTarget;
+    const out = $("#edit-contact-check-result");
+    if (!hashId || !out) return;
+    out.classList.remove("hidden");
+    out.textContent = "Checking…";
+    const { ok, data } = await apiPost(`/api/trusted/${hashId}/diagnose`, {}, { silent: true });
+    if (!ok) {
+      out.textContent = data?.error || "Check failed";
+      return;
+    }
+    const rows = (data.addresses || []).map((a) =>
+      `<li class="${a.ok ? "ok" : "bad"}">${a.ok ? "✓" : "✗"} ${escapeHtml(a.address)} — ${escapeHtml(a.detail)}</li>`
+    ).join("");
+    const relay = data.relay?.connected ? "connected" : data.relay?.configured ? "not connected" : "not set up";
+    out.innerHTML = `<p>${escapeHtml(data.summary || "")}</p>` +
+      (rows ? `<ul>${rows}</ul>` : "") +
+      `<p class="muted">Now: ${escapeHtml(data.path || "not connected")} · Relay: ${escapeHtml(relay)} · Your addresses: ${escapeHtml((data.my_addresses || []).join(", ") || "none")}</p>`;
+  });
   document.querySelectorAll(".share-tab").forEach((b) => {
     b.addEventListener("click", () => setShareTab(b.dataset.shareTab));
   });

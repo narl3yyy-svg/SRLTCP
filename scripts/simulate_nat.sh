@@ -179,4 +179,30 @@ wait_for 60 got hl "$HV" "from the vpn" || fail "VPN phone -> LAN phone"
 api hl POST /api/messages "{\"recipient_hash\":\"$HV\",\"text\":\"from the wifi\"}" >/dev/null
 wait_for 60 got hv "$HL" "from the wifi" || fail "LAN phone -> VPN phone"
 pass "one on the VPN, one on the Wi-Fi: both directions in $(( $(date +%s) - start ))s, direct (V reaches L at $(link_addr hv "$HL"))"
+# Common home setup: WireGuard runs on a separate box, so devices on the LAN
+# can't open connections to VPN addresses (only the VPN phone can dial in).
+ip netns exec home iptables -A FORWARD -o wghome -m conntrack --ctstate NEW -j DROP
+for ns in hl hv; do  # restart the apps only (the VPN keeps running)
+  for pid in $(ip netns pids $ns); do grep -q srltcp /proc/$pid/cmdline 2>/dev/null && kill $pid; done
+done; sleep 2
+start_node hl PhoneLan; start_node hv PhoneVpn
+start=$(date +%s)
+api hl POST /api/messages "{\"recipient_hash\":\"$HV\",\"text\":\"lan first after restart\"}" >/dev/null
+wait_for 90 got hv "$HL" "lan first after restart" || fail "LAN phone -> VPN phone when only the VPN side can dial"
+api hv POST /api/messages "{\"recipient_hash\":\"$HL\",\"text\":\"vpn reply\"}" >/dev/null
+wait_for 30 got hl "$HV" "vpn reply" || fail "VPN phone -> LAN phone (one-way routing)"
+pass "LAN can't route to the VPN: both apps restarted, LAN phone's message still arrived in $(( $(date +%s) - start ))s (VPN phone dialed in)"
+# The VPN connects after the apps are already running (toggling it on a phone).
+for pid in $(ip netns pids hv); do grep -q srltcp /proc/$pid/cmdline 2>/dev/null || kill $pid; done
+sleep 1; ip -n hv link del wg0 2>/dev/null || true
+api hl POST /api/messages "{\"recipient_hash\":\"$HV\",\"text\":\"while your vpn was off\"}" >/dev/null
+sleep 20
+mkwg hv wg0
+ip -n hv addr add 10.0.100.3/24 dev wg0
+ip netns exec hv wg set wg0 private-key "$W/hv.key" peer "$(cat "$W/home.pub")" \
+  endpoint 203.0.113.1:51820 allowed-ips 10.0.100.0/24,192.168.7.0/24 persistent-keepalive 5
+ip -n hv link set wg0 up; ip -n hv route add 192.168.7.0/24 dev wg0 2>/dev/null || true
+start=$(date +%s)
+wait_for 60 got hv "$HL" "while your vpn was off" || fail "message waiting on the LAN phone after the VPN came back"
+pass "VPN switched on later: the LAN phone's waiting message arrived $(( $(date +%s) - start ))s after the VPN connected"
 echo "All different-network checks passed."

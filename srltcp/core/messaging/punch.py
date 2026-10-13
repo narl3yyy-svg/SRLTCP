@@ -348,3 +348,70 @@ class PunchMixin:
                     if extra and extra != winner:
                         await transport.disconnect(extra)
         return winner
+
+    # ── "Check connection" (Edit contact) ──
+
+    async def diagnose_contact(self: MessagingBackend, hash_id: str) -> dict[str, Any]:
+        """Try every address we know for a contact and explain the result in
+        plain words. Opens plain TCP connections only (no data is sent)."""
+        peer = self.trusted.get(hash_id)
+        if not peer:
+            return {"error": "not a contact"}
+        port = peer.tcp_port or self.config.tcp_port
+        hosts = [h for h in dict.fromkeys([peer.tcp_host, *peer.alt_hosts]) if h]
+
+        async def probe(host: str) -> dict[str, Any]:
+            started = time.monotonic()
+            try:
+                _r, writer = await asyncio.wait_for(asyncio.open_connection(host, port), 3.0)
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+                ms = round((time.monotonic() - started) * 1000)
+                return {"address": f"{host}:{port}", "ok": True, "detail": f"answered in {ms} ms"}
+            except TimeoutError:
+                detail = "no answer (blocked, or not on a network you can reach)"
+            except ConnectionRefusedError:
+                detail = "the device is reachable but SRLTCP isn't listening (app closed?)"
+            except OSError as exc:
+                detail = "no route to this network" if exc.errno in (101, 113, 10051, 10065) else (
+                    exc.strerror or str(exc)
+                )
+            return {"address": f"{host}:{port}", "ok": False, "detail": detail}
+
+        results = list(await asyncio.gather(*(probe(h) for h in hosts[:6])))
+        link = self.get_link(hash_id)
+        path = ""
+        if link and link.handshake_complete:
+            path = "relay" if link.transport == "relay" else "direct"
+        relay_ok = self.relay_available_for(hash_id)
+        relay_known = self.pair_relay(hash_id) is not None
+        direct_ok = any(r["ok"] for r in results)
+        if direct_ok:
+            summary = "Reachable directly — no relay needed."
+        elif relay_ok:
+            summary = ("Not reachable directly from this network, but your relay connects you "
+                       "(messages, files and calls all work).")
+        elif not hosts:
+            summary = ("No address known for this contact yet. Meet once on the same Wi-Fi or "
+                       "VPN, or set up a relay (Settings → Network).")
+        else:
+            tips = [
+                "If one of you is on a VPN and the other on the home Wi-Fi: the VPN must include "
+                "the home network (WireGuard AllowedIPs, e.g. 10.0.100.0/24, 192.168.1.0/24).",
+                "Both devices need the same TCP peer port (Settings → Network → More options).",
+            ]
+            if not relay_known:
+                tips.append("To stay in touch from any network, run a relay and paste its code in "
+                            "Settings → Network on one device.")
+            else:
+                tips.append("Your relay isn't connected right now — check Settings → Network.")
+            summary = "Can't reach this contact right now. " + " ".join(tips)
+        return {
+            "hash_id": hash_id,
+            "path": path,
+            "addresses": results,
+            "relay": {"configured": relay_known, "connected": relay_ok},
+            "my_addresses": self.local_candidates(),
+            "summary": summary,
+        }
