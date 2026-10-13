@@ -27,12 +27,18 @@ or **RELAY**.
 **Both phones on the same Wi-Fi or the same VPN.** Works out of the box. Pair
 once (QR, code or NFC) and you're done.
 
-**One phone on the VPN, the other on the home Wi-Fi.** Works directly, if the
-VPN can reach the home network. For a home WireGuard server, that means
-the phone's `AllowedIPs` include the home LAN, for example
-`10.0.100.0/24, 192.168.1.0/24`. The two phones tell each other their
-addresses (LAN and VPN) inside the encrypted session, so neither has to type
-anything. If the VPN can't reach the LAN, they use the relay.
+**One phone on the VPN, the other on the home Wi-Fi.** Works directly, as long
+as the VPN can reach the home network. For a home WireGuard server, that means
+the VPN phone's `AllowedIPs` include the home LAN, for example
+`10.0.100.0/24, 192.168.1.0/24`. The two phones tell each other their addresses
+(LAN and VPN) inside the encrypted session, so neither has to type anything.
+
+It's fine if only the VPN phone can open the connection. That's common when
+WireGuard runs on a separate box and the home LAN can't reach VPN addresses. The
+VPN phone dials in as soon as the VPN connects, then every 30 s for the first few
+minutes, and anything the home phone queued is delivered then. If the VPN can't
+reach the LAN at all, the phones use the relay. *Check connection* (in Edit
+contact) shows which case you're in.
 
 **Two different networks (friend's house, mobile data), no port forwarding.**
 1. Run a relay on any server with a public address, for example a cheap VPS
@@ -142,6 +148,7 @@ You normally never touch these, because the app learns addresses by itself.
 
 | Symptom | Check |
 |---|---|
+| Not sure why a contact won't connect | *Edit contact* → **Check connection**: it tries every address the app knows for them and tells you what works and what to change. |
 | Contact always shows **relay**, never direct | Normal on mobile data (carrier NAT). On home networks, make sure *Direct internet connections* is on for both phones. Some routers block hole punching. |
 | VPN phone can't reach the home phone directly | The VPN client's `AllowedIPs` must include the home LAN, and the WireGuard server must route or NAT to the LAN. |
 | "Relay unreachable" | Is the server up, TCP 7827 open on its firewall, and the code pasted correctly? |

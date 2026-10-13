@@ -1,4 +1,4 @@
-# Security audit and penetration test (v0.6.0)
+# Security audit and penetration test (v0.6.1)
 
 Scope: the whole app — local web UI/API, peer protocol, file transfers and shared
 folders, discovery, pairing, group chats, the local call relay, the Android
@@ -35,7 +35,8 @@ non-zero on any FAIL.
 
 ## Results — app surfaces (`pentest_local.py`)
 
-**58 PASS, 0 FAIL** after fixes (first run: 57 PASS, 1 FAIL).
+**65 PASS, 0 FAIL** after fixes (0.5.0 first run: 57 PASS, 1 FAIL; 0.6.1 added
+7 attacks on password-protected shares).
 
 | Area | Attacks | Result |
 |---|---|---|
@@ -43,6 +44,7 @@ non-zero on any FAIL.
 | Peer TCP port | every session message type before a handshake (with and without a fake ENCRYPTED flag), malformed/short/unknown frames, hash/key mismatch, pinned-key mismatch, blocked peer, connection cap, handshake deadline | defended |
 | Untrusted but valid identity | FILE_OFFER, SHARE_REQUEST, CALL_SIGNAL, GROUP_TEXT | no side effects; one contact request |
 | Malicious trusted contact | filenames with `../`, absolute, `..\`, NUL; chunk replay onto the sender's own file; offset beyond size; SHA mismatch; share fetch traversal and symlink escape; forged group message | defended |
+| Shares (0.6.1) | open a password share without / with a wrong password, fetch with a wrong password, password brute force, another contact using someone's grant (even claiming their id), 1100-offer flood with huge labels; password at rest, file permissions | defended: nothing listed or sent; locked after 5 tries for 10 min; grants bound to the authenticated identity; offers capped at 1000, labels 128 chars; only a salted scrypt hash in an owner-only `shares.json` |
 | UDP discovery | bad/tampered signatures, non-JSON, address redirect via self-reported host, replayed announce, oversized datagrams, **announce flood** | flood was a FAIL — fixed |
 | Pairing cards | tampered, malformed, oversized, own identity, token reuse/expiry | defended |
 | Local call relay (TURN) | allocation without credentials, packets from non-local addresses, forwarding to anyone but the call's peer | defended |
@@ -95,6 +97,28 @@ Hardening applied from the INFO notes:
   endpoint; this removes the "make the phone probe an internal address" angle.
 - A contact can change its relay details at most once a minute, so a malicious
   contact can't turn RENDEZVOUS floods into constant contact-file rewrites.
+
+### 0.6.1: findings and fixes
+
+1. **Handshake race garbled sessions (availability, fixed).** A second connect
+   request while a handshake was in flight (an automatic reconnect plus sending a
+   message) sent a second handshake on the same connection; the two sides derived
+   different keys and every message failed to decrypt until the link timed out.
+   No confidentiality impact (messages failed closed), but contacts looked
+   disconnected. Now the first handshake finishes; regression tests cover it.
+2. **Experimental Noise XX setting removed.** A device set to it couldn't talk to
+   any default device. Everyone uses the audited identity handshake (v4
+   recipient binding); a saved `noise_xx` is ignored.
+3. **QR pairing tokens.** The scanned device keeps the one-time tokens it showed
+   (15-minute validity, single use) as SHA-256 hashes in an owner-only file, so
+   pairing completes both ways after a restart; the scanner keeps the token to
+   send back in the owner-only contacts file until delivered. An expired or
+   reused token still only produces a contact request the user must accept.
+4. **Shares.** New password option (salted scrypt, sent only inside the E2EE
+   session, lockout), offers to offline contacts, persistence — attacked as in
+   the table above.
+5. **Deleted contacts.** Their one-to-one history is purged 24 hours after
+   deletion unless they are added back.
 
 ### Direct connections (0.6.0): findings and fixes
 
