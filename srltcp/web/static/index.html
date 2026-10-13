@@ -175,7 +175,7 @@
 </label>
 </div>
 <div class="settings-panel" data-panel="network">
-<p class="hint">Most people never need to change anything here. SRLTCP picks the best path by itself: same Wi-Fi or VPN first, then a direct internet connection, then your relay.</p>
+<p class="hint">Most people never need to change anything here. SRLTCP picks the best path by itself: same Wi-Fi or VPN first, then a direct internet connection, then your relay, then Tor.</p>
 <fieldset class="relay-settings">
 <legend>Over the internet</legend>
 <label class="field checkbox-field">
@@ -193,6 +193,12 @@
 </label>
 <small class="field-hint">Connects straight through both routers, no port forwarding. Your public IP address is shared only with your contacts, inside the encrypted connection. Off = relay only: contacts never see your IP.</small>
 <div class="relay-status" id="relay-status" aria-live="polite"></div>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-tor-enabled" />
+<span>Reach contacts anywhere over Tor</span>
+</label>
+<small class="field-hint">No server and no port forwarding needed: works from any Wi-Fi or mobile network. Used only when there's no faster path. Only your trusted contacts get your Tor address (inside the encrypted connection), and only they can connect through it; over Tor your contacts don't see your IP address. Both of you need it on. Tor is built into the Android app; on a PC install Tor Browser.</small>
+<div class="relay-status" id="tor-status" aria-live="polite"></div>
 <small class="field-hint">The relay only forwards sealed, padded packets: it can't read messages, see names or who you talk to, or fake anything. See the Networking guide in the docs for details.</small>
 </fieldset>
 <fieldset class="relay-settings">
@@ -230,14 +236,19 @@
 <span>Use exact ports (fail if busy instead of trying the next free one)</span>
 </label>
 <label class="field">
-<span>External call relay (normally not needed)</span>
-<input type="text" id="set-stun" placeholder="Leave empty" spellcheck="false" />
-<small>Calls already travel inside SRLTCP's encrypted connection wherever messages do. Only a fallback: a STUN/TURN URL such as <code>turn:host:3478</code>.</small>
+<span>External call relay — TURN/STUN server (leave empty)</span>
+<input type="text" id="set-stun" placeholder="Leave empty — calls already work without it" spellcheck="false" />
+<small>You don't need this: voice and video calls travel inside SRLTCP's own encrypted connection, so they work wherever messages work (Wi-Fi, VPN, relay, Tor). Only fill it in if you run your own TURN server (for example coturn) and want calls to use it as a last resort: enter its address like <code>turn:your.server:3478</code>, then the username and password you configured on that server. Calls stay end-to-end encrypted (DTLS-SRTP); the server only sees encrypted traffic and both IP addresses.</small>
 </label>
-<div class="field-row">
+<div class="field-row" id="turn-credentials">
 <label class="field grow"><span>TURN username</span><input type="text" id="set-turn-user" autocomplete="off" spellcheck="false" /></label>
 <label class="field grow"><span>TURN password</span><input type="password" id="set-turn-pass" autocomplete="new-password" /></label>
 </div>
+<label class="field">
+<span>Tor program (PC only, optional)</span>
+<input type="text" id="set-tor-path" placeholder="Found automatically (Tor Browser, Tor Expert Bundle, or tor on PATH)" spellcheck="false" />
+<small>Full path to tor.exe if it's somewhere unusual, e.g. <code>C:\Tor\tor\tor.exe</code>.</small>
+</label>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-wan-expose" />
 <span>I port-forward TCP 7825 on my router (old manual setup; not needed with the relay)</span>

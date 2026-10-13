@@ -46,7 +46,7 @@ PUNCH_ATTEMPT_TIMEOUT = 1.5
 PUNCH_FOLLOWER_DELAY = 1.0  # the answering side starts dialing a moment later
 PUNCH_ANSWER_EVERY = 30.0  # a contact can start at most one round this often
 PUNCH_RETRY_EVERY = 120.0  # while on the relay
-PUNCH_BACKOFF = 300.0  # after a failed round
+PUNCH_BACKOFF = (30.0, 60.0, 120.0, 300.0)  # after 1, 2, 3, 4+ failed rounds
 MAX_CANDIDATES = 6
 
 
@@ -110,6 +110,7 @@ class PunchMixin:
         self._punch_offered: dict[str, float] = {}
         self._punch_answered: dict[str, float] = {}
         self._punching: set[str] = set()
+        self._punch_failures: dict[str, int] = {}
         self._last_public: list[tuple[str, int]] = []
 
     # ── Our addresses ──
@@ -257,7 +258,7 @@ class PunchMixin:
             if theirs and time.monotonic() - offered < 15.0:
                 asyncio.create_task(self._punch(hash_id, theirs, leader=True))
             elif not theirs:
-                self._punch_next[hash_id] = time.monotonic() + PUNCH_BACKOFF
+                self._punch_next[hash_id] = time.monotonic() + PUNCH_BACKOFF[-1]
 
     async def _punch(
         self: MessagingBackend, hash_id: str, targets: list[tuple[str, int]], *, leader: bool
@@ -273,10 +274,14 @@ class PunchMixin:
                 targets, port, delay=0.0 if leader else PUNCH_FOLLOWER_DELAY
             )
             if not peer_id:
-                log.info("No direct path through the NATs to %s — staying on the relay",
-                         hash_id[:8])
-                self._punch_next[hash_id] = time.monotonic() + PUNCH_BACKOFF
+                fails = self._punch_failures.get(hash_id, 0)
+                self._punch_failures[hash_id] = fails + 1
+                wait = PUNCH_BACKOFF[min(fails, len(PUNCH_BACKOFF) - 1)]
+                log.info("No direct path through the NATs to %s — staying on the relay "
+                         "(next try in %d s)", hash_id[:8], wait)
+                self._punch_next[hash_id] = time.monotonic() + wait
                 return
+            self._punch_failures.pop(hash_id, None)
             log.info("Punched a direct connection to %s", hash_id[:8])
             if not leader:
                 # The leader opens the session on this connection; take over

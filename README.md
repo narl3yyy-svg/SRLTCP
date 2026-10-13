@@ -16,6 +16,7 @@
 | **Dual transports** | TCP/IP networking + USB Serial (pyserial) |
 | **P2P mode** | Direct encrypted links between peers on LAN or serial cable |
 | **Internet relay** | Paired contacts keep talking with the VPN off or on different networks; automatic switching between direct and relay; the relay is blind (TLS + pinned cert, rotating mailboxes, second encryption layer, padding) |
+| **Tor (no server needed)** | Reach trusted contacts from any network without a server or port forwarding: each device publishes a private onion service that only its contacts can use. Bundled on Android; uses Tor Browser's Tor on a PC |
 | **Direct across networks** | No port forwarding: one phone on the VPN and one on the home Wi-Fi connect directly, and two home networks connect directly through both routers (hole punching). Addresses are exchanged only inside the encrypted session; the relay steps in when a network doesn't allow it |
 | **Secure messaging** | Ed25519 identity + authenticated X25519 key exchange + AES-256-GCM with replay protection |
 | **Fast file transfer** | Chunked streaming (1 MiB TCP / 8 KiB serial), zstd on TCP, resume support |
@@ -308,6 +309,8 @@ Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data has 
 3. From then on the phones use a **direct** path whenever one works and the **relay** otherwise — VPN off, different carriers, Wi-Fi to mobile data. Moving to the relay takes a few seconds (3 s in our test); when a direct path comes back they move back within about a minute. Messages, files, voice and video calls all work over the relay. The chat header shows **DIRECT** or **RELAY**.
 
 **Direct without port forwarding.** One phone on the VPN and the other on the home Wi-Fi connect directly (the phones tell each other their LAN and VPN addresses inside the encrypted session). Two phones on *different home networks* also connect directly through both routers: with *Settings → Network → Try direct internet connections* on (default), they use the relay to agree on a moment and dial each other at once (hole punching) — in our simulation the direct connection was up 10 s after they met on the relay, with routers that ignore or reset unexpected connections alike. This shares your public IP address with your contacts only; turn it off to keep every internet connection on the relay. Carrier-grade NAT on mobile data usually prevents it; the relay then simply carries on.
+
+**No server, no port forwarding: Tor.** With *Settings → Network → Reach contacts anywhere over Tor* on (default) on both devices, they reach each other from any network through the Tor network: phone on mobile data, PC on a VPN, a friend's Wi-Fi. No relay and nothing to configure on any router. Each device publishes a private onion service; its address goes only to trusted contacts (inside the encrypted connection), and only trusted contacts can connect through it. Tor is built into the Android app; on a PC install [Tor Browser](https://www.torproject.org/download/) (SRLTCP starts its Tor by itself). Tor is used only when there's no faster path, and the app moves back to a direct path when one appears. Tested on a private Tor network (`scripts/tor_testnet.sh` + `scripts/simulate_tor.py`).
 
 Every setting explained, plus common setups and troubleshooting: **[docs/NETWORKING.md](docs/NETWORKING.md)**.
 

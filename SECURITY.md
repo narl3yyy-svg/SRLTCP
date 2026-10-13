@@ -69,6 +69,7 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 | **LAN / VPN direct** | Whenever it works (always tried first) | No |
 | **Direct across networks (hole punching)** | Two networks whose routers allow it, with *Try direct internet connections* on; addresses exchanged only inside the E2EE session, connection authenticated by the signed handshake | No (dials out only) |
 | **Internet relay** | Automatically when there's no direct path | Only on the relay server (TCP 7827) |
+| **Tor onion service** | When nothing faster works; between mutually trusted contacts only (onion address shared inside the E2EE session; Tor connections from non-contacts refused) | No |
 | **Direct WAN** | Advanced: you forward TCP 7825 | Yes, on the reachable peer |
 
 ### Threat assumptions

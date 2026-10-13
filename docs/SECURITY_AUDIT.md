@@ -1,4 +1,4 @@
-# Security audit and penetration test (v0.6.1)
+# Security audit and penetration test (v0.7.0)
 
 Scope: the whole app — local web UI/API, peer protocol, file transfers and shared
 folders, discovery, pairing, group chats, the local call relay, the Android
@@ -15,6 +15,8 @@ on real WireGuard in network namespaces.
 .venv/bin/python scripts/pentest/pentest_relay.py   # internet relay
 sudo bash scripts/simulate_internet.sh              # VPN off/on, relay, calls
 sudo bash scripts/simulate_nat.sh                   # two NATs, punching, VPN + LAN
+bash scripts/tor_testnet.sh start /tmp/tornet        # private Tor network (offline)
+SRLTCP_TOR_EXTRA_TORRC=/tmp/tornet/client.torrc .venv/bin/python scripts/simulate_tor.py
 .venv/bin/python -m pytest -q                        # includes relay attack tests
 ```
 
@@ -97,6 +99,26 @@ Hardening applied from the INFO notes:
   endpoint; this removes the "make the phone probe an internal address" angle.
 - A contact can change its relay details at most once a minute, so a malicious
   contact can't turn RENDEZVOUS floods into constant contact-file rewrites.
+
+### 0.7.0: Tor onion transport
+
+New attack surface: an onion service per device, Tor SOCKS dialing, and the
+onion address in RENDEZVOUS. Design and checks (private Tor network on
+127.0.0.1, `scripts/simulate_tor.py`, plus `tests/test_tor.py`):
+
+| Attacker | Attempt | Result |
+|---|---|---|
+| Stranger who learns the onion address | connect over Tor, handshake with a valid identity | refused before a session or contact request exists (onion listener is separate and loopback-only; Tor connections require a trusted identity) |
+| Malicious trusted contact | send a junk / non-v3 / bad-checksum / injection string as `"o"` | not stored (v3 address with version byte and checksum verified) |
+| Anyone on the Tor path | read or alter traffic | sees only the SRLTCP E2EE session inside Tor's own encryption; impersonation needs the contact's pinned identity key |
+| Network observer / ISP | learn who talks to whom | sees Tor use only; contacts don't learn each other's IP; one circuit per contact (SOCKS isolation) |
+| Local apps on the device | use our onion listener / control port | onion listener on 127.0.0.1 accepts only trusted identities; Tor control port is cookie-authenticated with an owner-only cookie; onion key stored 0600 |
+
+Other notes: turning Tor off tells contacts first (they drop the address);
+the onion address persists across restarts; a Tor session upgrades to a
+direct path when one appears and the Tor connection is closed. Android bundles
+tor-android 0.4.9.5. That's the newest build this toolchain can package; newer
+ones need compileSdk 37. Update it when the Android toolchain moves.
 
 ### 0.6.1: findings and fixes
 

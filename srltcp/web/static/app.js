@@ -544,11 +544,13 @@
             if (existing) {
               existing.handshake_complete = true;
               existing.transport = data.transport;
+              existing.address = data.address || "";
             } else {
               state._lastLinks.push({
                 hash_id: data.hash_id,
                 handshake_complete: true,
                 transport: data.transport,
+                address: data.address || "",
               });
             }
           }
@@ -751,6 +753,24 @@
       ? rows.join("\n")
       : "No relay yet: paste a code here, or a contact with one shares it automatically.";
     el.className = `relay-status ${(relay.relays || []).some((r) => r.connected) ? "ok" : ""}`;
+  }
+
+  /* Settings → Network: Tor. */
+  function renderTorStatus(tor) {
+    const el = $("#tor-status");
+    if (!el || !tor) return;
+    let text = "";
+    let ok = false;
+    if (!tor.enabled) text = "Off.";
+    else if (tor.state === "ready") {
+      ok = true;
+      text = "Tor: connected. Your contacts can reach you from any network.";
+    } else if (tor.state === "starting") text = `Tor: connecting to the Tor network… ${tor.progress || 0}%`;
+    else if (tor.state === "unavailable") text = `Tor: ${tor.detail || "not available"}`;
+    else if (tor.state === "error") text = `Tor: problem — ${tor.detail || "retrying"}`;
+    else text = "Tor: starting…";
+    el.textContent = text;
+    el.className = `relay-status ${ok ? "ok" : ""}`;
   }
 
   /* ── Group chats ── */
@@ -1677,10 +1697,12 @@
       return;
     }
     const transport = activeLinkTransport(hashId);
-    const label = transport === "serial" ? "SERIAL" : transport === "relay" ? "RELAY" : "DIRECT";
+    const onTor = transport === "tcp" && isTorAddress(activeLinkForPeer(hashId)?.address);
+    const label = transport === "serial" ? "SERIAL" : transport === "relay" ? "RELAY" : onTor ? "TOR" : "DIRECT";
     badge.textContent = label;
     badge.title = transport === "relay"
       ? "Through your internet relay (it can't read anything). Switches to direct when possible."
+      : onTor ? "Over Tor: works on any network; neither of you sees the other's IP address. Switches to direct when possible."
       : transport === "serial" ? "Serial / radio link" : "Direct connection, no server in between";
     badge.className = `transport-badge header-badge ${transport}`;
     badge.removeAttribute("aria-hidden");
@@ -2415,6 +2437,8 @@
     setCheckbox("set-relay-enabled", settings.relay_enabled !== false);
     setInputValue("set-relay-code", settings.relay_code || "");
     setCheckbox("set-direct-internet", settings.direct_internet !== false);
+    setCheckbox("set-tor-enabled", settings.tor_enabled !== false);
+    setInputValue("set-tor-path", settings.tor_path || "");
     setCheckbox("set-wan-expose", !!settings.wan_expose_port);
     setCheckbox("set-enable-serial", !!settings.enable_serial);
     loadSerialSettings(settings.serial_port || "", settings.serial_baud || 57600);
@@ -2424,6 +2448,7 @@
     setSelectValue("set-clock-source", settings.clock_source || "system");
     setInputValue("set-ntp-server", settings.ntp_server || "pool.ntp.org");
     setInputValue("set-stun", settings.call_stun_server || "");
+    document.dispatchEvent(new Event("srltcp-settings-loaded"));
     setInputValue("set-turn-user", settings.call_turn_username || "");
     setInputValue("set-turn-pass", settings.call_turn_password || "");
     toggleNtpField();
@@ -2746,6 +2771,7 @@
         : "TCP transport unavailable — restart the node";
     }
     renderRelayStatus(transportStatus.relay);
+    renderTorStatus(transportStatus.tor);
 
     const serialBtn = $("#btn-announce-serial");
     if (serialBtn) {
@@ -3213,9 +3239,13 @@
     }
   }
 
+  function isTorAddress(address) {
+    return (address || "").includes(".onion") || address === "tor";
+  }
+
   function pathLabel(transport, address) {
     if (transport === "relay") return "through your relay";
-    if ((address || "").includes(".onion")) return "over Tor";
+    if (isTorAddress(address)) return "over Tor";
     return "directly";
   }
 
@@ -4161,6 +4191,8 @@
       relay_enabled: $("#set-relay-enabled")?.checked ?? true,
       relay_code: ($("#set-relay-code")?.value || "").trim(),
       direct_internet: $("#set-direct-internet")?.checked ?? true,
+      tor_enabled: $("#set-tor-enabled")?.checked ?? true,
+      tor_path: ($("#set-tor-path")?.value || "").trim(),
       wan_expose_port: $("#set-wan-expose")?.checked || false,
       handshake_protocol: "identity",
       enable_serial: $("#set-enable-serial")?.checked || false,
@@ -4348,6 +4380,14 @@
   $("#btn-share-folder")?.addEventListener("click", () => openShareModal("offer"));
   $("#share-close")?.addEventListener("click", closeShareModal);
   $("#share-submit")?.addEventListener("click", submitShare);
+  // TURN username/password only mean something with a TURN server address.
+  const syncTurnFields = () => {
+    const url = ($("#set-stun")?.value || "").trim();
+    $("#turn-credentials")?.classList.toggle("hidden", !url.startsWith("turn"));
+  };
+  $("#set-stun")?.addEventListener("input", syncTurnFields);
+  document.addEventListener("srltcp-settings-loaded", syncTurnFields);
+  setTimeout(syncTurnFields, 0);
   $("#edit-contact-check")?.addEventListener("click", async () => {
     const hashId = state.editContactTarget;
     const out = $("#edit-contact-check-result");
