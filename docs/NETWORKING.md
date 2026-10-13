@@ -24,8 +24,8 @@ same goes for Tor).
 The badge in the chat header shows which path a contact is on: **DIRECT**,
 **RELAY** or **TOR**. When a contact drops off (for example they leave the
 Wi-Fi), the chat says so within about 30 seconds, then shows "Connected again"
-once the app has found another path. Messages you send meanwhile wait and go out
-automatically.
+once the app has found another path. Messages and files you send meanwhile wait
+and go out automatically.
 
 **Why "public addresses" alone don't connect two networks.** Two devices on
 different networks can't find each other without a meeting point: something both

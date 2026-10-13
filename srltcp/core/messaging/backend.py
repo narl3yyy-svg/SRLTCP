@@ -391,6 +391,7 @@ class MessagingBackend(
                 if stale and not link_name:
                     link_name = stale.peer_name
                 self._pending_handshakes.pop(link_hash, None)
+                await self._pause_outgoing_for_peer(link_hash)
                 if self.has_active_transfer_for(link_hash):
                     await self._recover_incoming_transfers_for_peer(link_hash)
                 transfer_active = self.has_active_transfer_for(link_hash)
@@ -792,7 +793,8 @@ class MessagingBackend(
 
     def retry_outbox_connections(self) -> None:
         """Dial contacts we still owe messages to (no-op when already linked)."""
-        for hash_id in self.peers_with_undelivered() | self.peers_owed_group_messages():
+        owed = self.peers_with_undelivered() | self.peers_owed_group_messages()
+        for hash_id in owed | self.peers_with_queued_files():
             if not self.is_trusted(hash_id):
                 continue
             link = self.get_link(hash_id)
@@ -1204,28 +1206,36 @@ class MessagingBackend(
         link = self.get_link(recipient_hash)
         effective_transport = link.transport if link else transport
         if not link or not link.handshake_complete:
-            await self.connect_to_peer(
-                recipient_hash, transport=effective_transport, force=False
+            # No session right now (other network, Tor still connecting, phone
+            # asleep): queue the file like a message and dial in the
+            # background. It is offered as soon as the session is up (the
+            # handshake resumes queued transfers), without holding this
+            # request open for a slow Tor dial.
+            transfer = await self.queue_file(
+                recipient_hash, path, transport=effective_transport, filename=filename
             )
-            await self.wait_for_handshake(recipient_hash, timeout=10.0)
             link = self.get_link(recipient_hash)
-        if not link or not link.handshake_complete:
-            log.warning("No active link to %s for file send", recipient_hash[:8])
-            return None
-        transfer = await self.offer_file(
-            recipient_hash,
-            path,
-            transport=link.transport,
-            filename=filename,
-        )
+            if link and link.handshake_complete:
+                await self.resume_transfer(transfer.id)  # came up while hashing
+            else:
+                self._kick_connect(recipient_hash)
+            link_transport = effective_transport
+        else:
+            transfer = await self.offer_file(
+                recipient_hash,
+                path,
+                transport=link.transport,
+                filename=filename,
+            )
+            link_transport = link.transport
         if not transfer:
             return None
         data = transfer.to_dict()
-        identity = self._identity_for_transport(link.transport)
+        identity = self._identity_for_transport(link_transport)
         await self._append_file_message(
             sender_hash=identity.hash_id,
             recipient_hash=recipient_hash,
-            transport=link.transport,
+            transport=link_transport,
             transfer=data,
             direction="out",
         )

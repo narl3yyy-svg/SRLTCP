@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 
 def _validate_path(path_str: str, *, must_exist: bool = False) -> Path | None:
-    if not path_str or ".." in path_str:
+    if not path_str or ".." in Path(path_str).parts:
         return None
     try:
         p = Path(path_str).expanduser().resolve()
@@ -335,18 +335,26 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response({"error": "file field required"}, status=400)
         from srltcp.utils.files import safe_filename
 
-        filename = safe_filename(field.filename or "upload.bin")
+        # Never "." / ".." or a hidden name: those would escape or hide in
+        # the uploads folder.
+        filename = safe_filename(field.filename or "upload.bin").lstrip(".") or "upload.bin"
         dest = upload_dir / filename
         if dest.exists():
             stem = dest.stem
             suffix = dest.suffix
             dest = upload_dir / f"{stem}_{int(time.time())}{suffix}"
-        with dest.open("wb") as f:
-            while True:
-                chunk = await field.read_chunk()
-                if not chunk:
-                    break
-                f.write(chunk)
+        try:
+            with dest.open("wb") as f:
+                while True:
+                    chunk = await field.read_chunk()
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        except OSError as exc:
+            dest.unlink(missing_ok=True)
+            log.warning("Upload of %s failed: %s", filename, exc)
+            reason = "device storage is full" if exc.errno == 28 else "could not save the file"
+            return web.json_response({"error": f"Upload failed: {reason}"}, status=507)
         return web.json_response(
             {"path": str(dest), "filename": filename, "size": dest.stat().st_size}
         )

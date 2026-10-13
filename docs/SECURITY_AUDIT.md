@@ -1,4 +1,4 @@
-# Security audit and penetration test (v0.7.1)
+# Security audit and penetration test (v0.7.2)
 
 Scope: the whole app — local web UI/API, peer protocol, file transfers and shared
 folders, discovery, pairing, group chats, the local call relay, the Android
@@ -37,8 +37,8 @@ non-zero on any FAIL.
 
 ## Results — app surfaces (`pentest_local.py`)
 
-**65 PASS, 0 FAIL** after fixes (0.5.0 first run: 57 PASS, 1 FAIL; 0.6.1 added
-7 attacks on password-protected shares).
+**66 PASS, 0 FAIL** after fixes (0.5.0 first run: 57 PASS, 1 FAIL; 0.6.1 added
+7 attacks on password-protected shares; 0.7.2 added upload-name traversal).
 
 | Area | Attacks | Result |
 |---|---|---|
@@ -130,6 +130,28 @@ the onion address persists across restarts; a Tor session upgrades to a
 direct path when one appears and the Tor connection is closed. Android bundles
 tor-android 0.4.9.5. That's the newest build this toolchain can package; newer
 ones need compileSdk 37. Update it when the Android toolchain moves.
+
+### 0.7.2: findings and fixes
+
+- **Stuck file offer disabled dead-link detection (availability, medium).**
+  An outgoing offer that was never answered (lost when the link dropped)
+  stayed "offered" forever. Offered transfers count as active, and active
+  transfers suspend pings, the dead-link reaper and reconnects for that
+  contact, so the session stayed half-open: later messages and files were
+  written into a dead socket. A peer could also cause this on purpose by
+  never answering offers. Fixed: an unanswered offer is resent once after
+  30 s, then the transfer is queued (paused) and stops counting as active.
+  When the link goes down, pending outgoing offers are queued as well.
+- **Upload file names (low).** Upload names are now stripped of leading dots,
+  so `.`, `..` and hidden names can't be created in `uploads/`. The transfer
+  path check rejected any path containing `..` as a substring, which broke
+  names like `report..v2.pdf`; it now rejects only real `..` path parts,
+  which still blocks traversal. A new pentest check uploads `..`, `.`,
+  `../../evil.txt`, `..\..\evil.txt`, `.hidden` and `/etc/x` and confirms
+  each lands inside `uploads/` as a visible file.
+- Queued files are offered only over an authenticated session with the
+  trusted recipient, the same as before. Nothing is sent before the
+  handshake.
 
 ### 0.6.1: findings and fixes
 

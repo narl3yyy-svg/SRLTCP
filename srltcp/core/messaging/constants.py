@@ -13,6 +13,7 @@ SERIAL_CHUNK_SIZE = 8 * 1024  # 8 KiB — serial/RF links have smaller frames
 SERIAL_CHUNK_DELAY = 0.02  # seconds between serial chunks
 COMPRESS_THRESHOLD = 64 * 1024  # compress payloads >= 64 KiB
 LINK_TIMEOUT = 30.0
+OFFER_TIMEOUT = 30.0  # unanswered file offer: re-offer once, then queue
 TRANSFER_COOLDOWN = 45.0  # seconds to treat link as stable after transfer ends
 PING_INTERVAL = 10.0
 ANNOUNCE_INTERVAL = 5.0
