@@ -2294,7 +2294,6 @@
     setInputValue("set-relay-code", settings.relay_code || "");
     setCheckbox("set-direct-internet", settings.direct_internet !== false);
     setCheckbox("set-wan-expose", !!settings.wan_expose_port);
-    setSelectValue("set-handshake-protocol", settings.handshake_protocol || "identity");
     setCheckbox("set-enable-serial", !!settings.enable_serial);
     loadSerialSettings(settings.serial_port || "", settings.serial_baud || 57600);
     const tzEl = $("#set-timezone");
@@ -4014,7 +4013,7 @@
       relay_code: ($("#set-relay-code")?.value || "").trim(),
       direct_internet: $("#set-direct-internet")?.checked ?? true,
       wan_expose_port: $("#set-wan-expose")?.checked || false,
-      handshake_protocol: $("#set-handshake-protocol")?.value || "identity",
+      handshake_protocol: "identity",
       enable_serial: $("#set-enable-serial")?.checked || false,
       serial_port: $("#set-serial-port")?.value || "",
       serial_baud: parseInt($("#set-serial-baud")?.value || "57600", 10),

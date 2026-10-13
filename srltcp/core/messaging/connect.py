@@ -48,8 +48,11 @@ class ConnectMixin:
         self._last_wan_dial: dict[str, float] = {}
 
     def _handshake_protocol(self: MessagingBackend) -> str:
-        protocol = str(getattr(self.config, "handshake_protocol", "identity")).strip()
-        return protocol if protocol in ("identity", "noise_xx") else "identity"
+        # One protocol for everyone: the identity handshake is the audited one
+        # (recipient-bound v4 signatures, replay checks). The old experimental
+        # Noise XX setting made devices that chose it unable to talk to every
+        # other device, so a saved "noise_xx" is ignored.
+        return "identity"
 
     def _handshake_protocol_from_body(self: MessagingBackend, data: dict[str, object]) -> str:
         protocol = str(data.get("protocol", "identity")).strip()

@@ -43,7 +43,7 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 - **Pair secrets** live in `trusted.json`, written atomically with owner-only permissions, and are never returned by the local API.
 - **Unauthenticated connections** — TCP connections that don't complete a handshake within 30 s are closed, open connections are capped, and frame parsing is linear in the input, so junk traffic can't stall the node.
 - **LAN UDP announces** (port 7826) are signed with the sender's Ed25519 identity key. Receiving peers verify the signature and `hash_id` ↔ `public_key` binding before displaying or trusting a discovered peer. Unsigned or invalid announces are dropped.
-- **Optional Noise XX handshake** — Settings → Network → Handshake protocol. Uses `Noise_XX_25519_ChaChaPoly_SHA256`; session keys are HKDF-derived from the Noise cipher-state keys, and each side signs the handshake hash with its Ed25519 identity (versions before 0.2.0 derived keys from the public handshake hash — do not use them). Both peers must select the same protocol.
+- **One handshake protocol** — the identity handshake above. The experimental Noise XX option was removed in 0.6.1 (a device set to it couldn't connect to devices using the default); a saved `noise_xx` setting is ignored.
 - **Web UI** is served over **HTTPS on localhost only** (self-signed cert generated locally) and every request needs the per-install access token (`~/.srltcp/web_token`, mode 600) — so other apps/users on the device cannot use the API.
 - **Share sessions** use constant-time token comparison; path traversal is blocked on file APIs.
 

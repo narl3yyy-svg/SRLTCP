@@ -230,14 +230,6 @@
 <span>Use exact ports (fail if busy instead of trying the next free one)</span>
 </label>
 <label class="field">
-<span>Handshake protocol</span>
-<select id="set-handshake-protocol">
-<option value="identity">Identity (Ed25519 + X25519) — default</option>
-<option value="noise_xx">Noise XX (experimental)</option>
-</select>
-<small>Both devices must use the same protocol. Leave on the default.</small>
-</label>
-<label class="field">
 <span>External call relay (normally not needed)</span>
 <input type="text" id="set-stun" placeholder="Leave empty" spellcheck="false" />
 <small>Calls already travel inside SRLTCP's encrypted connection wherever messages do. Only a fallback: a STUN/TURN URL such as <code>turn:host:3478</code>.</small>

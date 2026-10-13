@@ -345,7 +345,9 @@ async def test_noise_xx_mode_end_to_end(tmp_path: Path) -> None:
         await b.stop()
 
 
-async def test_protocol_mismatch_does_not_link(tmp_path: Path) -> None:
+async def test_stale_noise_setting_still_links(tmp_path: Path) -> None:
+    """A device with the retired Noise XX setting saved must still connect
+    (it used to be unable to talk to every default device)."""
     a = make_node(tmp_path, "alice", handshake_protocol="noise_xx")
     b = make_node(tmp_path, "bob")
     await a.start()
@@ -354,9 +356,7 @@ async def test_protocol_mismatch_does_not_link(tmp_path: Path) -> None:
         trust(a, b)
         trust(b, a)
         await a.connect_to_peer(b.identities["tcp"].hash_id)
-        await asyncio.sleep(0.5)
-        link = b.get_link(a.identities["tcp"].hash_id)
-        assert link is None or not link.handshake_complete
+        assert await a.wait_for_handshake(b.identities["tcp"].hash_id, timeout=8.0)
     finally:
         await a.stop()
         await b.stop()
