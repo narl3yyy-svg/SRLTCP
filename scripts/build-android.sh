@@ -33,10 +33,10 @@ fi
 
 ./gradlew assembleDebug renameDebugApk
 
-APK="$ROOT/android/app/build/outputs/apk/debug/SRLTCP-"*.apk"
+APK=$(ls "$ROOT"/android/app/build/outputs/apk/debug/SRLTCP-*.apk 2>/dev/null | head -1)
 echo ""
 echo "Build complete:"
-ls -lh $APK 2>/dev/null || ls -lh "$ROOT/android/app/build/outputs/apk/debug/"*.apk
+ls -lh "${APK:-$ROOT/android/app/build/outputs/apk/debug/}"
 echo ""
 echo "Install on a connected device:"
 echo "  adb install -r $APK"

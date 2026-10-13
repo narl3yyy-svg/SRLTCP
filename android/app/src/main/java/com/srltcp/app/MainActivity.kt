@@ -595,6 +595,11 @@ class MainActivity : AppCompatActivity() {
     // ── Call audio: route like a phone call (earpiece / speaker) ──
 
     private var callAudioActive = false
+    private var callSpeakerWanted = false
+    private var callDeviceCallback: android.media.AudioDeviceCallback? = null
+    private val reapplyCallRoute = Runnable {
+        if (callAudioActive) applyCallRoute(getSystemService(AUDIO_SERVICE) as android.media.AudioManager)
+    }
 
     fun setCallAudio(active: Boolean, speaker: Boolean) {
         val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
@@ -602,21 +607,55 @@ class MainActivity : AppCompatActivity() {
             if (!active) {
                 if (!callAudioActive) return
                 callAudioActive = false
+                handler.removeCallbacks(reapplyCallRoute)
+                callDeviceCallback?.let { am.unregisterAudioDeviceCallback(it) }
+                callDeviceCallback = null
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     am.clearCommunicationDevice()
-                } else {
-                    @Suppress("DEPRECATION")
-                    am.isSpeakerphoneOn = false
                 }
+                @Suppress("DEPRECATION")
+                am.isSpeakerphoneOn = false
                 am.mode = android.media.AudioManager.MODE_NORMAL
                 volumeControlStream = android.media.AudioManager.USE_DEFAULT_STREAM_TYPE
                 window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 return
             }
             callAudioActive = true
-            am.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+            callSpeakerWanted = speaker
             volumeControlStream = android.media.AudioManager.STREAM_VOICE_CALL
             window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            applyCallRoute(am)
+            // The WebView's WebRTC audio opens its output stream when the remote
+            // audio starts playing and some phones reset the route then; apply
+            // it again shortly after, and whenever a headset comes or goes.
+            handler.removeCallbacks(reapplyCallRoute)
+            handler.postDelayed(reapplyCallRoute, 700)
+            handler.postDelayed(reapplyCallRoute, 2500)
+            if (callDeviceCallback == null) {
+                val cb = object : android.media.AudioDeviceCallback() {
+                    override fun onAudioDevicesAdded(added: Array<out android.media.AudioDeviceInfo>?) {
+                        handler.postDelayed(reapplyCallRoute, 300)
+                    }
+                    override fun onAudioDevicesRemoved(removed: Array<out android.media.AudioDeviceInfo>?) {
+                        handler.postDelayed(reapplyCallRoute, 300)
+                    }
+                }
+                am.registerAudioDeviceCallback(cb, handler)
+                callDeviceCallback = cb
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Call audio routing failed", e)
+        }
+    }
+
+    /** Earpiece (or headset) vs loudspeaker. Uses setCommunicationDevice on
+     *  Android 12+, falling back to setSpeakerphoneOn where a phone refuses it. */
+    private fun applyCallRoute(am: android.media.AudioManager) {
+        val speaker = callSpeakerWanted
+        try {
+            if (am.mode != android.media.AudioManager.MODE_IN_COMMUNICATION) {
+                am.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val devices = am.availableCommunicationDevices
                 val headset = devices.firstOrNull {
@@ -630,7 +669,14 @@ class MainActivity : AppCompatActivity() {
                 else android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
                 val target = if (!speaker && headset != null) headset
                 else devices.firstOrNull { it.type == wanted }
-                if (target != null) am.setCommunicationDevice(target)
+                val ok = target != null && am.setCommunicationDevice(target) &&
+                    am.communicationDevice?.type == target.type
+                if (!ok) {
+                    Log.w(TAG, "setCommunicationDevice(${target?.type}) refused — using speakerphone switch")
+                    am.clearCommunicationDevice()
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn = speaker
+                }
             } else {
                 @Suppress("DEPRECATION")
                 am.isSpeakerphoneOn = speaker
