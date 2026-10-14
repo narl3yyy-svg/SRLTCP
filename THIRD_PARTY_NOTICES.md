@@ -7,7 +7,7 @@ components under their own licenses:
 |-----------|-------|---------|
 | QR Code Generator for JavaScript 1.4.4 — © 2009 Kazuhiko Arase | `srltcp/web/static/qrcode.js` (vendored, unmodified) | MIT |
 | ZXing Android Embedded 4.3.0 (and ZXing core) | Android app dependency (QR scanner) | Apache-2.0 |
-| aiohttp, cryptography, pyserial, zstandard | Python dependencies | see each project |
+| aiohttp, cryptography, pyserial, zstandard, kyber-py (MIT/Apache-2.0), dilithium-py (MIT) | Python dependencies | see each project |
 | Chaquopy | Android Python runtime | MIT |
 
 "QR Code" is a registered trademark of DENSO WAVE INCORPORATED.

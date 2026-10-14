@@ -61,6 +61,8 @@ chaquopy {
         pip {
             install("aiohttp")
             install("cryptography")
+            install("kyber-py")  // post-quantum ML-KEM (pure Python)
+            install("dilithium-py")  // post-quantum ML-DSA (pure Python)
             install("pyserial")
             install("zstandard")
             install("tzdata")

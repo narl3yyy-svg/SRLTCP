@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
-from dataclasses import dataclass
+import os
+import secrets
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -14,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from srltcp.core.protocol.crypto import identity_hash, public_key_bytes
+from srltcp.core.protocol.pq import DSA_SEED_SIZE, DsaKey
 from srltcp.utils.platform import data_dir
 
 TransportKind = Literal["tcp", "serial"]
@@ -28,6 +32,17 @@ class Identity:
     private_key: Ed25519PrivateKey
     public_key: Ed25519PublicKey
     hash_id: str
+    # Post-quantum signing key (ML-DSA-65) from a random seed of its own:
+    # never derived from the Ed25519 key, which a quantum computer could
+    # recover from the public key.
+    pq_seed: bytes = field(default_factory=lambda: secrets.token_bytes(DSA_SEED_SIZE))
+    _pq: DsaKey | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def pq(self) -> DsaKey:
+        if self._pq is None:
+            self._pq = DsaKey(self.pq_seed)
+        return self._pq
 
     @classmethod
     def generate(cls, name: str, transport: TransportKind) -> Identity:
@@ -74,15 +89,20 @@ class Identity:
             "hash_id": self.hash_id,
             "public_key": self.public_bytes().hex(),
             "private_key": self.private_bytes().hex(),
+            "pq_seed": self.pq_seed.hex(),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, str]) -> Identity:
-        return cls.from_private_bytes(
+        identity = cls.from_private_bytes(
             data["name"],
             data["transport"],  # type: ignore[arg-type]
             bytes.fromhex(data["private_key"]),
         )
+        seed = bytes.fromhex(data.get("pq_seed", ""))
+        if len(seed) == DSA_SEED_SIZE:
+            identity.pq_seed = seed
+        return identity
 
 
 class IdentityStore:
@@ -102,8 +122,11 @@ class IdentityStore:
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             identity = Identity.from_dict(data)
+            changed = "pq_seed" not in data  # identity from before 0.9: add its ML-DSA key
             if name and identity.name != name:
                 identity.name = name
+                changed = True
+            if changed:
                 self.save(identity)
             return identity
         identity = Identity.generate(name, transport)
@@ -111,11 +134,15 @@ class IdentityStore:
         return identity
 
     def save(self, identity: Identity) -> None:
+        # Owner-only and atomic: the file holds the private keys.
         path = self._path(identity.transport)
-        path.write_text(
-            json.dumps(identity.to_dict(), indent=2),
-            encoding="utf-8",
-        )
+        tmp = path.with_suffix(".json.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(identity.to_dict(), f, indent=2)
+        os.replace(tmp, path)
+        with contextlib.suppress(OSError):
+            os.chmod(path, 0o600)
 
     def load(self, transport: TransportKind) -> Identity | None:
         path = self._path(transport)

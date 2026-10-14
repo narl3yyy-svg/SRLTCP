@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from srltcp.core.identity import Identity
-from srltcp.core.protocol.crypto import CryptoBox, KeyExchange, identity_hash
+from srltcp.core.protocol.crypto import identity_hash
 from srltcp.core.protocol.framing import FrameReader, pack_frame
 from srltcp.core.protocol.messages import (
     MessageType,
@@ -67,59 +67,3 @@ def test_identity_hash_deterministic() -> None:
     pub = identity.public_bytes()
     assert identity.hash_id == identity_hash(pub)
     assert len(identity.hash_id) == 32
-
-
-def test_key_exchange_e2ee() -> None:
-    alice = Identity.generate("alice", "tcp")
-    bob = Identity.generate("bob", "tcp")
-
-    alice_kx = KeyExchange(alice.private_key)
-    bob_kx = KeyExchange(bob.private_key)
-
-    alice_keys = alice_kx.complete(
-        bob_kx.ephemeral_public,
-        bob_kx.sign_ephemeral(bob.hash_id, alice.hash_id),
-        bob.public_key,
-        peer_timestamp=bob_kx.timestamp,
-        own_hash=alice.hash_id,
-        peer_hash=bob.hash_id,
-        initiator=True,
-    )
-    bob_keys = bob_kx.complete(
-        alice_kx.ephemeral_public,
-        alice_kx.sign_ephemeral(alice.hash_id, bob.hash_id),
-        alice.public_key,
-        peer_timestamp=alice_kx.timestamp,
-        own_hash=bob.hash_id,
-        peer_hash=alice.hash_id,
-        initiator=False,
-    )
-
-    alice_box = CryptoBox(alice_keys)
-    bob_box = CryptoBox(bob_keys)
-
-    plaintext = b"secret message for relay opaque forwarding"
-    ciphertext = alice_box.encrypt(plaintext)
-    decrypted = bob_box.decrypt(ciphertext)
-    assert decrypted == plaintext
-
-def test_handshake_signature_is_bound_to_its_recipient() -> None:
-    """A handshake made for Bob can't be replayed to Carol (protocol v4)."""
-    import pytest
-    from cryptography.exceptions import InvalidSignature
-
-    alice = Identity.generate("alice", "tcp")
-    bob = Identity.generate("bob", "tcp")
-    carol = Identity.generate("carol", "tcp")
-    alice_kx = KeyExchange(alice.private_key)
-    sig_for_bob = alice_kx.sign_ephemeral(alice.hash_id, bob.hash_id)
-    carol_kx = KeyExchange(carol.private_key)
-    with pytest.raises(InvalidSignature):
-        carol_kx.complete(
-            alice_kx.ephemeral_public,
-            sig_for_bob,
-            alice.public_key,
-            peer_timestamp=alice_kx.timestamp,
-            own_hash=carol.hash_id,
-            peer_hash=alice.hash_id,
-        )

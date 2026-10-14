@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -12,7 +14,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from srltcp.core.messaging.links import PeerLink
 from srltcp.core.messaging.relay import RELAY_PEER_PREFIX, relay_peer_hash
 from srltcp.core.messaging.tor import ONION_VIRTUAL_PORT
-from srltcp.core.protocol.crypto import HANDSHAKE_MAX_SKEW, KeyExchange
+from srltcp.core.protocol import pq
+from srltcp.core.protocol.crypto import HANDSHAKE_MAX_SKEW, KeyExchange, SessionKeys
 from srltcp.core.protocol.messages import MessageType, build_header, decode_payload, encode_payload
 from srltcp.core.protocol.signed import verify_identity_binding
 from srltcp.core.trusted import TrustedPeer
@@ -24,8 +27,32 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
+
+@dataclass(frozen=True)
+class _Hello:
+    """The key-exchange part of a HANDSHAKE / HANDSHAKE_ACK."""
+
+    ephemeral: bytes
+    signature: bytes
+    timestamp: int
+    kem: bytes  # ML-KEM public key (HANDSHAKE) or ciphertext (ACK)
+    pq_public: bytes
+    pq_signature: bytes
+
+
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode("ascii")
+
+
+def _unb64(value: object, size: int) -> bytes:
+    raw = base64.b64decode(str(value), validate=True)
+    if len(raw) != size:
+        raise ValueError("bad length")
+    return raw
+
 PENDING_HANDSHAKE_TTL = 15.0
-HANDSHAKE_VERSION = 5  # v5: windowed file transfers (FILE_ACK), Tor lanes
+HANDSHAKE_VERSION = 6  # v6: hybrid post-quantum (X25519+ML-KEM-768, Ed25519+ML-DSA-65)
+# v5: windowed file transfers (FILE_ACK), Tor lanes
 # v4: signature names the recipient (no cross-node replay)
 
 
@@ -623,7 +650,8 @@ class ConnectMixin:
         if not link:
             return
         identity = self._identity_for_transport(link.transport)
-        kx = KeyExchange(identity.private_key)
+        kx = KeyExchange(identity.private_key, identity.pq)
+        kx.start_kem()
         self._pending_handshakes[hash_id] = kx
         packet = self._identity_hello(MessageType.HANDSHAKE, kx, link.transport, hash_id)
         await self._send_raw(link.transport_peer_id, link.transport, packet)
@@ -640,6 +668,9 @@ class ConnectMixin:
                 "ephemeral": kx.ephemeral_public.hex(),
                 "timestamp": kx.timestamp,
                 "signature": kx.sign_ephemeral(identity.hash_id, peer_hash).hex(),
+                "kem": _b64(kx.kem_sent),
+                "pq_public": _b64(kx.pq_public),
+                "pq_signature": _b64(kx.sign_pq(identity.hash_id, peer_hash)),
             }
         )
         return build_header(kind, body=body)
@@ -650,7 +681,8 @@ class ConnectMixin:
         """Open a session on a new direct connection while the relay session
         keeps working; it replaces the relay link only once it's proven."""
         identity = self._identity_for_transport("tcp")
-        kx = KeyExchange(identity.private_key)
+        kx = KeyExchange(identity.private_key, identity.pq)
+        kx.start_kem()
         try:
             await self._send_raw(
                 peer_id, "tcp", self._identity_hello(MessageType.HANDSHAKE, kx, "tcp", hash_id)
@@ -661,7 +693,7 @@ class ConnectMixin:
         return kx
 
     @staticmethod
-    def _parse_identity_kx(data: dict[str, object]) -> tuple[bytes, bytes, int] | None:
+    def _parse_identity_kx(data: dict[str, object], *, ack: bool) -> _Hello | None:
         if data.get("version") != HANDSHAKE_VERSION:
             log.warning("Handshake from an older SRLTCP version — both devices must be updated")
             return None
@@ -669,11 +701,42 @@ class ConnectMixin:
             eph = bytes.fromhex(str(data["ephemeral"]))
             sig = bytes.fromhex(str(data["signature"]))
             ts = int(data["timestamp"])  # type: ignore[call-overload]
+            kem = _unb64(data["kem"], pq.KEM_CIPHERTEXT_SIZE if ack else pq.KEM_PUBLIC_SIZE)
+            pq_public = _unb64(data["pq_public"], pq.DSA_PUBLIC_SIZE)
+            pq_signature = _unb64(data["pq_signature"], pq.DSA_SIGNATURE_SIZE)
         except (KeyError, ValueError, TypeError):
             return None
         if len(eph) != 32 or len(sig) != 64:
             return None
-        return eph, sig, ts
+        return _Hello(eph, sig, ts, kem, pq_public, pq_signature)
+
+    @staticmethod
+    def _complete_kx(
+        kx: KeyExchange, hello: _Hello, ed_pub: Ed25519PublicKey, own_hash: str, peer_hash: str
+    ) -> SessionKeys:
+        return kx.complete(
+            hello.ephemeral, hello.signature, ed_pub,
+            peer_timestamp=hello.timestamp, own_hash=own_hash, peer_hash=peer_hash,
+            peer_kem=hello.kem, peer_pq_public=hello.pq_public,
+            peer_pq_signature=hello.pq_signature,
+        )
+
+    def _pq_key_ok(self: MessagingBackend, remote_hash: str, pq_public: bytes) -> bool:
+        """Pin a contact's post-quantum identity key the first time we see it;
+        a different key later is refused (someone else using their name)."""
+        peer = self.trusted.get(remote_hash)
+        if peer is None:
+            return True  # not a contact: nothing pinned (contact requests only)
+        pinned = getattr(peer, "pq_key", "")
+        if not pinned:
+            self.trusted.update(remote_hash, pq_key=pq_public.hex())
+            return True
+        if pinned == pq_public.hex():
+            return True
+        log.warning(
+            "%s presented a different post-quantum identity key — refused", remote_hash[:8]
+        )
+        return False
 
     async def _handle_handshake(
         self: MessagingBackend, peer_id: str, body: bytes, *, initiator: bool = False
@@ -684,12 +747,11 @@ class ConnectMixin:
             await self._reject_connection(peer_id)
             return
         ident = self._verify_remote_identity(data)
-        parsed = self._parse_identity_kx(data)
-        if not ident or not parsed:
+        hello = self._parse_identity_kx(data, ack=False)
+        if not ident or not hello:
             await self._reject_connection(peer_id)
             return
         remote_hash, remote_pub, ed_pub = ident
-        eph, sig, ts = parsed
         remote_name = str(data.get("name", ""))[:64]
         if (
             self.tcp_transport
@@ -714,17 +776,17 @@ class ConnectMixin:
             self._pending_handshakes.pop(remote_hash, None)
 
         identity = self._identity_for_transport(transport)
-        kx = KeyExchange(identity.private_key)
+        kx = KeyExchange(identity.private_key, identity.pq)
         try:
-            keys = kx.complete(
-                eph, sig, ed_pub, peer_timestamp=ts,
-                own_hash=identity.hash_id, peer_hash=remote_hash,
-            )
+            kx.respond_kem(hello.kem)
+            keys = self._complete_kx(kx, hello, ed_pub, identity.hash_id, remote_hash)
         except Exception as exc:
             log.warning("Handshake verification failed from %s: %s", remote_hash[:8], exc)
             await self._reject_connection(peer_id)
             return
-        if not self._handshake_is_fresh(eph, ts):
+        if not self._handshake_is_fresh(hello.ephemeral, hello.timestamp) or not self._pq_key_ok(
+            remote_hash, hello.pq_public
+        ):
             await self._reject_connection(peer_id)
             return
         link = await self._bind_link(peer_id, remote_hash, remote_pub, remote_name)
@@ -740,15 +802,16 @@ class ConnectMixin:
         if not self._identity_protocol(data):
             return
         ident = self._verify_remote_identity(data)
-        parsed = self._parse_identity_kx(data)
-        if not ident or not parsed:
+        hello = self._parse_identity_kx(data, ack=True)
+        if not ident or not hello:
             return
         remote_hash, remote_pub, ed_pub = ident
-        eph, sig, ts = parsed
         remote_name = str(data.get("name", ""))[:64]
         upgrade = self.upgrade_for_peer_id(peer_id)
         if upgrade is not None:
-            await self._finish_upgrade(peer_id, upgrade, data, remote_hash, remote_pub, ed_pub)
+            await self._finish_upgrade(
+                peer_id, upgrade, data, hello, remote_hash, remote_pub, ed_pub
+            )
             return
         kx = self._pending_handshakes.get(remote_hash)
         link = self.get_link(remote_hash)
@@ -757,13 +820,14 @@ class ConnectMixin:
             return
         own = self._identity_for_transport(link.transport).hash_id
         try:
-            keys = kx.complete(
-                eph, sig, ed_pub, peer_timestamp=ts, own_hash=own, peer_hash=remote_hash
-            )
+            keys = self._complete_kx(kx, hello, ed_pub, own, remote_hash)
         except Exception as exc:
             log.warning("Handshake ack verification failed from %s: %s", remote_hash[:8], exc)
             return
-        if not self._handshake_is_fresh(eph, ts):
+        if not self._handshake_is_fresh(hello.ephemeral, hello.timestamp):
+            return
+        if not self._pq_key_ok(remote_hash, hello.pq_public):
+            await self._teardown_link(remote_hash)
             return
         self._pending_handshakes.pop(remote_hash, None)
         link.public_key = remote_pub
@@ -776,23 +840,22 @@ class ConnectMixin:
         peer_id: str,
         upgrade: tuple[str, KeyExchange],
         data: dict[str, object],
+        hello: _Hello,
         remote_hash: str,
         remote_pub: bytes,
         ed_pub: Ed25519PublicKey,
     ) -> None:
         expected, kx = upgrade
         self._upgrades.pop(expected, None)
-        parsed = self._parse_identity_kx(data)
         own = self._identity_for_transport("tcp").hash_id
         try:
-            if remote_hash != expected or parsed is None:
+            if remote_hash != expected:
                 raise ValueError("wrong identity on the direct path")
-            eph, sig, ts = parsed
-            keys = kx.complete(
-                eph, sig, ed_pub, peer_timestamp=ts, own_hash=own, peer_hash=remote_hash
-            )
-            if not self._handshake_is_fresh(eph, ts):
+            keys = self._complete_kx(kx, hello, ed_pub, own, remote_hash)
+            if not self._handshake_is_fresh(hello.ephemeral, hello.timestamp):
                 raise ValueError("stale handshake")
+            if not self._pq_key_ok(remote_hash, hello.pq_public):
+                raise ValueError("post-quantum identity key changed")
         except Exception as exc:  # noqa: BLE001
             log.warning("Direct path to %s rejected: %s", expected[:8], exc)
             if self.tcp_transport:
