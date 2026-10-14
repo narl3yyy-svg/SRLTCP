@@ -45,7 +45,6 @@
     loadingPeers: false,
     androidView: "sidebar",
 
-    wanModalTarget: null,
     shareMode: "browse",
     shareGrants: { local: [], remote: [] },
     shareListing: { ownerHash: null, grantId: null, entries: [] },
@@ -561,8 +560,8 @@
             if (msgInput) msgInput.disabled = false;
             if (sendBtn) sendBtn.disabled = false;
           }
-          toast(`Connected to ${data.name || data.hash_id?.slice(0, 8)}`);
-          if ((state.chatNotices?.[data.hash_id] || []).length) {
+          // Connection changes show only in that contact's open chat.
+          if (chatIsOpen(data.hash_id) && (state.chatNotices?.[data.hash_id] || []).length) {
             addChatNotice(data.hash_id, `Connected again ${pathLabel(data.transport, data.address)}`, "up");
           }
           logActivity(`Link up: ${data.name || data.hash_id?.slice(0, 8)}`);
@@ -581,17 +580,14 @@
           if (state.selectedPeer === data.hash_id) {
             refreshPeerStatus(data.hash_id);
           }
-          addChatNotice(
-            data.hash_id,
-            `${data.name || "Contact"} disconnected — looking for another way to reach them; messages you send wait and go out as soon as they're back`,
-            "down"
-          );
-          explainIfStillDown(data.hash_id);
-          notifyUser(
-            "Disconnected",
-            data.name || data.hash_id?.slice(0, 8) || "Peer",
-            { tag: `down-${data.hash_id}` }
-          );
+          if (chatIsOpen(data.hash_id)) {
+            addChatNotice(
+              data.hash_id,
+              `${data.name || "Contact"} disconnected — looking for another way to reach them; messages you send wait and go out as soon as they're back`,
+              "down"
+            );
+            explainIfStillDown(data.hash_id);
+          }
           logActivity(`Link down: ${data.name || data.hash_id?.slice(0, 8)}`);
           break;
         case "peer_metrics":
@@ -1063,10 +1059,6 @@
     setSelectValue("add-contact-transport", "tcp");
     setInputValue("add-contact-host", "");
     setInputValue("add-contact-port", "7825");
-    setInputValue("add-contact-wan-host", "");
-    setInputValue("add-contact-wan-port", "7825");
-    setCheckbox("add-contact-wan-enabled", false);
-    setSelectValue("add-contact-wan-mode", "auto");
   }
 
   function openAddContactModal() {
@@ -1133,10 +1125,6 @@
     const transport = $("#add-contact-transport")?.value || "tcp";
     const tcpHost = ($("#add-contact-host")?.value || "").trim();
     const tcpPort = parseInt($("#add-contact-port")?.value || "7825", 10);
-    const wanHost = ($("#add-contact-wan-host")?.value || "").trim();
-    const wanPort = parseInt($("#add-contact-wan-port")?.value || "7825", 10);
-    const wanEnabled = !!$("#add-contact-wan-enabled")?.checked;
-    const connectionMode = $("#add-contact-wan-mode")?.value || "auto";
     if (!/^[0-9a-f]{32}$/.test(hashId)) {
       toast("Hash ID must be exactly 32 hex characters");
       return;
@@ -1154,10 +1142,6 @@
         transport,
         tcp_host: tcpHost,
         tcp_port: tcpPort,
-        wan_host: wanHost,
-        wan_port: wanPort,
-        wan_enabled: wanEnabled,
-        connection_mode: connectionMode,
       });
       if (!ok) {
         toast(data?.error || "Failed to add contact", "error");
@@ -1465,10 +1449,6 @@
     setInputValue("edit-contact-name", peer.name || "");
     setInputValue("edit-contact-host", peer.tcp_host || "");
     setInputValue("edit-contact-port", String(peer.tcp_port || 7825));
-    setInputValue("edit-contact-wan-host", peer.wan_host || "");
-    setInputValue("edit-contact-wan-port", String(peer.wan_port || 7825));
-    setCheckbox("edit-contact-wan-enabled", !!peer.wan_enabled);
-    setSelectValue("edit-contact-mode", peer.connection_mode || "auto");
     const alts = (peer.alt_hosts || []).filter(Boolean);
     const altEl = $("#edit-contact-alts");
     if (altEl) {
@@ -1495,23 +1475,18 @@
     if (!hashId) return;
     const name = ($("#edit-contact-name")?.value || "").trim();
     const port = parseInt($("#edit-contact-port")?.value || "7825", 10);
-    const wanPort = parseInt($("#edit-contact-wan-port")?.value || "7825", 10);
     if (!name) {
       toast("Name cannot be empty", "error");
       return;
     }
-    if (!(port >= 1 && port <= 65535) || !(wanPort >= 1 && wanPort <= 65535)) {
-      toast("Ports must be between 1 and 65535", "error");
+    if (!(port >= 1 && port <= 65535)) {
+      toast("Port must be between 1 and 65535", "error");
       return;
     }
     const body = {
       name,
       tcp_host: ($("#edit-contact-host")?.value || "").trim(),
       tcp_port: port,
-      wan_host: ($("#edit-contact-wan-host")?.value || "").trim(),
-      wan_port: wanPort,
-      wan_enabled: !!$("#edit-contact-wan-enabled")?.checked,
-      connection_mode: $("#edit-contact-mode")?.value || "auto",
     };
     const { ok, data } = await apiPatch(`/api/trusted/${encodeURIComponent(hashId)}`, body, { silent: true });
     if (!ok) {
@@ -2331,42 +2306,6 @@
     toast("Sharing stopped");
     await loadShareGrants();
     renderShareGrants();
-  }
-
-  function openWanModal(hashId) {
-    const peer = state.trusted.find((p) => p.hash_id === hashId);
-    if (!peer) return;
-    state.wanModalTarget = hashId;
-    setInputValue("wan-host", peer.wan_host || "");
-    setInputValue("wan-port", String(peer.wan_port || 7825));
-    setCheckbox("wan-enabled", !!peer.wan_enabled);
-    setSelectValue("wan-mode", peer.connection_mode || "auto");
-    openModal($("#wan-modal"));
-    closeContactMenu();
-  }
-
-  function closeWanModal() {
-    closeModal($("#wan-modal"));
-    state.wanModalTarget = null;
-  }
-
-  async function saveWanSettings() {
-    const hashId = state.wanModalTarget;
-    if (!hashId) return;
-    const body = {
-      wan_host: ($("#wan-host")?.value || "").trim(),
-      wan_port: parseInt($("#wan-port")?.value || "7825", 10) || 7825,
-      wan_enabled: !!$("#wan-enabled")?.checked,
-      connection_mode: $("#wan-mode")?.value || "auto",
-    };
-    const { ok, data } = await apiPatch(`/api/trusted/${encodeURIComponent(hashId)}`, body);
-    if (!ok) {
-      toast(data?.error || "Failed to save WAN settings", "error");
-      return;
-    }
-    toast("WAN endpoint saved");
-    closeWanModal();
-    loadPeers();
   }
 
   /* ── Render ── */
@@ -3243,11 +3182,29 @@
     failed: "Not sent",
   };
 
+  function chatIsOpen(hashId) {
+    return !!hashId && state.selectedPeer === hashId && !state.selectedGroup;
+  }
+
   function addChatNotice(hashId, text, kind = "") {
     if (!hashId) return;
     state.chatNotices = state.chatNotices || {};
     const list = (state.chatNotices[hashId] = state.chatNotices[hashId] || []);
-    list.push({ __notice: true, text, kind, timestamp: Date.now() / 1000 });
+    const now = Date.now() / 1000;
+    const last = list[list.length - 1];
+    if (last && (kind === "up" || kind === "down") && last.kind && last.kind !== kind
+        && now - last.timestamp < 20) {
+      // A short drop and reconnect (switching path): the latest state replaces
+      // the previous line instead of piling up notices.
+      list.pop();
+      if (kind === "up") {
+        if (state.selectedPeer === hashId && state.messageCache) {
+          renderMessages(state.messageCache, { preserveScroll: true });
+        }
+        return;
+      }
+    }
+    list.push({ __notice: true, text, kind, timestamp: now });
     if (list.length > 20) list.splice(0, list.length - 20);
     if (state.selectedPeer === hashId && !state.selectedGroup && state.messageCache) {
       renderMessages(state.messageCache, { preserveScroll: true });
@@ -3822,7 +3779,6 @@
     ["pair-modal", () => closePairModal()],
     ["add-contact-modal", () => closeAddContactModal()],
     ["share-modal", () => closeShareModal()],
-    ["wan-modal", () => closeWanModal()],
     ["network-modal", () => $("#network-close")?.click()],
     ["release-modal", () => closeModal($("#release-modal"))],
     ["request-modal", () => dismissContactRequest()],
@@ -4390,9 +4346,6 @@
     if (e.key === "Enter") openSharePw();
   });
   setupModalClose($("#share-modal"), closeShareModal);
-  $("#wan-save")?.addEventListener("click", saveWanSettings);
-  $("#wan-cancel")?.addEventListener("click", closeWanModal);
-  setupModalClose($("#wan-modal"), () => { state.wanModalTarget = null; });
   $("#media-lightbox-close")?.addEventListener("click", closeMediaLightbox);
   setupModalClose($("#media-lightbox"), closeMediaLightbox);
   $("#media-zoom-in")?.addEventListener("click", () => setMediaZoom(0.25));

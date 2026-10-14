@@ -257,16 +257,6 @@ async def features_flow() -> None:
         await alice.wait_for_selector("#contacts .contact[data-name='Bobby']", timeout=5000)
         assert await alice.text_content("#chat-peer-name") == "Bobby"
         print("edit contact: renamed Bob -> Bobby")
-        # A LAN/VPN IP in the internet field gets a helpful error
-        await alice.click("#contacts .contact[data-name='Bobby'] .contact-more")
-        await alice.click("#contact-menu [data-action=edit]")
-        await alice.evaluate("document.querySelector('#edit-contact-modal details').open = true")
-        await alice.fill("#edit-contact-wan-host", "10.0.100.5")
-        await alice.click("#edit-contact-save")
-        await alice.wait_for_selector("text=put it in the Address field", timeout=5000)
-        await alice.fill("#edit-contact-wan-host", "")
-        await alice.click("#edit-contact-cancel")
-        print("edit contact: VPN IP in internet field explained")
 
         # Shared folder: Alice offers, Bob browses and downloads
         await alice.click("#btn-share-folder")

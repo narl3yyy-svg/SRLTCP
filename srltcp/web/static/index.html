@@ -430,26 +430,6 @@
 <a class="file-download media-lightbox-download" id="media-lightbox-download" href="#" download>Download</a>
 </div>
 </div>
-<div class="modal-overlay" id="wan-modal">
-<div class="modal-card">
-<h3>WAN peer endpoint</h3>
-<p class="modal-hint">Manual host/port for internet connections. Verify identity out-of-band before trusting.</p>
-<label class="field"><span>Host or domain</span><input type="text" id="wan-host" placeholder="203.0.113.10 or peer.example.com" /></label>
-<label class="field"><span>TCP port</span><input type="number" id="wan-port" min="1" max="65535" value="7825" /></label>
-<label class="field checkbox-field"><input type="checkbox" id="wan-enabled" /><span>Enable WAN endpoint for this peer</span></label>
-<label class="field"><span>Connection mode</span>
-<select id="wan-mode">
-<option value="auto">Auto (LAN first, then WAN)</option>
-<option value="lan">LAN only</option>
-<option value="wan">WAN only</option>
-</select>
-</label>
-<div class="modal-actions">
-<button type="button" class="action-btn" id="wan-save">Save</button>
-<button type="button" class="action-btn secondary" id="wan-cancel">Cancel</button>
-</div>
-</div>
-</div>
 <div class="modal-overlay" id="share-modal">
 <div class="modal-card wide">
 <h3>Share files (end-to-end encrypted)</h3>
@@ -599,24 +579,6 @@
 <label class="field"><span>LAN TCP port</span>
 <input type="number" id="add-contact-port" value="7825" min="1" max="65535" />
 </label>
-<h4 class="drawer-subhead">WAN (optional)</h4>
-<label class="field"><span>WAN host or domain</span>
-<input type="text" id="add-contact-wan-host" placeholder="203.0.113.10 or peer.example.com" />
-</label>
-<label class="field"><span>WAN TCP port</span>
-<input type="number" id="add-contact-wan-port" value="7825" min="1" max="65535" />
-</label>
-<label class="field checkbox-field">
-<input type="checkbox" id="add-contact-wan-enabled" />
-<span>Enable WAN endpoint for this contact</span>
-</label>
-<label class="field"><span>Connection mode</span>
-<select id="add-contact-wan-mode">
-<option value="auto">Auto (LAN first, then WAN)</option>
-<option value="lan">LAN only</option>
-<option value="wan">WAN only</option>
-</select>
-</label>
 <div class="modal-actions">
 <button type="button" class="action-btn secondary" id="add-contact-cancel">Cancel</button>
 <button type="button" class="action-btn" id="add-contact-save">Add &amp; trust</button>
@@ -675,25 +637,6 @@
 </label>
 </div>
 <p class="hint" id="edit-contact-alts"></p>
-<details class="edit-advanced">
-<summary>Internet address (advanced)</summary>
-<div class="field-row">
-<label class="field grow"><span>Public host or domain</span>
-<input type="text" id="edit-contact-wan-host" placeholder="peer.example.com or 203.0.113.10" autocomplete="off" spellcheck="false" />
-</label>
-<label class="field port"><span>Port</span>
-<input type="number" id="edit-contact-wan-port" min="1" max="65535" value="7825" />
-</label>
-</div>
-<label class="field checkbox-field"><input type="checkbox" id="edit-contact-wan-enabled" /><span>Use the internet address</span></label>
-<label class="field"><span>Connection mode</span>
-<select id="edit-contact-mode">
-<option value="auto">Auto (address first, then internet)</option>
-<option value="lan">Address only</option>
-<option value="wan">Internet address only</option>
-</select>
-</label>
-</details>
 <div class="contact-check">
 <button type="button" class="action-btn small" id="edit-contact-check">Check connection</button>
 <div id="edit-contact-check-result" class="contact-check-result hidden" aria-live="polite"></div>

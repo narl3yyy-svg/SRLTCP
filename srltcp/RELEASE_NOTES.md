@@ -1,5 +1,17 @@
 # SRLTCP Release Notes
 
+## v0.8.3 (2026-10-14)
+
+- **No more connect/disconnect alerts.** A contact connecting or dropping
+  off no longer pops up a notification or a message at the bottom of the
+  screen. You see it only in that contact's chat, while it's open: in the
+  header (Online, path, ping) and as a line in the chat. A quick drop and
+  reconnect (switching path) leaves no lines behind.
+- **Simpler contact screens:** the "Internet address (advanced)" section is
+  gone from *Edit contact* and *Add contact* (Tor and the relay reach
+  contacts over the internet by themselves). Addresses you saved there
+  before are kept.
+
 ## v0.8.2 (2026-10-13)
 
 ### Calls ring like phone calls
