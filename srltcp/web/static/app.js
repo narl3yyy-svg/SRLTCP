@@ -4642,9 +4642,6 @@
       case "delete":
         await deleteTrusted(hashId, name);
         break;
-      case "wan":
-        openEditContact(hashId);
-        break;
       case "share":
         closeContactMenu();
         if (state.selectedPeer !== hashId) selectPeer(hashId, name);

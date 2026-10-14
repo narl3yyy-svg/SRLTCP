@@ -22,7 +22,7 @@
 | **Fast file transfer** | Chunked streaming (1 MiB TCP / 8 KiB serial), zstd on TCP, resume support |
 | **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
 | **Drag-and-drop send** | Drop files onto a contact in the Web UI |
-| **WAN / manual peers** | Host + port per trusted contact; encrypted TCP 7825 |
+| **Optional port forwarding** | Forward TCP 7825 if you like; never required (Tor, IPv6 and the relay cover other networks) |
 | **Web UI** | Localhost **HTTPS-only** chat UI (default port **9876**), protected by a private access token |
 | **Settings** | First-run wizard + persistent config (folders, retention, LAN IP) |
 | **System stats** | CPU usage & temperature in the web UI status bar |
@@ -107,7 +107,7 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 
 **File transfer flow:** upload to local staging → (queued while the contact is unreachable) → `FILE_OFFER` (encrypted JSON) → `FILE_ACCEPT` → encrypted `FILE_CHUNK` stream, confirmed by `FILE_ACK` (a sliding window: the sender keeps a limited amount unconfirmed and resends from the last confirmed byte after a lost piece, a path change or a re-key) → `FILE_COMPLETE` with the SHA-256, computed while streaming → the receiver, which hashed while writing, answers with a final `FILE_ACK` (verified or not). The receiver writes strictly in order to your configured incoming folder; a cancelled or damaged download is deleted. Either side can cancel (`FILE_REJECT`). Over Tor the chunks are spread over 4 extra circuits ("lanes") joined with a session-key proof; chat stays on the main circuit.
 
-**WAN use:** Forward **TCP 7825** to your node. Traffic after handshake is E2EE. An observer on the internet can still see connection timing, packet sizes, and your public IP — verify peer hash IDs out-of-band before trusting. Set WAN host/port per contact (Add contact or contact menu → WAN).
+**Port forwarding:** if you forward **TCP 7825** to your node, traffic after the handshake is still end-to-end encrypted; an observer on the internet can see connection timing, packet sizes and your public IP.
 
 ### Internet relay privacy
 
@@ -478,47 +478,19 @@ curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" -X POST https://127.0.0.1:9876/
 curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" "https://127.0.0.1:9876/api/share/<session_id>/list?token=<token>"
 ```
 
-### WAN / manual peer connections (internet)
+### Port forwarding (optional, advanced)
 
-> **Tip:** If you do not want to port-forward, use the **internet relay** (see above). Direct WAN is for advanced users who control router settings.
-
-SRLTCP does **not** broadcast your node to the public internet. WAN connectivity is **opt-in and manual** per trusted contact.
-
-#### Step 1 — Expose the encrypted messaging port (owner side)
-
-SRLTCP listens on **TCP 7825** by default for encrypted P2P messaging (handshake + E2EE payloads). This is **not** a VPN; it is an application-level encrypted channel similar in spirit to a WireGuard tunnel endpoint, without routing all system traffic.
-
-1. On the machine that will **receive** inbound WAN connections, open **Settings → Network**.
-2. Enable **I will port-forward TCP 7825 for WAN peers** (documents your intent).
-3. On your router/firewall, forward **TCP 7825** → that machine's LAN IP.
-4. Note your **public IP** or a **DNS name** pointing to it (e.g. `home.example.com`).
-
-**Safety:** Only forward **7825**, not the Web UI port (9876). The web UI stays on **localhost HTTPS** only.
-
-#### Step 2 — Configure the remote peer (dialer side)
-
-1. Trust the peer whose hash ID you verified **out-of-band** (in person, phone, etc.).
-2. Right-click the trusted contact → **WAN / manual endpoint**.
-3. Enter **Host or domain** (public IP or FQDN) and **TCP port** (default 7825).
-4. Enable **WAN endpoint** and choose connection mode:
-   - **Auto** — try LAN discovery first, then WAN if enabled
-   - **LAN only** — never use the WAN endpoint
-   - **WAN only** — dial only the manual endpoint (useful when off-LAN)
-5. Save and open the chat — SRLTCP dials the endpoint and completes the same E2EE handshake as on LAN.
-
-#### Security precautions
+You don't need it: Tor, direct IPv6 and the relay connect contacts on different networks by themselves. If you forward **TCP 7825** on your router anyway (*Settings → Network → More network options → I port-forward TCP 7825*), contacts reach you there with the same end-to-end encrypted handshake as on the LAN. Internet addresses saved per contact by earlier versions are still used. Only forward 7825, never the web UI port (9876), which stays on localhost.
 
 | Risk | Mitigation |
 |------|------------|
-| Connecting to the wrong host | Verify peer **hash ID** before trusting; WAN host is stored per contact |
-| Private IP as WAN endpoint | Rejected — use LAN mode for `10.x` / `192.168.x` addresses |
-| Localhost / loopback WAN | Rejected |
-| DNS rebinding to private IP | Resolved address must be public |
-| WAN connection storms | Outbound WAN dials are rate-limited (1/s per endpoint) |
-| Web UI exposed to internet | **Do not** port-forward 9876; UI is localhost-only by design |
-| Untrusted inbound traffic | Only trusted peers complete handshake; others are ignored after crypto verify |
-
-**Both peers should run v0.1.17+** for WAN endpoint fields and share-folder messages.
+| Connecting to the wrong host | The handshake proves the contact's keys; a wrong host can't complete it. Verify contacts (shield next to the name) |
+| Private IP as an internet endpoint | Rejected — LAN addresses are reached on the LAN |
+| Localhost / loopback endpoint | Rejected |
+| DNS rebinding to a private IP | Resolved address must be public |
+| Connection storms | Outbound dials are rate-limited (1/s per endpoint) |
+| Web UI exposed to the internet | **Do not** forward 9876; the UI is localhost-only by design |
+| Untrusted inbound traffic | Only trusted contacts complete a session; others become contact requests at most |
 
 ---
 
@@ -579,6 +551,19 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 
 ## Roadmap
 
+**Done (v0.9.0)**
+
+- [x] Quantum-safe sessions: X25519 + ML-KEM-768 key exchange, Ed25519 + ML-DSA-65 signatures
+- [x] Direct IPv6 connections set up from a Tor session (no relay or server)
+- [x] Verified contacts: safety numbers, automatic when pairing in person
+- [x] Encryption at rest (Android Keystore), encrypted backup / restore
+- [x] Disappearing messages, app lock, private lock-screen notifications
+- [x] Transfers survive restarts; several files at once; optional photo shrinking
+
+**Done (v0.8.0)**
+
+- [x] Transfer engine v2 (windowed, verified while streaming, cancel both ways), Tor lanes
+
 **Done (v0.1.50–0.1.57)**
 
 - [x] Headless hub server (E2EE tunneling, no port-forward for clients)
@@ -638,17 +623,15 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [ ] Files and voice/video calls in group chats
 - [x] Built-in call relay (calls through the encrypted session, also via the internet relay)
 - [ ] Calls over serial/RF
-- [ ] Encrypted-at-rest chat history
 - [ ] Wi-Fi Direct / Bluetooth transport for phone-to-phone without a router
 
 - [ ] Several relays per contact (failover) and multi-hop relaying
 - [ ] Android USB serial Chaquopy shim (full OTG support)
 - [ ] Folder sync (bidirectional, incremental)
 - [ ] Contact book with pinned peer hashes
-- [ ] Noise handshake — additional patterns beyond XX, auto-negotiation
 - [ ] QUIC transport backend
 - [ ] Bandwidth limiting and QoS per transfer
-- [ ] Signed APK releases (release keystore)
+- [ ] Signed APK releases with a stable release key (updates install over the old app)
 - [ ] Desktop system tray wrapper (Tauri/Electron)
 
 ---
