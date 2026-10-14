@@ -658,7 +658,16 @@ class ConnectMixin:
         packet = await asyncio.to_thread(
             self._identity_hello, MessageType.HANDSHAKE, kx, link.transport, hash_id
         )
-        await self._send_raw(link.transport_peer_id, link.transport, packet)
+        # The connection can close or be replaced (simultaneous dial) while
+        # the post-quantum signature is computed off the event loop.
+        if self.get_link(hash_id) is not link:
+            return
+        try:
+            await self._send_raw(link.transport_peer_id, link.transport, packet)
+        except (KeyError, OSError, ConnectionError) as exc:
+            log.debug("Handshake to %s not sent, connection gone: %s", hash_id[:8], exc)
+            if self._pending_handshakes.get(hash_id) is kx:
+                self._pending_handshakes.pop(hash_id, None)
 
     def _identity_hello(
         self: MessagingBackend, kind: MessageType, kx: KeyExchange, transport: str, peer_hash: str
@@ -813,7 +822,12 @@ class ConnectMixin:
         ack = await asyncio.to_thread(
             self._identity_hello, MessageType.HANDSHAKE_ACK, kx, link.transport, remote_hash
         )
-        await self._send_raw(peer_id, link.transport, ack)
+        try:
+            await self._send_raw(peer_id, link.transport, ack)
+        except (KeyError, OSError, ConnectionError) as exc:
+            # Closed while the signature was computed: no session on it.
+            log.debug("Handshake answer to %s not sent: %s", remote_hash[:8], exc)
+            return
         link.pq_public = hello.pq_public
         self.set_link_keys(remote_hash, keys)
         await self._complete_handshake(remote_hash, remote_name)
