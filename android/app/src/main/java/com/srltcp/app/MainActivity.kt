@@ -49,6 +49,8 @@ class MainActivity : AppCompatActivity() {
     private var isClosing = false
 
     var isActivityResumed = false
+    /** Opt-in app lock (Settings → Privacy); null until the UI is built. */
+    var appLock: AppLock? = null
         private set
 
     /** True while the main frame is our own https://127.0.0.1 UI (checked by the JS bridge). */
@@ -313,6 +315,7 @@ class MainActivity : AppCompatActivity() {
             root.addView(wv)
         }
         setContentView(root)
+        appLock = AppLock(this, root)
         NfcPairing.listener = { result ->
             if (!result.contains("\"error\"")) {
                 vibrate(longArrayOf(0, 60, 80, 60))
@@ -336,6 +339,10 @@ class MainActivity : AppCompatActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
+                    if (appLock?.locked == true) {
+                        moveTaskToBack(true)
+                        return
+                    }
                     val wv = webView ?: run {
                         moveTaskToBack(true)
                         return
@@ -541,7 +548,7 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
     /** Call a global JS callback in the UI with an already-encoded JS argument. */
-    private fun deliverToWeb(function: String, jsArg: String) {
+    fun deliverToWeb(function: String, jsArg: String) {
         runOnUiThread {
             webView?.evaluateJavascript(
                 "window.$function && window.$function($jsArg);",
@@ -927,7 +934,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        appLock?.onStart()
+    }
+
     override fun onStop() {
+        appLock?.onStop()
         if (isFinishing) {
             prepareForClose()
         } else {

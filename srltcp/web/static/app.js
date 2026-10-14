@@ -2585,6 +2585,7 @@
     setCheckbox("set-tor-enabled", settings.tor_enabled !== false);
     setCheckbox("set-shrink-photos", !!settings.shrink_photos);
     setSelectValue("set-disappear", String(settings.disappear_seconds || 0));
+    refreshPhonePrivacy();
     setInputValue("set-tor-path", settings.tor_path || "");
     setCheckbox("set-wan-expose", !!settings.wan_expose_port);
     setCheckbox("set-enable-serial", !!settings.enable_serial);
@@ -3682,6 +3683,42 @@
     a.remove();
   }
 
+  // ── This phone: app lock, private lock-screen notifications (Android) ──
+  // Stored by the Android app itself (it locks before the page exists) and
+  // applied at once, not with "Save settings".
+
+  const APP_LOCK_HINT = "Ask for your fingerprint, face or screen lock when SRLTCP is opened, "
+    + "and after 30 seconds away. Messages and calls still arrive while it's locked.";
+
+  function refreshPhonePrivacy() {
+    const box = $("#phone-privacy");
+    if (!box || !androidHas("appLockState")) return;
+    box.classList.remove("hidden");
+    const bridge = androidBridge();
+    const lock = String(bridge.appLockState());
+    const toggle = $("#set-app-lock");
+    if (toggle) {
+      toggle.checked = lock === "on";
+      toggle.disabled = false;
+    }
+    const hint = $("#app-lock-hint");
+    if (hint) {
+      hint.textContent = lock === "unavailable"
+        ? "Set up a screen lock (PIN, pattern, password, fingerprint or face) in Android settings first."
+        : APP_LOCK_HINT;
+    }
+    setCheckbox("set-private-notifications", !!bridge.privateNotifications());
+  }
+
+  window.onAppLockChanged = (lockState) => {
+    refreshPhonePrivacy();
+    if (lockState === "unavailable") {
+      toast("Set up a screen lock in Android settings first", "error");
+    } else {
+      toast(lockState === "on" ? "App lock is on" : "App lock is off");
+    }
+  };
+
   // ── Encrypted backup / restore ──
 
   async function createBackup() {
@@ -4303,6 +4340,16 @@
   $("#verify-remove")?.addEventListener("click", () => postVerify({ verified: false }));
   $("#verify-close")?.addEventListener("click", closeVerify);
   setupModalClose($("#verify-modal"), closeVerify);
+  $("#set-app-lock")?.addEventListener("change", (e) => {
+    if (!androidHas("setAppLock")) return;
+    e.target.disabled = true;  // until Android answers (onAppLockChanged)
+    androidBridge().setAppLock(e.target.checked);
+  });
+  $("#set-private-notifications")?.addEventListener("change", (e) => {
+    if (!androidHas("setPrivateNotifications")) return;
+    androidBridge().setPrivateNotifications(e.target.checked);
+    toast(e.target.checked ? "Lock screen: message content hidden" : "Lock screen: message content shown");
+  });
   $("#btn-backup-create")?.addEventListener("click", createBackup);
   $("#btn-backup-restore")?.addEventListener("click", openRestore);
   $("#setup-restore")?.addEventListener("click", openRestore);

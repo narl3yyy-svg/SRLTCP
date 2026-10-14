@@ -85,9 +85,12 @@ object SRLTCPNotifier {
             Intent(context, SRLTCPService::class.java).setAction(SRLTCPService.ACTION_DECLINE_CALL),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        // Private notifications: the call channel shows on the lock screen in
+        // full, so the caller's name is left out of the notification itself.
+        val shown = if (PrivacyPrefs.privateNotifications(context)) "SRLTCP" else caller
         val notification = NotificationCompat.Builder(context, CHANNEL_CALLS)
             .setSmallIcon(R.drawable.ic_launcher_legacy)
-            .setContentTitle(caller.ifBlank { "SRLTCP" })
+            .setContentTitle(shown.ifBlank { "SRLTCP" })
             .setContentText(if (video) "Incoming video call" else "Incoming voice call")
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -157,7 +160,7 @@ object SRLTCPNotifier {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val notification = NotificationCompat.Builder(context, CHANNEL_ALERTS)
+        val builder = NotificationCompat.Builder(context, CHANNEL_ALERTS)
             .setContentTitle(title.ifBlank { "SRLTCP" })
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -165,7 +168,17 @@ object SRLTCPNotifier {
             .setContentIntent(launch)
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)
-            .build()
-        NotificationManagerCompat.from(context).notify(id, notification)
+        if (PrivacyPrefs.privateNotifications(context)) {
+            // Locked phone: "SRLTCP — New message" only; unlocked: the full text.
+            builder.setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPublicVersion(
+                    NotificationCompat.Builder(context, CHANNEL_ALERTS)
+                        .setSmallIcon(R.drawable.ic_launcher_legacy)
+                        .setContentTitle("SRLTCP")
+                        .setContentText("New message")
+                        .build()
+                )
+        }
+        NotificationManagerCompat.from(context).notify(id, builder.build())
     }
 }

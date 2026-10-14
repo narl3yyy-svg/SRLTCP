@@ -193,6 +193,19 @@
 </select>
 <small>Messages and files you send are deleted from both phones this long after they're sent (one-to-one chats). Your contacts' own setting decides for their messages. It can't undo a screenshot or a copy someone saved.</small>
 </label>
+<fieldset class="settings-group hidden" id="phone-privacy">
+<legend>This phone</legend>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-app-lock" />
+<span>App lock</span>
+</label>
+<small class="field-hint" id="app-lock-hint">Ask for your fingerprint, face or screen lock when SRLTCP is opened, and after 30 seconds away. Messages and calls still arrive while it's locked.</small>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-private-notifications" />
+<span>Hide message content on the lock screen</span>
+</label>
+<small class="field-hint">A locked phone then shows only "SRLTCP — New message", and calls without the caller's name. Once unlocked, notifications show who wrote and what.</small>
+</fieldset>
 <fieldset class="settings-group" id="backup-settings">
 <legend>Backup</legend>
 <p class="hint">One file with your identity, contacts, chats, groups and settings, locked with a password. Keep it safe: with the file and the password, someone could become you. Received files and shared folders are not included.</p>

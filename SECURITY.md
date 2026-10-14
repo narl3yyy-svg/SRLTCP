@@ -120,7 +120,9 @@ Each contact has a **safety number**: 60 digits computed from both phones' ident
 - Grant **USB permissions** only to known devices (serial is disabled in the app, but permissions remain declared).
 - Grant **notification permission** on Android 13+ so the foreground service can keep the node alive.
 - The embedded WebView trusts only `127.0.0.1` / `localhost` self-signed TLS.
-- App data (identities, settings) lives in the app files directory; uninstall clears it.
+- App data (identities, contacts, chats, settings) lives in the app files directory, encrypted with a key wrapped by the Android Keystore; uninstall clears it. Android cloud backup is off for the app (`allowBackup=false`): use *Settings → Privacy → Backup* instead.
+- **App lock** (*Settings → Privacy*, off by default): the app asks for the fingerprint, face or screen lock when opened and after 30 s in the background, and the app switcher shows a blank card (Android 13+). It hides the app's screens, not its data from someone who unlocks the phone itself. It can only be turned on once the phone has a screen lock.
+- **Private notifications** (*Settings → Privacy*, off by default): on a locked phone, message notifications read "SRLTCP — New message" and calls leave out the caller's name.
 
 ## Builds & releases
 

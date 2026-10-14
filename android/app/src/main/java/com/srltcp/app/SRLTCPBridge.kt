@@ -1,6 +1,7 @@
 package com.srltcp.app
 
 import android.webkit.JavascriptInterface
+import org.json.JSONObject
 
 /**
  * Methods exposed to the local web UI as `window.SRLTCPAndroid`. Sensitive
@@ -79,6 +80,34 @@ class SRLTCPBridge(private val activity: MainActivity) {
     @JavascriptInterface
     fun saveBackup(filename: String): String =
         if (activity.isTrustedPage) activity.saveBackupFile(filename) else ""
+
+    /** App lock: "on", "off" or "unavailable" (no screen lock set up). */
+    @JavascriptInterface
+    fun appLockState(): String =
+        if (activity.isTrustedPage) activity.appLock?.state() ?: "unavailable" else ""
+
+    /** Turn app lock on (asks to unlock once, to be sure you can) or off;
+     *  the result arrives in window.onAppLockChanged. */
+    @JavascriptInterface
+    fun setAppLock(on: Boolean) {
+        if (!activity.isTrustedPage) return
+        activity.runOnUiThread {
+            val lock = activity.appLock ?: return@runOnUiThread
+            lock.setEnabled(on) { state ->
+                activity.deliverToWeb("onAppLockChanged", JSONObject.quote(state))
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun privateNotifications(): Boolean = PrivacyPrefs.privateNotifications(activity)
+
+    /** Lock screen shows "New message" without the sender or the text. */
+    @JavascriptInterface
+    fun setPrivateNotifications(on: Boolean) {
+        if (!activity.isTrustedPage) return
+        PrivacyPrefs.setPrivateNotifications(activity, on)
+    }
 
     /** Start the app again (after restoring a backup). */
     @JavascriptInterface
