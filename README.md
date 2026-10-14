@@ -3,9 +3,9 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-**SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer communication and file transfer system. It runs over **USB Serial** and **TCP/IP**, supports direct P2P on LAN/VPN, and keeps paired contacts in touch over the internet through your own **relay server**, switching automatically. The relay forwards sealed, padded packets: it can't read messages, see names or tell who talks to whom.
+**SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks over **Tor** (no server needed), **direct IPv6**, or your own optional **relay**, switching automatically. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.5.0 — update every device: 0.5 uses a new handshake (v4) and the new internet relay, and doesn't talk to 0.4.x or older.
+**Current version:** 0.9.0 — update every device: 0.9 uses a new quantum-safe handshake (v6) and doesn't connect to 0.8.x or older.
 
 ---
 
@@ -18,8 +18,11 @@
 | **Internet relay** | Paired contacts keep talking with the VPN off or on different networks; automatic switching between direct and relay; the relay is blind (TLS + pinned cert, rotating mailboxes, second encryption layer, padding) |
 | **Tor (no server needed)** | Reach trusted contacts from any network without a server or port forwarding: each device publishes a private onion service that only its contacts can use. Bundled on Android; uses Tor Browser's Tor on a PC |
 | **Direct across networks** | No port forwarding: one phone on the VPN and one on the home Wi-Fi connect directly, and two home networks connect directly through both routers (hole punching; over IPv6 straight from a Tor session, no relay needed). Addresses are exchanged only inside the encrypted session; Tor or the relay steps in when a network doesn't allow it |
-| **Secure messaging** | Ed25519 identity + authenticated X25519 key exchange + AES-256-GCM with replay protection |
-| **Fast file transfer** | Chunked streaming (1 MiB TCP / 8 KiB serial), zstd on TCP, resume support |
+| **Quantum-safe encryption** | Every session: X25519 + ML-KEM-768 key exchange, Ed25519 + ML-DSA-65 signatures, AES-256-GCM with replay protection |
+| **Verified contacts** | 60-digit safety numbers over both identity keys; automatic when you pair in person (QR or NFC) |
+| **Encrypted on the device** | Keys, contacts, chats, groups and settings sealed at rest (Android Keystore / Windows DPAPI); encrypted backup and restore |
+| **Privacy options** | Disappearing messages, app lock and private lock-screen notifications (all off by default) |
+| **Fast file transfer** | Windowed streaming (1 MiB chunks direct, smaller on Tor/relay/serial), zstd, verified while streaming; survives dropped connections and app restarts; several files at once; optional photo shrinking |
 | **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
 | **Drag-and-drop send** | Drop files onto a contact in the Web UI |
 | **Optional port forwarding** | Forward TCP 7825 if you like; never required (Tor, IPv6 and the relay cover other networks) |
@@ -33,7 +36,7 @@
 | **Works over WireGuard** | VPN-aware discovery (unicast sweep + replies), Find by IP, automatic address updates |
 | **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected |
 | **Contact requests** | Unknown peers can't message you; they appear as "wants to chat" until you accept |
-| **Chat history** | Saved locally (owner-only file permissions), pruned by your retention setting |
+| **Chat history** | Saved locally, encrypted, pruned by your retention setting |
 | **Trusted peers** | Trust-before-message security model |
 | **Ping / RTT** | Latency in ms; serial link quality % (RTT-based estimate, not RF RSSI) |
 | **Cross-platform** | Linux, macOS, Windows CLI + Android (Chaquopy APK) |
@@ -46,44 +49,54 @@ SRLTCP uses a modular package layout inspired by [chatx5](https://github.com/nar
 
 ```
 srltcp/
-  app.py                    # CLI entry point
+  app.py                    # CLI entry point (web, relay, send, identity, url)
   core/
-    identity.py             # Per-transport Ed25519 identities
+    identity.py             # Per-transport identities (Ed25519 + ML-DSA-65)
+    trusted.py              # Contacts: pinned keys, verification, pair secrets
+    verify.py               # Safety numbers
+    backup.py               # Encrypted backup / restore
+    settings.py             # Settings (encrypted at rest)
     discovery.py            # UDP/TCP peer discovery registry
-    node.py                 # Top-level node (messaging + sharing)
+    node.py                 # Top-level node (messaging + sharing + call ringing)
+    relay_server.py         # `srltcp relay` server
     protocol/
       framing.py            # Length + CRC32 frames
       messages.py           # Binary message types
-      crypto.py             # E2EE: Ed25519, X25519, AES-GCM, replay window
+      crypto.py             # Hybrid handshake, session keys, AES-GCM, replay window
+      pq.py                 # ML-KEM-768 / ML-DSA-65 (cryptography or pure Python)
       signed.py             # Signed payload helpers
     messaging/              # Mixin-composed backend
       backend.py            # Orchestrator
       links.py              # Peer link map
       connect.py            # Handshake + session keys
-      announce.py           # Discovery broadcasts
-      pairing.py            # Contact cards (QR / link / NFC) + mutual pairing
+      announce.py, ping.py  # Discovery broadcasts, RTT / dead-link detection
+      pairing.py            # Contact cards (QR / link / NFC), pairing, verification
       store.py              # On-disk chat history
-      transfer.py           # Chunked file transfer
-      relay.py              # Internet relay client + direct/relay path switching
+      transfer.py           # Windowed, resumable file transfer
+      share_peer.py         # E2EE folder/file shares
+      groups.py             # Group chats
+      relay.py, punch.py    # Relay client, path switching, hole punching (IPv4/IPv6)
+      tor.py                # Onion service, Tor dialing, parallel Tor lanes
+      turn.py               # Built-in call relay (media through the session)
+      disappear.py          # Disappearing messages
   transports/
     tcp.py                  # TCP listener + UDP discovery
     serial.py               # USB serial (pyserial)
   web/                      # Local UI (aiohttp + WebSocket, access token, calls.js)
   routes/                   # REST + share + WS routes
-  utils/                    # Logging, files, platform helpers
+  utils/                    # Vault (encryption at rest), files, network, platform helpers
 android/                    # Gradle + Chaquopy Android app (see android/README.md)
 tests/                      # pytest suite
-scripts/                    # check.sh, build-android.sh, sync-android-python.sh, simulate.py
-
+scripts/                    # check.sh, build-android.sh, simulate*.py, tor_testnet.sh, pentest/
 ```
 
 ## Security model
 
 ### Identity
 
-Each transport (TCP, Serial) has its own **Ed25519 keypair**. The node hash ID is the first 32 hex chars of `SHA-256(public_key)` — similar to Reticulum-style addressing.
+Each transport (TCP, Serial) has its own **Ed25519 keypair** plus a post-quantum **ML-DSA-65** key (from its own random seed). The node hash ID is the first 32 hex chars of `SHA-256(Ed25519 public key)` — similar to Reticulum-style addressing.
 
-Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windows).
+Identities are stored, encrypted, in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP\identities` on Windows).
 
 ### End-to-end encryption
 
@@ -132,7 +145,7 @@ See [SECURITY.md](SECURITY.md) for vulnerability reporting, the threat model and
 ### Web UI hardening
 
 - **Access token** — every page/API/WebSocket request needs the per-install token (`~/.srltcp/web_token`); open the link printed at startup or run `srltcp url`
-- **HTTPS only** on `127.0.0.1` — auto-generated 4096-bit localhost certificate
+- **HTTPS only** on `127.0.0.1` — auto-generated localhost certificate (RSA 4096-bit on a PC, 2048-bit on Android; the app pins it)
 - **TLS 1.2+** with modern cipher suites; no cleartext HTTP
 - **Localhost-only binding** — refuses non-loopback Host headers
 - **Security headers** — strict CSP (no inline scripts, no third-party requests), HSTS, `X-Frame-Options: DENY`, `no-referrer`
@@ -142,19 +155,22 @@ See [SECURITY.md](SECURITY.md) for vulnerability reporting, the threat model and
 
 ### First-run setup
 
-On first launch, the web UI shows a setup wizard. Settings persist in `~/.srltcp/settings.json`:
+On first launch, the web UI shows a setup wizard (or *Restore a backup* when moving from another device). Settings persist, encrypted, in `~/.srltcp/settings.json`:
 
 | Setting | Description |
 |---------|-------------|
 | Display name | Shown to peers on the network |
 | Web port | HTTPS port (default **9876**); restart to apply |
-| Message retention | Hours to keep local chat history |
+| Keep messages | 1 day … forever, or until restart |
 | Incoming files folder | Where received files are saved |
 | Shared folder | Default folder for browse/share |
 | LAN IP | Pinned interface for discovery & announce |
 | Auto-announce | Broadcast presence every 5 seconds (LAN/VPN only) |
-| Internet relay | On by default. Paste the code from `srltcp relay` on one phone; contacts get it automatically |
-| WAN port-forward | Advanced: acknowledge you will forward TCP **7825** for direct WAN peers |
+| Tor | *Reach contacts anywhere over Tor*, on by default |
+| Direct internet connections | Hole punching (IPv4 via a relay, IPv6 from Tor), on by default |
+| Internet relay | Optional. Paste the code from `srltcp relay` on one phone; contacts get it automatically |
+| Privacy | Disappearing messages, app lock, private notifications, backup / restore |
+| Port forwarding | Advanced: acknowledge you forward TCP **7825** (never required) |
 | Timezone | Region for the status clock (time shown at top of sidebar) |
 | Show clock | Toggle live clock in the UI |
 | Advanced: external call relay | Optional STUN/TURN server; only used if the built-in relay is unavailable (leave empty) |
@@ -214,7 +230,7 @@ See [android/README.md](android/README.md). The APK embeds the same `srltcp/` Py
 |------|--------|
 | **JDK 17+** | Any JDK 17 or newer (tested with 21); set `JAVA_HOME` if `java` is not on PATH |
 | **Android SDK API 34** | Platform + build-tools 34.x |
-| **Python 3.12** | Used by Chaquopy to compile the embedded runtime |
+| **Python 3.12** | Used by Chaquopy at build time. If `python3` is another version, set `SRLTCP_BUILD_PYTHON=/usr/bin/python3.12` |
 | **adb** | USB debugging enabled on the phone |
 
 ```bash
@@ -233,7 +249,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.5.0.apk`
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.9.0.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -241,7 +257,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.5.0.apk`
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.5.0.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.9.0.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -252,7 +268,7 @@ adb logcat -c                               # clear old logs
 adb logcat -s SRLTCP:* python.stderr:*      # follow SRLTCP + Python output
 ```
 
-**On the phone:** tap **☰** for contacts, **⚙** for Settings (full-screen). Default folders: `Downloads/SRLTCP/Incoming` and `Downloads/SRLTCP/Shared` (grant storage access when prompted). Serial/USB is disabled; TCP works over Wi‑Fi, mobile data and VPN; the internet relay covers the rest.
+**On the phone:** tap **☰** for contacts, **⚙** for Settings (full-screen). Default folders: `Downloads/SRLTCP/Incoming` and `Downloads/SRLTCP/Shared` (grant storage access when prompted). Serial/USB is disabled; TCP works over Wi‑Fi, mobile data and VPN; Tor (built in) or the internet relay covers the rest.
 
 | Symptom | What to do |
 |---------|------------|
@@ -301,13 +317,13 @@ After that, addresses look after themselves: when a contact's IP changes (new Wi
 
 ### Phones on different mobile carriers / without the VPN
 
-Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data has **no address another phone can connect to**, so something reachable has to sit in the middle. SRLTCP uses your own server for that, and switches by itself:
+Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data usually has **no IPv4 address another phone can connect to**, so something reachable has to sit in the middle. By default that's **Tor** (built in, no setup; see below). With IPv6 on both sides the phones can also connect directly. If you'd rather have a faster middle you control, run your own relay:
 
-1. **Pair locally** (same Wi-Fi, WireGuard, QR or NFC).
+1. **Pair locally** (same Wi-Fi, WireGuard, QR or NFC), or send a pairing link.
 2. **Internet relay** — run `srltcp relay` on a server with a public address (your WireGuard server is perfect) and paste the code it prints into *Settings → Network → Internet relay* on **one** phone. The other phone learns it automatically inside the encrypted connection.
 3. From then on the phones use a **direct** path whenever one works and the **relay** otherwise — VPN off, different carriers, Wi-Fi to mobile data. Moving to the relay takes a few seconds (3 s in our test); when a direct path comes back they move back within about a minute. Messages, files, voice and video calls all work over the relay. The chat header shows **DIRECT** or **RELAY**.
 
-**Direct without port forwarding.** One phone on the VPN and the other on the home Wi-Fi connect directly (the phones tell each other their LAN and VPN addresses inside the encrypted session). Two phones on *different home networks* also connect directly through both routers: with *Settings → Network → Try direct internet connections* on (default), they use the relay to agree on a moment and dial each other at once (hole punching) — in our simulation the direct connection was up 10 s after they met on the relay, with routers that ignore or reset unexpected connections alike. This shares your public IP address with your contacts only; turn it off to keep every internet connection on the relay. Carrier-grade NAT on mobile data usually prevents it; the relay then simply carries on.
+**Direct without port forwarding.** One phone on the VPN and the other on the home Wi-Fi connect directly (the phones tell each other their LAN and VPN addresses inside the encrypted session). Two phones on *different home networks* also connect directly through both routers: with *Settings → Network → Try direct internet connections* on (default), they use the connection they already have (Tor for IPv6, a relay for IPv4) to agree on a moment and dial each other at once (hole punching) — in our simulation the direct connection was up 10 s after they met on the relay, with routers that ignore or reset unexpected connections alike. This shares your public IP address with your contacts only, and on a direct connection your networks can see which address you talk to; turn it off to keep every internet connection on Tor or the relay. Carrier-grade NAT on IPv4 mobile data usually prevents it; Tor or the relay then simply carries on.
 
 **No server, no port forwarding: Tor.** With *Settings → Network → Reach contacts anywhere over Tor* on (default) on both devices, they reach each other from any network through the Tor network: phone on mobile data, PC on a VPN, a friend's Wi-Fi. No relay and nothing to configure on any router. Each device publishes a private onion service; its address goes only to trusted contacts (inside the encrypted connection), and only trusted contacts can connect through it. Tor is built into the Android app; on a PC install [Tor Browser](https://www.torproject.org/download/) (SRLTCP starts its Tor by itself). Tor is used only when there's no faster path, and the app moves back to a direct path when one appears. **IPv6 straight from Tor:** when both devices have IPv6 internet, they swap their IPv6 addresses inside the Tor session and dial each other directly (no relay, no server); the chat badge changes from TOR to DIRECT and files run at the full speed of both connections. If a network blocks it, they simply stay on Tor. Tested on a private Tor network (`scripts/tor_testnet.sh` + `scripts/simulate_tor.py`).
 
@@ -329,9 +345,9 @@ A pairing code is a signed contact card (hash ID, public keys, name, and every a
 
 ### Editing contacts
 
-Tap the contact's name at the top of a chat, the **⋮** next to a contact, or long-press it → *Edit contact*. You can rename them (only you see the name), set their LAN/VPN address and port, an optional internet address, block/unblock and delete.
+Tap the contact's name at the top of a chat, the **⋮** next to a contact, or long-press it → *Edit contact*. You can rename them (only you see the name), set their LAN/VPN address and port, verify them, block/unblock and delete.
 
-**Check connection** (in *Edit contact*) tries every address the app knows for that contact and says in plain words what works and what to change — e.g. "the VPN must include the home network" or "set up a relay".
+**Check connection** (in *Edit contact*) tries every address the app knows for that contact (and Tor) and says in plain words what works and what to change — e.g. "the VPN must include the home network".
 
 **Deleting a contact** keeps your chat with them for 24 hours: add them back within that time and the conversation carries on. After 24 hours it is deleted for good, and adding them again starts fresh. Group chats are not affected.
 
@@ -347,7 +363,7 @@ Tap the contact's name at the top of a chat, the **⋮** next to a contact, or l
 
 ### Calls
 
-Voice and video calls use WebRTC. Offer/answer are sent inside the encrypted SRLTCP session, so DTLS fingerprints are authenticated by the contact's identity key. The media itself also goes through the session: each device runs a tiny TURN relay on localhost for its own browser/WebView, and the relay forwards the (already DTLS-SRTP encrypted) packets to the other phone as encrypted `CALL_MEDIA` messages. So **calls work wherever chat works** — same Wi-Fi, WireGuard/VPN, or over the internet relay across mobile carriers — with no STUN/TURN server.
+Voice and video calls use WebRTC. Offer/answer are sent inside the encrypted SRLTCP session, so DTLS fingerprints are authenticated by the contact's identity key. The media itself also goes through the session: each device runs a tiny TURN relay on localhost for its own browser/WebView, and the relay forwards the (already DTLS-SRTP encrypted) packets to the other phone as encrypted `CALL_MEDIA` messages. So **calls work wherever chat works** — same Wi-Fi, WireGuard/VPN, direct IPv6, Tor or the internet relay — with no STUN/TURN server. Over Tor they work but can be choppier.
 
 **Earpiece / speaker (Android).** Calls start on the earpiece (voice) or the loudspeaker (video). A wired or Bluetooth headset takes over when connected. The speaker button switches between them. The app applies the route again when the other side's audio starts and when a headset is plugged in or removed, because the WebView's audio engine can reset it on some phones. On Android 12+ it uses `setCommunicationDevice` and falls back to the speakerphone switch if the phone refuses. Speaker volume during a call is the phone's *call* volume: press the volume keys while in the call.
 
@@ -363,7 +379,7 @@ Voice and video calls use WebRTC. Offer/answer are sent inside the encrypted SRL
 
 ### When the VPN is off
 
-With an internet relay set up (see above), nothing changes: messages and calls go through the relay. Without one, phones on different networks can't reach each other: a message waits on your phone (tap its tick: *Waiting to send*) and goes out by itself a few seconds after a path is back — nothing is lost.
+Nothing changes: the app moves to direct IPv6, Tor or your relay by itself and back to the VPN when it returns. If no path works at all (for example Tor is off on one side and there's no relay), a message waits on your phone (tap its tick: *Waiting to send*) and goes out by itself a few seconds after a path is back — nothing is lost.
 
 ### Running in the background (Android)
 
@@ -509,8 +525,8 @@ You don't need it: Tor, direct IPv6 and the relay connect contacts on different 
 **Tips for maximum speed:**
 
 - Use wired Ethernet or USB 3 serial adapters at 115200+ baud
-- Direct LAN/VPN paths are used automatically whenever they work (one less hop than the relay)
-- Run the relay on a low-latency host close to your users (calls go through it when there's no direct path)
+- Direct LAN/VPN/IPv6 paths are used automatically whenever they work (no hop in between)
+- Over Tor, files use 4 circuits at once; a relay on a low-latency host close to you is faster than Tor if you want one
 
 ---
 
@@ -537,6 +553,8 @@ pytest tests/ -v
 | `srltcp identity` | Show local hash IDs |
 | `srltcp url` | Print the private web UI link (with access token) |
 | `python scripts/simulate.py` | Run three local nodes and drive their UIs end-to-end in Chromium (needs `pip install playwright`) |
+| `bash scripts/tor_testnet.sh start DIR` + `python scripts/simulate_tor.py` | Two nodes talking only over a private, offline Tor network |
+| `python scripts/pentest/pentest_local.py` / `pentest_relay.py` | Automated penetration tests (node and relay) |
 | `sudo bash scripts/simulate_wireguard.sh` | Two "phones" + a server on a real WireGuard VPN in network namespaces: discovery, messaging, IP change |
 | `bash scripts/sync-android-python.sh` | Copy `srltcp/` into Android project before Gradle |
 | `bash scripts/build-android.sh` | Full local APK build |
@@ -560,9 +578,16 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [x] Disappearing messages, app lock, private lock-screen notifications
 - [x] Transfers survive restarts; several files at once; optional photo shrinking
 
-**Done (v0.8.0)**
+**Done (v0.8.0–0.8.3)**
 
 - [x] Transfer engine v2 (windowed, verified while streaming, cancel both ways), Tor lanes
+- [x] Calls ring like phone calls (default ringtone, lock screen); ✓✓ for delivered files
+
+**Done (v0.6.0–0.7.0)**
+
+- [x] Direct connections across networks without port forwarding (hole punching)
+- [x] Reach contacts over Tor: no server, no port forwarding (built into the Android app)
+- [x] Built-in call relay (calls through the encrypted session, on every path)
 
 **Done (v0.1.50–0.1.57)**
 
@@ -581,7 +606,7 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [x] Hub LAN address for same-network clients (v0.1.55)
 - [x] Android stack navigation — sidebar home, chat overlay, back gesture (v0.1.56)
 - [x] Signed LAN announces — Ed25519 signatures on UDP discovery; reject unsigned/spoofed peers (v0.1.57)
-- [x] Noise XX handshake option — Settings → Network (experimental; both peers must match) (v0.1.57)
+- [x] Noise XX handshake option (v0.1.57; removed again in 0.6.1)
 
 **Done (v0.5.0)**
 
@@ -621,14 +646,12 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 **Planned**
 
 - [ ] Files and voice/video calls in group chats
-- [x] Built-in call relay (calls through the encrypted session, also via the internet relay)
 - [ ] Calls over serial/RF
 - [ ] Wi-Fi Direct / Bluetooth transport for phone-to-phone without a router
-
+- [ ] Per-contact "always use Tor" (hide who talks to whom even when a direct path exists)
 - [ ] Several relays per contact (failover) and multi-hop relaying
 - [ ] Android USB serial Chaquopy shim (full OTG support)
 - [ ] Folder sync (bidirectional, incremental)
-- [ ] Contact book with pinned peer hashes
 - [ ] QUIC transport backend
 - [ ] Bandwidth limiting and QoS per transfer
 - [ ] Signed APK releases with a stable release key (updates install over the old app)
