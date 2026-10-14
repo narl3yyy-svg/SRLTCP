@@ -29,10 +29,11 @@ and go out automatically.
 
 **Why "public addresses" alone don't connect two networks.** Two devices on
 different networks can't find each other without a meeting point: something both
-can reach. Direct internet connections (hole punching) use your **relay** as that
-meeting point to swap public addresses, so without a relay they never start.
-If you don't have (or can't open a port for) a server, use **Tor**: the Tor network
-is the meeting point, and it needs nothing on your side.
+can reach. Direct internet connections (hole punching) use the session you
+already have, over **Tor** or your **relay**, as that meeting point to swap
+public addresses. With IPv6 on both sides, Tor is enough: no server at all.
+IPv4 punching needs a relay, because only a server outside your network can
+tell a phone its public IPv4 address.
 
 ## Common setups
 
@@ -82,8 +83,10 @@ forwarding.
   Wi-Fi/VPN, or over your relay). That's how they swap onion addresses, inside
   the encrypted connection.
 - **When it's used:** only when there's no faster path (same network, VPN,
-  relay). The app keeps checking and moves back to a direct path as soon as
-  one works.
+  IPv6, relay). The app keeps checking and moves to a direct path as soon as
+  one works. If both devices have IPv6 internet, they agree over Tor to dial
+  each other directly (hole punching, below) and leave Tor for a direct
+  connection; if the network blocks that, they stay on Tor.
 - **Speed:** fine for messages and files; the first connection takes a few
   seconds. One Tor circuit carries roughly 0.5 MB/s, so a file is spread over
   4 extra circuits ("lanes", each routed separately, opened for file data
@@ -98,7 +101,9 @@ learns the address gets no session, not even a contact request. Over Tor,
 your contact doesn't learn your IP address and you don't learn theirs. The
 first Tor relay sees your IP but not who you talk to, and no relay sees
 both. Your internet provider can see that you use Tor, but not with whom or
-what.
+what. Exception: with *Try direct internet connections* on (default), your
+contacts learn your IPv6 address so the two of you can connect directly.
+Turn it off to stay on Tor and keep your address hidden from contacts too.
 
 ## Hole punching (direct internet connections)
 
@@ -124,8 +129,12 @@ When it doesn't work, the relay simply keeps carrying the traffic:
 - **Turned off.** Turning off *Direct internet connections* stops it, so
   contacts never learn your IP address (relay only).
 
-**IPv6.** If both phones have global IPv6 addresses, the app tries those too.
-Many networks let IPv6 through much more easily than IPv4 NAT.
+**IPv6.** If both phones have global IPv6 addresses, the app tries those too,
+and no relay is needed: the phones know their own IPv6 addresses (IPv6 has no
+NAT), so they swap them inside the Tor session and dial each other the same
+way. Many networks let IPv6 through much more easily than IPv4 NAT. Addresses
+built from the phone's hardware (MAC) address are never shared; the
+temporary privacy addresses are used instead.
 
 ## Settings, one by one
 
@@ -135,7 +144,7 @@ Many networks let IPv6 through much more easily than IPv4 NAT.
 |---|---|---|
 | **Use the internet when there's no LAN/VPN path** | Uses the relay when there's no direct path. Off means LAN/VPN only. | On |
 | **Relay code** | `srltcp-relay://host:port#…`, printed by `srltcp relay`. It contains the server address, the certificate fingerprint (so nobody can impersonate the relay) and the access key. Paste it on one phone; contacts receive it inside the encrypted session. Keep it private. | Empty |
-| **Try direct internet connections** | Hole punching, described above. Shares your public IP address **only with your contacts**, inside the encrypted session. Off: relay only, contacts never see your IP. | On |
+| **Try direct internet connections** | Hole punching (IPv6 from a Tor session, IPv4 via your relay), described above. Shares your public IP address **only with your contacts**, inside the encrypted session. Off: Tor or relay only, contacts never see your IP. | On |
 | **Status** | Which relays you're connected to, how many contacts use each one, and your public address as the relay sees it. This is shown only to you. | — |
 | **Reach contacts anywhere over Tor** | Tor onion service, described above. No server or port forwarding needed. Your Tor address goes only to trusted contacts, and only they can connect through it. | On |
 
@@ -207,6 +216,7 @@ You normally never touch these, because the app learns addresses by itself.
 | Messages wait while one phone is on mobile data and the other on Wi-Fi | Open *Edit contact* → **Check connection**. It says whether Tor is working on this device and whether the contact has shared a Tor address yet. If not, open the chat once while both phones are on the same Wi-Fi, with Tor showing "connected" on both (Settings → Network). The chat also explains it by itself if a contact stays unreachable. |
 | Tor stays at "connecting…" | The network may block Tor (some workplaces and schools do). Check the PC's clock is correct; Tor refuses to work with a wrong clock. |
 | Contact always shows **relay**, never direct | Normal on mobile data (carrier NAT). On home networks, make sure *Direct internet connections* is on for both phones. Some routers block hole punching. |
+| Contact always shows **TOR**, never direct | A direct path over the internet needs IPv6 on both networks (or a relay for IPv4) and *Direct internet connections* on for both phones. Some mobile carriers and routers block incoming IPv6; then Tor keeps carrying the traffic. |
 | VPN phone can't reach the home phone directly | The VPN client's `AllowedIPs` must include the home LAN, and the WireGuard server must route or NAT to the LAN. |
 | "Relay unreachable" | Is the server up, TCP 7827 open on its firewall, and the code pasted correctly? |
 | "Relay certificate doesn't match" | The code is from a different relay, the relay's certificate was regenerated, or something is intercepting the connection. Get a fresh code from `srltcp relay`. |

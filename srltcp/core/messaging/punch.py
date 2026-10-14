@@ -11,7 +11,7 @@ How the two agree on "the same moment" and where to dial, privately:
 
 1. Each phone connects to its relay from its *punch port* (listen port + 3);
    the relay tells it its public address as seen from the internet.
-2. While the contacts already have a session (usually over the relay), they
+2. While the contacts already have a session (over Tor or a relay), they
    swap addresses inside the E2EE session: ``RENDEZVOUS`` carries LAN/VPN
    addresses (for plain direct dials) and, if *direct internet connections*
    is on, the public ones; ``PUNCH`` offer/answer starts a round.
@@ -99,6 +99,15 @@ def _clean_candidates(raw: object) -> list[tuple[str, int]]:
         if punchable_candidate(host, port) and (host, port) not in out:
             out.append((host, int(port)))
     return out[:MAX_CANDIDATES]
+
+
+def _same_family(
+    theirs: list[tuple[str, int]], mine: list[tuple[str, int]]
+) -> list[tuple[str, int]]:
+    """Their candidates we can dial: an IPv6-only phone can't reach an IPv4
+    address (and vice versa), so a round without a shared family is skipped."""
+    families = {":" in host for host, _port in mine}
+    return [c for c in theirs if (":" in c[0]) in families]
 
 
 class PunchMixin:
@@ -212,7 +221,7 @@ class PunchMixin:
         if now < self._punch_next.get(hash_id, 0.0) or hash_id in self._punching:
             return
         mine = self.public_candidates()
-        if not mine or not self._peer_public.get(hash_id):
+        if not mine or not _same_family(self._peer_public.get(hash_id, []), mine):
             return
         self._punch_next[hash_id] = now + PUNCH_RETRY_EVERY
         self._punch_offered[hash_id] = now
@@ -236,7 +245,7 @@ class PunchMixin:
         phase = data.get("ph")
         theirs = _clean_candidates(data.get("c"))
         link = self.get_link(hash_id)
-        if not link or link.transport != "relay":
+        if not link or (link.transport != "relay" and not self._link_on_tor(link)):
             return  # already direct (or no session): nothing to punch
         if phase == "o":
             if self._me_hash() < hash_id:
@@ -246,6 +255,7 @@ class PunchMixin:
                 return  # rounds are rare; a flood of offers gets no extra dialing
             self._punch_answered[hash_id] = now
             mine = self.public_candidates()
+            theirs = _same_family(theirs, mine)
             if mine and theirs:
                 # Open our router towards them *before* answering: the leader
                 # dials as soon as the answer arrives.
@@ -255,6 +265,7 @@ class PunchMixin:
                 asyncio.create_task(self._punch(hash_id, theirs, leader=False))
         elif phase == "a":
             offered = self._punch_offered.pop(hash_id, 0.0)
+            theirs = _same_family(theirs, self.public_candidates())
             if theirs and time.monotonic() - offered < 15.0:
                 asyncio.create_task(self._punch(hash_id, theirs, leader=True))
             elif not theirs:
@@ -277,8 +288,8 @@ class PunchMixin:
                 fails = self._punch_failures.get(hash_id, 0)
                 self._punch_failures[hash_id] = fails + 1
                 wait = PUNCH_BACKOFF[min(fails, len(PUNCH_BACKOFF) - 1)]
-                log.info("No direct path through the NATs to %s — staying on the relay "
-                         "(next try in %d s)", hash_id[:8], wait)
+                log.info("No direct path through the NATs to %s — staying on the relay or "
+                         "Tor (next try in %d s)", hash_id[:8], wait)
                 self._punch_next[hash_id] = time.monotonic() + wait
                 return
             self._punch_failures.pop(hash_id, None)
