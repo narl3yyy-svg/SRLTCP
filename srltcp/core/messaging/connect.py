@@ -489,6 +489,7 @@ class ConnectMixin:
         await self._send_pending_pair(remote_hash)
         if self.is_trusted(remote_hash):
             await self.send_pending_share_offers(remote_hash)
+            await self.sync_link_up(remote_hash)
         await self.sync_groups_with(remote_hash)
         if self.is_trusted(remote_hash):
             await self.notify_contact_accepted(remote_hash)

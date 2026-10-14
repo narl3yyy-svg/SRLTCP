@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 
 _prev_cpu: tuple[int, int] | None = None
 _prev_time: float = 0.0
+_last_cpu: float | None = None
+CPU_MIN_INTERVAL = 0.5  # a reading over less time than this is mostly noise
 
 
 def _read_windows_times() -> tuple[int, int] | None:
@@ -49,33 +51,24 @@ def _read_proc_stat() -> tuple[int, int] | None:
 
 
 def cpu_usage_percent() -> float | None:
-    """Return system CPU usage % since last call (call twice ~1s apart for accuracy)."""
-    global _prev_cpu, _prev_time
+    """System CPU usage % since the previous reading. Never waits: the
+    first call (and calls closer together than CPU_MIN_INTERVAL) return the
+    last value, None at first; the status bar polls every second anyway."""
+    global _prev_cpu, _prev_time, _last_cpu
     sample = _read_proc_stat()
     if not sample:
         return None
     now = time.monotonic()
-    if _prev_cpu is None or (now - _prev_time) < 0.4:
-        _prev_cpu = sample
-        _prev_time = now
-        time.sleep(0.35)
-        sample2 = _read_proc_stat()
-        if not sample2:
-            return None
-        total_delta = sample2[0] - sample[0]
-        idle_delta = sample2[1] - sample[1]
-        _prev_cpu = sample2
-        _prev_time = time.monotonic()
-        if total_delta <= 0:
-            return 0.0
-        return round(100.0 * (1.0 - idle_delta / total_delta), 1)
+    if _prev_cpu is None:
+        _prev_cpu, _prev_time = sample, now
+        return _last_cpu
+    if now - _prev_time < CPU_MIN_INTERVAL:
+        return _last_cpu
     total_delta = sample[0] - _prev_cpu[0]
     idle_delta = sample[1] - _prev_cpu[1]
-    _prev_cpu = sample
-    _prev_time = now
-    if total_delta <= 0:
-        return 0.0
-    return round(100.0 * (1.0 - idle_delta / total_delta), 1)
+    _prev_cpu, _prev_time = sample, now
+    _last_cpu = 0.0 if total_delta <= 0 else round(100.0 * (1.0 - idle_delta / total_delta), 1)
+    return _last_cpu
 
 
 def _thermal_zones() -> list[Path]:

@@ -1,5 +1,23 @@
 # SRLTCP Release Notes
 
+## Unreleased
+
+### Folder sync
+- **Keep a folder the same on your device and a contact's.** Contact's ⋮ →
+  *Sync a folder…*; they accept and choose where their copy goes. Adding,
+  changing or deleting a file on either side is copied to the other whenever
+  you're both connected (Wi-Fi, VPN, IPv6, Tor or relay), end-to-end
+  encrypted, only what changed.
+- If you both change the same file before it syncs, both versions are kept
+  (one as a "conflict" copy). Deleted files go to a hidden trash folder on
+  the other side for 30 days.
+- Both devices need this version.
+
+### Faster
+- The CPU/temperature bar no longer stalls the app: reading the CPU load
+  paused the whole node for a third of a second every second while the app
+  was open (chat, calls and transfers all waited).
+
 ## v0.9.0 (2026-10-15)
 
 Both devices need 0.9.0: the handshake changed (older versions can't connect

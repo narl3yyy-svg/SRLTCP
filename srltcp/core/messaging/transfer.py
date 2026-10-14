@@ -271,7 +271,11 @@ class TransferMixin:
         keep = [
             {**t.to_dict(), "path": str(self._incoming_paths.get(t.id, t.path))}
             for t in self._transfers.values()
-            if t.state not in TERMINAL or t.metadata.get("reject_unsent") or self._awaits_expiry(t)
+            if not t.metadata.get("sync")  # sync asks again after a restart
+            and (
+                t.state not in TERMINAL or t.metadata.get("reject_unsent")
+                or self._awaits_expiry(t)
+            )
         ]
         if keep or self._journal_path.exists():
             save_json(self._journal_path, {"version": 1, "transfers": keep[-MAX_JOURNAL:]})
@@ -463,6 +467,13 @@ class TransferMixin:
             self._transfer_progress_emit.pop(transfer.id, None)
         if terminal or force:
             self._journal_changed()
+        if transfer.metadata.get("sync"):
+            # Folder sync: no chat bubble; the sync engine places the file.
+            if terminal and not self._is_outgoing(transfer):
+                await self.sync_transfer_done(transfer, transfer.state == TransferState.COMPLETE)
+            elif terminal:
+                self._transfers.pop(transfer.id, None)
+            return
         payload = transfer.to_dict()
         if self._on_transfer_progress:
             await self._on_transfer_progress(payload)
@@ -533,6 +544,7 @@ class TransferMixin:
         transport: str = "tcp",
         filename: str | None = None,
         ttl: int = 0,
+        sync: dict[str, Any] | None = None,
     ) -> FileTransfer | None:
         link = self.get_link(recipient_hash)
         if not link or not link.handshake_complete:
@@ -541,6 +553,8 @@ class TransferMixin:
         # No hashing up front: the hash is computed while the file streams
         # and sent at the end, so a large file starts moving immediately.
         transfer = self._new_outgoing(recipient_hash, path, link.transport, filename, ttl)
+        if sync:
+            transfer.metadata["sync"] = sync
         transfer.state = TransferState.OFFERED
         await self._send_file_offer(link, transfer)
         return transfer
@@ -573,6 +587,8 @@ class TransferMixin:
         }
         if transfer.metadata.get("ttl"):
             offer["ttl"] = int(transfer.metadata["ttl"])
+        if transfer.metadata.get("sync"):
+            offer["sync"] = transfer.metadata["sync"]
         packet = self._seal(link, MessageType.FILE_OFFER, encode_payload(offer))
         await self._send_raw(link.transport_peer_id, link.transport, packet)
 
@@ -673,7 +689,16 @@ class TransferMixin:
             await self._send_reject(hash_id, transfer_id, "no_space")
             return
         filename = safe_filename(filename).lstrip(".") or "file"
-        dest = unique_dest_path(self._transfer_dir, filename)
+        sync_meta = data.get("sync")
+        if sync_meta is not None:
+            # Folder sync: only files we asked for, into the sync folder.
+            target = self.sync_offer_target(hash_id, sync_meta, size)
+            if target is None:
+                await self._send_reject(hash_id, transfer_id)
+                return
+            dest = target
+        else:
+            dest = unique_dest_path(self._transfer_dir, filename)
         link = self.get_link(hash_id)
         assert link is not None
         transfer = FileTransfer(
@@ -688,8 +713,10 @@ class TransferMixin:
             state=TransferState.ACCEPTED,
         )
         ttl = wire_ttl(data)
-        if ttl:
+        if ttl and sync_meta is None:
             transfer.metadata["ttl"] = ttl  # the sender's disappearing timer
+        if sync_meta is not None:
+            transfer.metadata["sync"] = sync_meta
         self._transfers[transfer_id] = transfer
         self._incoming_paths[transfer_id] = dest
         self._in[transfer_id] = _Incoming(path=dest)
@@ -700,6 +727,8 @@ class TransferMixin:
         await self._send_control(
             hash_id, MessageType.FILE_ACCEPT, {"transfer_id": transfer_id, "offset": 0}
         )
+        if sync_meta is not None:
+            return  # no chat bubble for sync files
         if self._on_file_offer:
             await self._on_file_offer(transfer.to_dict())
         await self._append_file_message(
@@ -874,7 +903,7 @@ class TransferMixin:
             {"transfer_id": transfer.id, "offset": transfer.size, "ok": ok},
         )
         await self._emit_transfer_progress(transfer, force=True)
-        if ok and self._on_transfer_complete:
+        if ok and self._on_transfer_complete and not transfer.metadata.get("sync"):
             await self._on_transfer_complete(transfer.to_dict())
 
     async def _rx_close(
@@ -1187,7 +1216,7 @@ class TransferMixin:
                 log.info("Transfer complete: %s", transfer.filename)
                 self._mark_transfer_cooldown(hash_id, transfer.recipient_hash)
                 await self._emit_transfer_progress(transfer, force=True)
-                if self._on_transfer_complete:
+                if self._on_transfer_complete and not transfer.metadata.get("sync"):
                     await self._on_transfer_complete(transfer.to_dict())
             else:
                 log.warning("%s arrived damaged at %s", transfer.filename, hash_id[:8])

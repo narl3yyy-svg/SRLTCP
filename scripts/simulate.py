@@ -292,6 +292,34 @@ async def features_flow() -> None:
             await bob.wait_for_selector(f".file-bubble:has-text('{f.name}')", timeout=20000)
         print("multi-file: two files picked together, both arrived")
 
+        # Folder sync: Alice starts it from the contact menu, Bob accepts.
+        sync_src = NODES["alice"].data / "syncme"
+        (sync_src / "sub").mkdir(parents=True, exist_ok=True)
+        (sync_src / "a.txt").write_text("synced file\n")
+        (sync_src / "sub" / "b.txt").write_text("in a subfolder\n")
+        await alice.click("#contacts .contact[data-name='Bobby'] .contact-more")
+        await alice.click("#contact-menu [data-action=sync]")
+        await alice.wait_for_selector("#sync-modal.open")
+        await alice.evaluate(
+            "p => { document.querySelector('#sync-new-path').value = p; }", str(sync_src)
+        )
+        await alice.fill("#sync-new-name", "Holiday")
+        await alice.click("#sync-new-start")
+        await alice.wait_for_selector("#sync-list >> text=Waiting for", timeout=5000)
+        await bob.wait_for_selector("#sync-modal.open [data-sync-accept]", timeout=10000)
+        await shot(bob, "08-sync-invite")
+        await bob.click("#sync-modal [data-sync-accept]")
+        synced_b = NODES["bob"].data / "transfers" / "Sync" / "Holiday"
+        deadline = time.time() + 30
+        while time.time() < deadline and not (synced_b / "sub" / "b.txt").exists():
+            await asyncio.sleep(0.5)
+        assert (synced_b / "a.txt").read_text() == "synced file\n"
+        assert (synced_b / "sub" / "b.txt").read_text() == "in a subfolder\n"
+        await alice.wait_for_selector("#sync-list >> text=up to date", timeout=15000)
+        for pg in (alice, bob):
+            await pg.click("#sync-close")
+        print("folder sync: invited, accepted, both files arrived")
+
         # Shared folder: Alice offers, Bob browses and downloads
         await alice.click("#btn-share-folder")
         await alice.wait_for_selector("#share-submit")

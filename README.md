@@ -24,6 +24,7 @@
 | **Privacy options** | Disappearing messages, app lock and private lock-screen notifications (all off by default) |
 | **Fast file transfer** | Windowed streaming (1 MiB chunks direct, smaller on Tor/relay/serial), zstd, verified while streaming; survives dropped connections and app restarts; several files at once; optional photo shrinking |
 | **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
+| **Folder sync** | Keep a folder the same on your device and a contact's: two-way, incremental, conflicts kept as copies, deletes go to a 30-day trash |
 | **Drag-and-drop send** | Drop files onto a contact in the Web UI |
 | **Optional port forwarding** | Forward TCP 7825 if you like; never required (Tor, IPv6 and the relay cover other networks) |
 | **Web UI** | Localhost **HTTPS-only** chat UI (default port **9876**), protected by a private access token |
@@ -74,6 +75,7 @@ srltcp/
       store.py              # On-disk chat history
       transfer.py           # Windowed, resumable file transfer
       share_peer.py         # E2EE folder/file shares
+      sync.py               # Two-way folder sync with a contact
       groups.py             # Group chats
       relay.py, punch.py    # Relay client, path switching, hole punching (IPv4/IPv6)
       tor.py                # Onion service, Tor dialing, parallel Tor lanes
@@ -482,6 +484,16 @@ curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" -X POST https://127.0.0.1:9876/
   -d '{"owner_hash":"<owner_hash>","grant_id":"<grant_id>","path":"docs/readme.txt"}'
 ```
 
+### Folder sync
+
+Contact's **⋮** → *Sync a folder…* → choose a folder (and the name they see) → *Start syncing*. Your contact gets an invitation and picks where their copy goes (default `Downloads/SRLTCP/Sync/<name>` on Android). From then on, adding, changing or deleting a file on either side is copied to the other whenever you're both connected: on the same Wi-Fi, over IPv6, Tor or your relay. Each folder is scanned every 20 seconds and right after you reconnect; *Sync now* doesn't wait.
+
+- **Two-way and incremental.** Only changed files travel, through the normal end-to-end encrypted, resumable file transfer, checked against their SHA-256.
+- **Conflicts.** If you both change the same file before it syncs, both phones keep the same version under the original name and the other one next to it as `name (conflict <date> <device>).ext`. Nothing is lost.
+- **Deletes** are copied too, but on the other side the file goes to the hidden `.srltcp-sync/trash` folder inside the synced folder for 30 days. A delete on one side and an edit on the other keeps the edit.
+- **Pause, resume, stop** from the same window. Stopping (on either side) ends it for both; the files stay where they are.
+- **Safety.** A contact can only touch the folder of a sync you started or accepted with *that* contact, every path they send is checked (nothing outside the folder, no hidden `.srltcp-sync` files), and a file is only sent if it's exactly the version asked for. Both devices need a version with folder sync.
+
 ### Legacy HTTP share sessions (localhost only)
 
 For local tooling, token-based HTTP browse remains available on the **localhost HTTPS** UI only:
@@ -569,6 +581,10 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 
 ## Roadmap
 
+**Done (next release)**
+
+- [x] Folder sync with a contact: two-way, incremental, conflict copies, 30-day trash for deletes
+
 **Done (v0.9.0)**
 
 - [x] Quantum-safe sessions: X25519 + ML-KEM-768 key exchange, Ed25519 + ML-DSA-65 signatures
@@ -651,7 +667,6 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [ ] Per-contact "always use Tor" (hide who talks to whom even when a direct path exists)
 - [ ] Several relays per contact (failover) and multi-hop relaying
 - [ ] Android USB serial Chaquopy shim (full OTG support)
-- [ ] Folder sync (bidirectional, incremental)
 - [ ] QUIC transport backend
 - [ ] Bandwidth limiting and QoS per transfer
 - [ ] Signed APK releases with a stable release key (updates install over the old app)

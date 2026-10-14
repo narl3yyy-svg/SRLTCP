@@ -631,6 +631,12 @@
         case "messages_removed":
           onMessagesRemoved(data.ids);
           break;
+        case "sync_invite":
+          onSyncInvite(data.sync);
+          break;
+        case "sync_update":
+          if (state.syncPeer && data.sync?.peer === state.syncPeer) loadSyncs();
+          break;
         case "contact_request":
           loadPeers();
           showContactRequest({ ...data, _event: true });
@@ -3685,6 +3691,142 @@
     a.remove();
   }
 
+  // ── Folder sync (two-way, with one contact) ──
+
+  function syncStatus(s) {
+    const who = escapeHtml(s.peer_name || "your contact");
+    switch (s.state) {
+      case "offered": return `${who} wants to sync this folder with you`;
+      case "invited": return `Waiting for ${who} to accept`;
+      case "paused": return `Paused · ${s.files} files`;
+      case "stopped": return `${who} stopped syncing. Your files stay where they are`;
+      default: {
+        const busy = s.pending ? `${s.pending} to download` : "up to date";
+        const conflicts = s.conflicts ? ` · ${s.conflicts} conflict copies kept` : "";
+        return `${s.files} files · ${busy}${conflicts}`;
+      }
+    }
+  }
+
+  function renderSyncs(list) {
+    const box = $("#sync-list");
+    if (!box) return;
+    if (!list.length) {
+      box.innerHTML = '<div class="empty-hint">No synced folders with this contact yet.</div>';
+      return;
+    }
+    box.innerHTML = list.map((s) => {
+      const id = escapeHtml(s.id);
+      let actions = "";
+      let extra = "";
+      if (s.state === "offered") {
+        extra = `<div class="folder-row">
+            <input type="text" id="sync-accept-${id}" value="${escapeHtml(s.suggested_root || "")}" readonly />
+            <button type="button" class="action-btn small" data-browse="sync-accept-${id}">Browse</button>
+          </div>`;
+        actions = `<button type="button" class="action-btn small" data-sync-accept="${id}">Accept</button>
+          <button type="button" class="action-btn small secondary" data-sync-decline="${id}">Decline</button>`;
+      } else if (s.state === "active") {
+        actions = `<button type="button" class="action-btn small" data-sync-now="${id}">Sync now</button>
+          <button type="button" class="action-btn small secondary" data-sync-pause="${id}">Pause</button>
+          <button type="button" class="action-btn small danger" data-sync-stop="${id}">Stop</button>`;
+      } else if (s.state === "paused") {
+        actions = `<button type="button" class="action-btn small" data-sync-resume="${id}">Resume</button>
+          <button type="button" class="action-btn small danger" data-sync-stop="${id}">Stop</button>`;
+      } else {
+        actions = `<button type="button" class="action-btn small danger" data-sync-stop="${id}">Remove</button>`;
+      }
+      return `<div class="sync-item">
+          <div class="sync-item-head"><span class="sync-item-name">${escapeHtml(s.name)}</span>
+            <span class="sync-item-path">${escapeHtml(s.root || "")}</span></div>
+          <div class="sync-item-status${s.state === "active" && !s.pending ? " ok" : ""}">${syncStatus(s)}</div>
+          ${extra}
+          <div class="modal-actions sync-actions">${actions}</div>
+        </div>`;
+    }).join("");
+  }
+
+  async function loadSyncs() {
+    if (!state.syncPeer) return;
+    const { ok, data } = await apiGet(
+      `/api/sync?peer=${encodeURIComponent(state.syncPeer)}`, { fallback: [] }
+    );
+    if (ok) renderSyncs(Array.isArray(data) ? data : []);
+  }
+
+  function openSyncModal(hashId, name) {
+    state.syncPeer = hashId;
+    const nameEl = $("#sync-peer-name");
+    if (nameEl) nameEl.textContent = name || hashId.slice(0, 8);
+    setInputValue("sync-new-path", "");
+    setInputValue("sync-new-name", "");
+    renderSyncs([]);
+    openModal($("#sync-modal"));
+    loadSyncs();
+  }
+
+  function closeSyncModal() {
+    state.syncPeer = null;
+    closeModal($("#sync-modal"));
+  }
+
+  function onSyncInvite(sync) {
+    if (!sync?.peer) return;
+    const who = sync.peer_name || "A contact";
+    toast(`${who} wants to sync the folder “${sync.name}” with you`);
+    if (!state.syncPeer) openSyncModal(sync.peer, who);
+    else if (state.syncPeer === sync.peer) loadSyncs();
+  }
+
+  async function syncAction(url, body = {}, method = "POST") {
+    const { ok, data } = method === "DELETE"
+      ? await apiDelete(url)
+      : await apiPost(url, body, { silent: true });
+    if (!ok) toast(data?.error || "That didn't work", "error");
+    await loadSyncs();
+    return ok;
+  }
+
+  $("#sync-list")?.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const d = btn.dataset;
+    const base = (id) => `/api/sync/${encodeURIComponent(id)}`;
+    if (d.syncAccept) {
+      const path = $(`#sync-accept-${CSS.escape(d.syncAccept)}`)?.value || "";
+      if (await syncAction(`${base(d.syncAccept)}/accept`, { path })) toast("Syncing started");
+    } else if (d.syncDecline) {
+      await syncAction(`${base(d.syncDecline)}/decline`);
+    } else if (d.syncNow) {
+      await syncAction(`${base(d.syncNow)}/now`);
+    } else if (d.syncPause) {
+      await syncAction(`${base(d.syncPause)}/pause`, { paused: true });
+    } else if (d.syncResume) {
+      await syncAction(`${base(d.syncResume)}/pause`, { paused: false });
+    } else if (d.syncStop) {
+      if (!confirm("Stop syncing this folder? The files stay on both devices.")) return;
+      await syncAction(base(d.syncStop), {}, "DELETE");
+    }
+  });
+
+  $("#sync-new-start")?.addEventListener("click", async () => {
+    const path = $("#sync-new-path")?.value || "";
+    if (!path) {
+      toast("Choose a folder first", "error");
+      return;
+    }
+    const ok = await syncAction("/api/sync", {
+      recipient_hash: state.syncPeer, path, name: ($("#sync-new-name")?.value || "").trim(),
+    });
+    if (ok) {
+      setInputValue("sync-new-path", "");
+      setInputValue("sync-new-name", "");
+      toast("Invitation sent: syncing starts once they accept");
+    }
+  });
+  $("#sync-close")?.addEventListener("click", closeSyncModal);
+  setupModalClose($("#sync-modal"), closeSyncModal);
+
   // ── This phone: app lock, private lock-screen notifications (Android) ──
   // Stored by the Android app itself (it locks before the page exists) and
   // applied at once, not with "Save settings".
@@ -4648,6 +4790,10 @@
         closeContactMenu();
         if (state.selectedPeer !== hashId) selectPeer(hashId, name);
         openShareModal("offer");
+        break;
+      case "sync":
+        closeContactMenu();
+        openSyncModal(hashId, name);
         break;
       default:
         break;

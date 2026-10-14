@@ -30,6 +30,7 @@ class MessageType(IntEnum):
     LANE_JOIN = 0x37  # extra Tor connection joins a session to carry file data
     SHARE_LIST = 0x40
     SHARE_REQUEST = 0x41
+    SYNC = 0x42  # folder sync (sync.py)
     RECEIPT = 0x21
     PAIR = 0x22
     RENDEZVOUS = 0x23  # pair-secret contribution + relay code + addresses
@@ -67,6 +68,7 @@ SESSION_MESSAGE_TYPES = frozenset(
         MessageType.FILE_ACK,
         MessageType.SHARE_LIST,
         MessageType.SHARE_REQUEST,
+        MessageType.SYNC,
         MessageType.CALL_SIGNAL,
         MessageType.CALL_MEDIA,
         MessageType.GROUP_UPDATE,

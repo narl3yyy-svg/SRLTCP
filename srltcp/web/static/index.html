@@ -720,6 +720,28 @@
 </div>
 </div>
 </div>
+<div class="modal-overlay" id="sync-modal" aria-hidden="true">
+<div class="modal-card wide">
+<h3>Synced folders with <span id="sync-peer-name">contact</span></h3>
+<p class="hint">You both keep the same copy of a folder: changes on either side are copied to the other whenever you're connected, end-to-end encrypted. If you both change a file before it syncs, both versions are kept. Deleted files go to the other side's hidden <code>.srltcp-sync/trash</code> folder for 30 days.</p>
+<div class="sync-list" id="sync-list" aria-live="polite"></div>
+<fieldset class="settings-group">
+<legend>Sync a new folder</legend>
+<div class="folder-row">
+<input type="text" id="sync-new-path" placeholder="Choose a folder" readonly />
+<button type="button" class="action-btn small" data-browse="sync-new-path">Browse</button>
+</div>
+<label class="field"><span>Name they see (optional)</span><input type="text" id="sync-new-name" maxlength="64" autocomplete="off" /></label>
+<div class="modal-actions sync-actions">
+<button type="button" class="action-btn" id="sync-new-start">Start syncing</button>
+</div>
+</fieldset>
+<div class="modal-actions">
+<span class="spacer"></span>
+<button type="button" class="action-btn secondary" id="sync-close">Close</button>
+</div>
+</div>
+</div>
 <div class="modal-overlay" id="restore-modal" aria-hidden="true">
 <div class="modal-card">
 <h3>Restore from backup</h3>
@@ -740,6 +762,7 @@
 <button type="button" class="contact-menu-item" data-action="clear-chat">Clear chat history</button>
 <button type="button" class="contact-menu-item" data-action="edit">Edit contact…</button>
 <button type="button" class="contact-menu-item" data-action="share">Share folder (E2EE)</button>
+<button type="button" class="contact-menu-item" data-action="sync">Sync a folder…</button>
 <button type="button" class="contact-menu-item" data-action="block">Block contact</button>
 <button type="button" class="contact-menu-item danger" data-action="delete">Delete contact</button>
 </div>

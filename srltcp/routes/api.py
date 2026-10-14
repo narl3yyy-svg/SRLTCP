@@ -970,6 +970,82 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         asyncio.create_task(_do_restart())
         return web.json_response({"restarting": True})
 
+    # ── Folder sync ──
+
+    def _sync_default_root(name: str) -> str:
+        from srltcp.utils.files import safe_filename
+
+        base = node.settings.resolved_incoming_dir().parent / "Sync"
+        return str(base / (safe_filename(name).lstrip(".") or "Folder"))
+
+    def _sync_views(peer: str = "") -> list[dict]:
+        views = node.backend.list_syncs(peer)
+        for view in views:
+            if view["state"] == "offered":
+                view["suggested_root"] = _sync_default_root(view["name"])
+        return views
+
+    def _sync_id(request: web.Request) -> str:
+        sid = request.match_info.get("sync_id", "")
+        if sid not in node.backend._syncs:
+            raise web.HTTPNotFound(
+                text='{"error": "no such synced folder"}', content_type="application/json"
+            )
+        return sid
+
+    async def sync_list(request: web.Request) -> web.Response:
+        peer = request.rel_url.query.get("peer", "").lower()
+        return web.json_response(_sync_views(peer if is_valid_hash_id(peer) else ""))
+
+    async def sync_create(request: web.Request) -> web.Response:
+        data = await request.json()
+        peer = str(data.get("recipient_hash", "")).lower()
+        path = _validate_path(str(data.get("path", "")), must_exist=True)
+        if not is_valid_hash_id(peer) or not node.backend.is_trusted(peer):
+            return web.json_response({"error": "not a contact"}, status=400)
+        if not path or not path.is_dir():
+            return web.json_response({"error": "choose an existing folder"}, status=400)
+        try:
+            view = await node.backend.create_sync(peer, path, str(data.get("name", ""))[:64])
+        except (ValueError, OSError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(view)
+
+    async def sync_accept(request: web.Request) -> web.Response:
+        sid = _sync_id(request)
+        data = await request.json()
+        raw = str(data.get("path", "")) or _sync_default_root(node.backend._syncs[sid].name)
+        path = _validate_path(raw, must_exist=False)
+        if not path or (path.exists() and not path.is_dir()):
+            return web.json_response({"error": "choose a folder"}, status=400)
+        try:
+            view = await node.backend.accept_sync(sid, path)
+        except (ValueError, OSError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(view)
+
+    async def sync_decline(request: web.Request) -> web.Response:
+        await node.backend.decline_sync(_sync_id(request))
+        return web.json_response({"ok": True})
+
+    async def sync_pause(request: web.Request) -> web.Response:
+        sid = _sync_id(request)
+        data = await request.json()
+        try:
+            view = await node.backend.set_sync_paused(sid, bool(data.get("paused")))
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(view)
+
+    async def sync_now(request: web.Request) -> web.Response:
+        sid = _sync_id(request)
+        await node.backend.sync_now(sid)
+        return web.json_response(node.backend._sync_view(sid) or {})
+
+    async def sync_remove(request: web.Request) -> web.Response:
+        await node.backend.remove_sync(_sync_id(request))
+        return web.json_response({"ok": True})
+
     # ── Encrypted backup / restore ──
 
     def _backup_dir() -> Path:
@@ -1073,13 +1149,14 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         return web.json_response({"cancelled": True, "id": transfer_id})
 
     async def system(_request: web.Request) -> web.Response:
-        return web.json_response(
-            system_stats(
-                timezone=node.settings.timezone,
-                clock_source=node.settings.clock_source,
-                ntp_server=node.settings.ntp_server,
-            )
+        # Reads /proc, /sys or WMI (and maybe NTP): never on the event loop.
+        stats = await asyncio.to_thread(
+            system_stats,
+            timezone=node.settings.timezone,
+            clock_source=node.settings.clock_source,
+            ntp_server=node.settings.ntp_server,
         )
+        return web.json_response(stats)
 
     async def timezones(_request: web.Request) -> web.Response:
         return web.json_response({"timezones": list_timezones()})
@@ -1236,6 +1313,13 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_delete("/api/identities/{transport}", identity_delete)
     app.router.add_get("/api/release-notes", release_notes)
     app.router.add_post("/api/restart", restart)
+    app.router.add_get("/api/sync", sync_list)
+    app.router.add_post("/api/sync", sync_create)
+    app.router.add_post("/api/sync/{sync_id}/accept", sync_accept)
+    app.router.add_post("/api/sync/{sync_id}/decline", sync_decline)
+    app.router.add_post("/api/sync/{sync_id}/pause", sync_pause)
+    app.router.add_post("/api/sync/{sync_id}/now", sync_now)
+    app.router.add_delete("/api/sync/{sync_id}", sync_remove)
     app.router.add_post("/api/backup", backup_create)
     app.router.add_get("/api/backup/{name}", backup_file)
     app.router.add_post("/api/backup/restore", backup_restore)

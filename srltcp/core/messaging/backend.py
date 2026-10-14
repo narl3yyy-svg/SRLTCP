@@ -28,6 +28,7 @@ from srltcp.core.messaging.punch import PunchMixin
 from srltcp.core.messaging.relay import RelayMixin, relay_peer_hash
 from srltcp.core.messaging.share_peer import SharePeerMixin
 from srltcp.core.messaging.store import MessageStore
+from srltcp.core.messaging.sync import SyncMixin
 from srltcp.core.messaging.tor import TorMixin
 from srltcp.core.messaging.transfer import TransferMixin
 from srltcp.core.protocol.messages import (
@@ -94,6 +95,7 @@ class MessagingBackend(
     PunchMixin,
     TorMixin,
     DisappearMixin,
+    SyncMixin,
 ):
     """Central messaging orchestrator."""
 
@@ -138,6 +140,7 @@ class MessagingBackend(
         self._init_tor()
         self._init_pairing()
         self._init_groups()
+        self._init_sync()
 
     def set_callbacks(
         self,
@@ -207,6 +210,8 @@ class MessagingBackend(
             await self.start_relay_client()
         await self.start_tor()
         self.connect_known_contacts()
+        if self._syncs:
+            self._ensure_sync_loop()
 
         log.info(
             "MessagingBackend started (tcp=%s, serial=%s, relay=%s)",
@@ -224,6 +229,7 @@ class MessagingBackend(
         for task in list(self._dial_tasks.values()):
             task.cancel()
         self._dial_tasks.clear()
+        await self.stop_sync_loop()
         await self.stop_tor()
         await self.stop_relay_client()
         await self.stop_announce_loop()
@@ -530,6 +536,8 @@ class MessagingBackend(
             await self._handle_share_list(hash_id, body)
         elif msg_type == MessageType.SHARE_REQUEST:
             await self._handle_share_request(hash_id, body)
+        elif msg_type == MessageType.SYNC:
+            await self._handle_sync(hash_id, body)
         elif msg_type == MessageType.CALL_SIGNAL:
             await self._handle_call_signal(hash_id, body)
         elif msg_type == MessageType.CALL_MEDIA:

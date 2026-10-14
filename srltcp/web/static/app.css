@@ -1601,6 +1601,16 @@ label.field > span {
 .safety-number { font-family: var(--mono); font-size: 1rem; letter-spacing: 0.04em; display: grid; grid-template-columns: repeat(4, auto); justify-content: center; gap: 0.3rem 0.9rem; margin: 0.5rem 0 0.75rem; user-select: all; }
 .verify-actions { flex-wrap: wrap; }
 .backup-actions { justify-content: flex-start; flex-wrap: wrap; }
+#folder-modal { z-index: 470; } /* the folder picker opens over other windows */
+.sync-list { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.5rem 0; }
+.sync-item { border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 0.65rem 0.8rem; }
+.sync-item-head { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+.sync-item-name { font-weight: 600; }
+.sync-item-path { font-family: var(--mono); font-size: 0.75rem; color: var(--text-secondary); word-break: break-all; }
+.sync-item-status { font-size: 0.85rem; color: var(--text-secondary); margin: 0.25rem 0 0.4rem; }
+.sync-item-status.ok { color: var(--success); }
+.sync-item .folder-row { margin: 0.35rem 0; }
+.sync-actions { justify-content: flex-start; flex-wrap: wrap; }
 .setup-restore { width: 100%; margin-top: 0.75rem; }
 .restore-status { font-size: 0.9rem; padding: 0.5rem 0.75rem; border-radius: 8px; background: var(--accent-soft); }
 .restore-status.error { background: rgba(240, 113, 120, 0.14); color: var(--danger); }

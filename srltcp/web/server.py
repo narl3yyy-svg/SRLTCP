@@ -135,6 +135,12 @@ def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application
         elif kind == "contact_request":
             who = data.get("name") or hid[:8]
             notify_if_no_ui("Contact request", f"{who} wants to chat", f"req-{hid}")
+        elif kind == "sync_invite":
+            sync = data.get("sync") or {}
+            notify_if_no_ui(
+                "Folder sync", f"{sync.get('peer_name', 'A contact')} wants to sync a folder",
+                f"sync-{sync.get('id', '')}",
+            )
         if kind in (
             "share_offer",
             "share_listing",
@@ -144,6 +150,8 @@ def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application
             "call_signal",
             "group_update",
             "messages_removed",
+            "sync_invite",
+            "sync_update",
         ):
             await broadcast_event(node, kind, data)
         else:
