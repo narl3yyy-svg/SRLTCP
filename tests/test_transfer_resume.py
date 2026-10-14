@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import srltcp.core.messaging.transfer as tr
+from srltcp.utils import vault
 from tests.test_e2e_nodes import make_node, trust, wait_for
 
 
@@ -111,7 +112,7 @@ async def test_sender_restart_resumes_and_hashes_what_was_sent(
         assert await wait_for(lambda: a2._transfers[tid].state == "complete", timeout=10)
         # Finished: nothing is left to resume after the next restart.
         a2.save_transfer_journal()
-        assert '"transfers":[]' in (tmp_path / "alice" / "transfers.json").read_text()
+        assert '"transfers":[]' in vault.read_text(tmp_path / "alice" / "transfers.json")
     finally:
         if a2:
             await a2.stop()

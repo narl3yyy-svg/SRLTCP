@@ -1600,6 +1600,12 @@ label.field > span {
 .verify-status.ok { color: var(--success, #2ecc71); }
 .safety-number { font-family: var(--mono); font-size: 1rem; letter-spacing: 0.04em; display: grid; grid-template-columns: repeat(4, auto); justify-content: center; gap: 0.3rem 0.9rem; margin: 0.5rem 0 0.75rem; user-select: all; }
 .verify-actions { flex-wrap: wrap; }
+.backup-actions { justify-content: flex-start; flex-wrap: wrap; }
+.setup-restore { width: 100%; margin-top: 0.75rem; }
+.restore-status { font-size: 0.9rem; padding: 0.5rem 0.75rem; border-radius: 8px; background: var(--accent-soft); }
+.restore-status.error { background: rgba(240, 113, 120, 0.14); color: var(--danger); }
+.bubble-timer { display: inline-flex; width: 12px; height: 12px; opacity: 0.75; }
+.bubble-timer svg { width: 12px; height: 12px; }
 .pair-buttons { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.75rem; }
 .pair-nfc-status { font-size: 0.85rem; padding: 0.5rem 0.75rem; border-radius: 8px; background: rgba(91, 141, 239, 0.12); }
 .pair-camera { width: 100%; border-radius: 10px; margin-top: 0.5rem; background: #000; }
@@ -1699,8 +1705,8 @@ html, body { touch-action: pan-x pan-y; }
 #chat-active.group-chat .status-dot { display: none; }
 
 /* ── Internet relay settings ── */
-.relay-settings { border: 1px solid var(--border, rgba(255,255,255,0.08)); border-radius: 10px; padding: 0.75rem 0.9rem; margin: 0.75rem 0; }
-.relay-settings legend { padding: 0 0.35rem; font-weight: 600; }
+.relay-settings, .settings-group { border: 1px solid var(--border, rgba(255,255,255,0.08)); border-radius: 10px; padding: 0.75rem 0.9rem; margin: 0.75rem 0; }
+.relay-settings legend, .settings-group legend { padding: 0 0.35rem; font-weight: 600; }
 .relay-status { white-space: pre-line; font-size: 0.8rem; color: var(--text-muted, #8b93a8); margin: 0.25rem 0 0.5rem; overflow-wrap: anywhere; }
 .relay-status.ok { color: var(--success, #3ecf8e); }
 .transport-badge.relay { background: rgba(176, 132, 255, 0.15); color: #b084ff; }

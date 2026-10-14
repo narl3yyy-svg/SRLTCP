@@ -143,6 +143,7 @@ def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application
             "paired",
             "call_signal",
             "group_update",
+            "messages_removed",
         ):
             await broadcast_event(node, kind, data)
         else:

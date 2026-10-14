@@ -566,14 +566,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Ask where to save a transfer's file, then copy it there. Returns "" or an error. */
-    fun saveTransferFile(transferId: String): String {
+    fun saveTransferFile(transferId: String): String =
+        saveWithPicker("android_transfer_file", transferId)
+
+    /** Ask where to save the encrypted backup, then copy it there. */
+    fun saveBackupFile(filename: String): String =
+        saveWithPicker("android_backup_file", filename)
+
+    /** Look the file up in Python (``pyFunction(arg)``), then "Save as". */
+    private fun saveWithPicker(pyFunction: String, arg: String): String {
         val info = try {
             JSONObject(
                 Python.getInstance().getModule("srltcp.app")
-                    .callAttr("android_transfer_file", transferId).toString()
+                    .callAttr(pyFunction, arg).toString()
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Transfer lookup failed", e)
+            Log.e(TAG, "File lookup failed", e)
             return "Could not open that file"
         }
         if (info.has("error")) return info.getString("error")
@@ -593,6 +601,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
         return ""
+    }
+
+    /** Start fresh: a new process reads the restored data from disk. */
+    fun restartApp() {
+        val launch = packageManager.getLaunchIntentForPackage(packageName) ?: return
+        startActivity(Intent.makeRestartActivityTask(launch.component))
+        stopService(Intent(this, SRLTCPService::class.java))
+        Runtime.getRuntime().exit(0)
     }
 
     // ── Call audio: route like a phone call (earpiece / speaker) ──

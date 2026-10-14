@@ -65,6 +65,7 @@ class PingMixin:
                     self.retry_outbox_connections()
                 try:
                     await self._check_stale_offers()
+                    await self.expire_messages()
                 except Exception as exc:  # noqa: BLE001 - keep the loop alive
                     log.debug("Stale offer check failed: %s", exc)
                 if tick:

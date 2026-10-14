@@ -150,6 +150,7 @@
 </header>
 <nav class="settings-tabs" role="tablist">
 <button type="button" class="settings-tab active" data-tab="general">General</button>
+<button type="button" class="settings-tab" data-tab="privacy">Privacy</button>
 <button type="button" class="settings-tab" data-tab="network">Network</button>
 <button type="button" class="settings-tab" data-tab="serial">Serial</button>
 <button type="button" class="settings-tab" data-tab="folders">Folders</button>
@@ -178,6 +179,32 @@
 <span>Shrink photos before sending</span>
 </label>
 <small class="field-hint">Photos go out smaller (longest side 2560 px), so they send faster over Tor or mobile data. Shrinking also removes the location and camera details stored in the photo. Off = the original file, untouched.</small>
+</div>
+<div class="settings-panel" data-panel="privacy">
+<p class="hint">Your keys, contacts, chats and settings are stored encrypted on this device. On Android the key is kept by the phone's secure hardware (Keystore), so a copy of the app's files is useless anywhere else.</p>
+<label class="field">
+<span>Disappearing messages</span>
+<select id="set-disappear">
+<option value="0">Off</option>
+<option value="3600">1 hour</option>
+<option value="86400">1 day</option>
+<option value="604800">1 week</option>
+<option value="2419200">4 weeks</option>
+</select>
+<small>Messages and files you send are deleted from both phones this long after they're sent (one-to-one chats). Your contacts' own setting decides for their messages. It can't undo a screenshot or a copy someone saved.</small>
+</label>
+<fieldset class="settings-group" id="backup-settings">
+<legend>Backup</legend>
+<p class="hint">One file with your identity, contacts, chats, groups and settings, locked with a password. Keep it safe: with the file and the password, someone could become you. Received files and shared folders are not included.</p>
+<div class="field-row">
+<label class="field grow"><span>Backup password (8+ characters)</span><input type="password" id="backup-password" autocomplete="new-password" /></label>
+<label class="field grow"><span>Repeat it</span><input type="password" id="backup-password2" autocomplete="new-password" /></label>
+</div>
+<div class="modal-actions backup-actions">
+<button type="button" class="action-btn" id="btn-backup-create">Create backup</button>
+<button type="button" class="action-btn secondary" id="btn-backup-restore">Restore from backup…</button>
+</div>
+</fieldset>
 </div>
 <div class="settings-panel" data-panel="network">
 <p class="hint">Most people never need to change anything here. SRLTCP picks the best path by itself: same Wi-Fi or VPN first, then a direct internet connection, then your relay, then Tor.</p>
@@ -382,6 +409,7 @@
 </label>
 <button type="submit" class="action-btn save-btn">Get started</button>
 </form>
+<button type="button" class="action-btn secondary setup-restore" id="setup-restore">Moving from another device? Restore a backup</button>
 <p class="setup-foot">🔒 Localhost HTTPS only · E2EE · GPL v3</p>
 </div>
 </div>
@@ -676,6 +704,20 @@
 <button type="button" class="action-btn small secondary hidden" id="verify-remove">Remove verification</button>
 <span class="spacer"></span>
 <button type="button" class="action-btn secondary" id="verify-close">Close</button>
+</div>
+</div>
+</div>
+<div class="modal-overlay" id="restore-modal" aria-hidden="true">
+<div class="modal-card">
+<h3>Restore from backup</h3>
+<p class="hint">This replaces the identity, contacts, chats and settings on this device with the ones in the backup, then restarts SRLTCP. Use a restored identity on one device only.</p>
+<label class="field"><span>Backup file</span><input type="file" id="restore-file" accept=".srltcp" /></label>
+<label class="field"><span>Backup password</span><input type="password" id="restore-password" autocomplete="current-password" /></label>
+<p class="restore-status hidden" id="restore-status" aria-live="polite"></p>
+<div class="modal-actions">
+<span class="spacer"></span>
+<button type="button" class="action-btn secondary" id="restore-cancel">Cancel</button>
+<button type="button" class="action-btn danger-btn" id="restore-submit">Restore</button>
 </div>
 </div>
 </div>

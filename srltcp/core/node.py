@@ -57,6 +57,14 @@ class SRLTCPNode:
         self.pending_call: dict[str, Any] | None = None
 
     async def start(self) -> None:
+        from srltcp.core.backup import APP_FILES
+        from srltcp.utils import vault
+
+        # Files from before encryption at rest (0.9): sealed once, here.
+        root = self.backend.trusted.path.parent
+        sealed = vault.seal_existing([root / name for name in APP_FILES])
+        if sealed:
+            log.info("Encrypted %d data file(s) at rest", sealed)
         if self.settings.message_retention_hours == 0:
             self.backend.clear_messages()
         await self.backend.start()
@@ -146,6 +154,7 @@ class SRLTCPNode:
         self.config.announce = settings.auto_announce
         self.config.lan_ip = settings.lan_ip
         self.config.message_retention_hours = settings.message_retention_hours
+        self.config.disappear_seconds = settings.disappear_seconds
         self.config.enable_serial = settings.enable_serial
         self.config.serial_port = settings.serial_port
         self.config.serial_baud = settings.serial_baud

@@ -75,6 +75,18 @@ class SRLTCPBridge(private val activity: MainActivity) {
     fun saveTransferFile(transferId: String): String =
         if (activity.isTrustedPage) activity.saveTransferFile(transferId) else ""
 
+    /** "Save as" for the encrypted backup just made (Settings → Backup). */
+    @JavascriptInterface
+    fun saveBackup(filename: String): String =
+        if (activity.isTrustedPage) activity.saveBackupFile(filename) else ""
+
+    /** Start the app again (after restoring a backup). */
+    @JavascriptInterface
+    fun restartApp() {
+        if (!activity.isTrustedPage) return
+        activity.runOnUiThread { activity.restartApp() }
+    }
+
     @JavascriptInterface
     fun shareText(title: String, text: String) {
         if (!activity.isTrustedPage) return

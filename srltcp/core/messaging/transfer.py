@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any, BinaryIO
 import zstandard as zstd
 
 from srltcp.core.messaging import constants as C
+from srltcp.core.messaging.disappear import wire_ttl
 from srltcp.core.messaging.models import FileTransfer, TransferState
 from srltcp.core.protocol.framing import pack_frame
 from srltcp.core.protocol.messages import (
@@ -494,10 +495,13 @@ class TransferMixin:
         path: Path,
         transport: str,
         filename: str | None,
+        ttl: int = 0,
     ) -> FileTransfer:
         transfer = FileTransfer.create(
             self._identity_for_transport(transport).hash_id, recipient_hash, path, transport
         )
+        if ttl:
+            transfer.metadata["ttl"] = ttl  # disappearing: both phones delete it
         if filename:
             transfer.filename = safe_filename(filename)
         if Path(transfer.filename).suffix.lower() in _NO_COMPRESS:
@@ -516,6 +520,7 @@ class TransferMixin:
         *,
         transport: str = "tcp",
         filename: str | None = None,
+        ttl: int = 0,
     ) -> FileTransfer | None:
         link = self.get_link(recipient_hash)
         if not link or not link.handshake_complete:
@@ -523,7 +528,7 @@ class TransferMixin:
             return None
         # No hashing up front: the hash is computed while the file streams
         # and sent at the end, so a large file starts moving immediately.
-        transfer = self._new_outgoing(recipient_hash, path, link.transport, filename)
+        transfer = self._new_outgoing(recipient_hash, path, link.transport, filename, ttl)
         transfer.state = TransferState.OFFERED
         await self._send_file_offer(link, transfer)
         return transfer
@@ -535,12 +540,13 @@ class TransferMixin:
         *,
         transport: str = "tcp",
         filename: str | None = None,
+        ttl: int = 0,
     ) -> FileTransfer:
         """Create an outgoing transfer for a contact with no session yet.
 
         It waits PAUSED (offset 0) and is offered by resume_transfer when the
         contact's session comes up."""
-        transfer = self._new_outgoing(recipient_hash, path, transport, filename)
+        transfer = self._new_outgoing(recipient_hash, path, transport, filename, ttl)
         transfer.state = TransferState.PAUSED
         log.info("Contact %s unreachable — file %s queued", recipient_hash[:8], transfer.id)
         return transfer
@@ -550,10 +556,12 @@ class TransferMixin:
     ) -> None:
         _, tries = self._offer_sent_at.get(transfer.id, (0.0, 0))
         self._offer_sent_at[transfer.id] = (time.monotonic(), tries + 1)
-        body = encode_payload(
-            {"transfer_id": transfer.id, "filename": transfer.filename, "size": transfer.size}
-        )
-        packet = self._seal(link, MessageType.FILE_OFFER, body)
+        offer: dict[str, Any] = {
+            "transfer_id": transfer.id, "filename": transfer.filename, "size": transfer.size,
+        }
+        if transfer.metadata.get("ttl"):
+            offer["ttl"] = int(transfer.metadata["ttl"])
+        packet = self._seal(link, MessageType.FILE_OFFER, encode_payload(offer))
         await self._send_raw(link.transport_peer_id, link.transport, packet)
 
     async def _check_stale_offers(self: MessagingBackend) -> None:
@@ -667,6 +675,9 @@ class TransferMixin:
             transport=link.transport,
             state=TransferState.ACCEPTED,
         )
+        ttl = wire_ttl(data)
+        if ttl:
+            transfer.metadata["ttl"] = ttl  # the sender's disappearing timer
         self._transfers[transfer_id] = transfer
         self._incoming_paths[transfer_id] = dest
         self._in[transfer_id] = _Incoming(path=dest)

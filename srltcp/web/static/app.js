@@ -628,6 +628,9 @@
         case "group_update":
           onGroupUpdate(data.group);
           break;
+        case "messages_removed":
+          onMessagesRemoved(data.ids);
+          break;
         case "contact_request":
           loadPeers();
           showContactRequest({ ...data, _event: true });
@@ -2581,6 +2584,7 @@
     setCheckbox("set-direct-internet", settings.direct_internet !== false);
     setCheckbox("set-tor-enabled", settings.tor_enabled !== false);
     setCheckbox("set-shrink-photos", !!settings.shrink_photos);
+    setSelectValue("set-disappear", String(settings.disappear_seconds || 0));
     setInputValue("set-tor-path", settings.tor_path || "");
     setCheckbox("set-wan-expose", !!settings.wan_expose_port);
     setCheckbox("set-enable-serial", !!settings.enable_serial);
@@ -3216,6 +3220,27 @@
     }
   }
 
+  const ICON_TIMER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/></svg>';
+
+  function disappearIcon(m) {
+    const at = Number(m.metadata?.expires_at || 0);
+    if (!at) return "";
+    const when = new Date(at * 1000).toLocaleString([], {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    });
+    return `<span class="bubble-timer" title="Disappears ${escapeHtml(when)}">${ICON_TIMER}</span>`;
+  }
+
+  function onMessagesRemoved(ids) {
+    const gone = new Set(ids || []);
+    if (!gone.size || !state.messageCache) return;
+    const left = state.messageCache.filter((m) => !gone.has(m.id));
+    if (left.length !== state.messageCache.length) {
+      state.messageCache = left;
+      renderMessages(left, { preserveScroll: true });
+    }
+  }
+
   async function deleteMessage(messageId) {
     if (!messageId) return;
     const { ok, data } = await apiDelete(`/api/messages/${encodeURIComponent(messageId)}`);
@@ -3469,6 +3494,7 @@
           ${actions}
           ${body}
           <div class="bubble-meta">
+            ${disappearIcon(m)}
             <span>${formatTime(m.timestamp)}</span>
             <span class="bubble-status ${m.status}"${out ? ` title="${STATUS_HINTS[m.status] || ""}"` : ""}></span>
           </div>
@@ -3622,6 +3648,11 @@
       if (err) toast(err, "error");
       return;
     }
+    await saveDownload(url, filename);
+  }
+
+  /** Desktop: save a download through the file picker when there is one. */
+  async function saveDownload(url, filename) {
     if (typeof window.showSaveFilePicker === "function") {
       let handle;
       try {
@@ -3649,6 +3680,98 @@
     document.body.appendChild(a);
     a.click();
     a.remove();
+  }
+
+  // ── Encrypted backup / restore ──
+
+  async function createBackup() {
+    const pw = $("#backup-password")?.value || "";
+    if (pw.length < 8) {
+      toast("Use a backup password of at least 8 characters", "error");
+      return;
+    }
+    if (pw !== ($("#backup-password2")?.value || "")) {
+      toast("The two passwords are different", "error");
+      return;
+    }
+    const btn = $("#btn-backup-create");
+    if (btn) btn.disabled = true;
+    toast("Creating the encrypted backup…");
+    const { ok, data } = await apiPost("/api/backup", { password: pw }, { silent: true });
+    if (btn) btn.disabled = false;
+    if (!ok || !data?.filename) {
+      toast(data?.error || "Backup failed", "error");
+      return;
+    }
+    setInputValue("backup-password", "");
+    setInputValue("backup-password2", "");
+    const bridge = window.SRLTCPAndroid;
+    if (bridge && typeof bridge.saveBackup === "function") {
+      const err = bridge.saveBackup(data.filename);  // system "Save as"
+      if (err) toast(err, "error");
+      return;
+    }
+    await saveDownload(`/api/backup/${encodeURIComponent(data.filename)}`, data.filename);
+  }
+
+  function openRestore() {
+    const file = $("#restore-file");
+    if (file) file.value = "";
+    setInputValue("restore-password", "");
+    setRestoreStatus("");
+    openModal($("#restore-modal"));
+  }
+
+  function setRestoreStatus(text, error = false) {
+    const el = $("#restore-status");
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle("error", error);
+    el.classList.toggle("hidden", !text);
+  }
+
+  async function submitRestore() {
+    const file = $("#restore-file")?.files?.[0];
+    const pw = $("#restore-password")?.value || "";
+    if (!file || !pw) {
+      setRestoreStatus("Pick the backup file and enter its password.", true);
+      return;
+    }
+    if (!confirm("Replace the identity, contacts and chats on this device with the backup's?")) return;
+    const btn = $("#restore-submit");
+    if (btn) btn.disabled = true;
+    setRestoreStatus("Checking the password and restoring…");
+    const form = new FormData();
+    form.append("password", pw);
+    form.append("file", file);
+    const { ok, data } = await safeFetch(
+      "/api/backup/restore", { method: "POST", body: form }, { fallback: {} }
+    );
+    if (btn) btn.disabled = false;
+    if (!ok || !data?.restored) {
+      setRestoreStatus(data?.error || "Restore failed", true);
+      return;
+    }
+    setRestoreStatus(`Restored ${data.name || "your identity"}: ${data.contacts} contacts, `
+      + `${data.messages} messages. Restarting SRLTCP…`);
+    const bridge = window.SRLTCPAndroid;
+    if (data.restart === "app") {
+      if (bridge && typeof bridge.restartApp === "function") {
+        setTimeout(() => bridge.restartApp(), 1200);
+      } else {
+        setRestoreStatus("Restored. Close SRLTCP and open it again to finish.");
+      }
+      return;
+    }
+    // Desktop: the app restarts itself; reload once it answers again.
+    const reload = async (tries) => {
+      try {
+        const res = await fetch("/api/status", { credentials: "same-origin" });
+        if (res.ok) { location.reload(); return; }
+      } catch (_) { /* still restarting */ }
+      if (tries > 0) setTimeout(() => reload(tries - 1), 1000);
+    };
+    setTimeout(() => reload(30), 2500);
   }
 
   window.onAndroidFileSaved = (ok) => {
@@ -4180,6 +4303,12 @@
   $("#verify-remove")?.addEventListener("click", () => postVerify({ verified: false }));
   $("#verify-close")?.addEventListener("click", closeVerify);
   setupModalClose($("#verify-modal"), closeVerify);
+  $("#btn-backup-create")?.addEventListener("click", createBackup);
+  $("#btn-backup-restore")?.addEventListener("click", openRestore);
+  $("#setup-restore")?.addEventListener("click", openRestore);
+  $("#restore-submit")?.addEventListener("click", submitRestore);
+  $("#restore-cancel")?.addEventListener("click", () => closeModal($("#restore-modal")));
+  setupModalClose($("#restore-modal"), () => closeModal($("#restore-modal")));
   $("#pair-close")?.addEventListener("click", closePairModal);
   $("#pair-copy")?.addEventListener("click", copyPairLink);
   $("#pair-share")?.addEventListener("click", sharePairLink);
@@ -4308,6 +4437,7 @@
       direct_internet: $("#set-direct-internet")?.checked ?? true,
       tor_enabled: $("#set-tor-enabled")?.checked ?? true,
       shrink_photos: $("#set-shrink-photos")?.checked || false,
+      disappear_seconds: parseInt($("#set-disappear")?.value || "0", 10),
       tor_path: ($("#set-tor-path")?.value || "").trim(),
       wan_expose_port: $("#set-wan-expose")?.checked || false,
       handshake_protocol: "identity",

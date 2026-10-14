@@ -360,6 +360,36 @@ async def features_flow() -> None:
         await alice.wait_for_load_state("networkidle")
         assert (await alice.text_content("#me-name")).strip() == "Alice Renamed"
         print("settings: name saved and persisted")
+
+        # Privacy: disappearing messages on, a backup made through the API
+        await alice.click("#btn-settings")
+        await alice.click(".settings-tab[data-tab=privacy]")
+        await alice.select_option("#set-disappear", "3600")
+        await shot(alice, "07-privacy-settings")
+        await alice.click("#settings-form button[type=submit]")
+        await alice.wait_for_selector("text=Settings saved", timeout=5000)
+        await alice.keyboard.press("Escape")
+        await alice.click("#contacts .contact[data-name='Bobby']")
+        await alice.fill("#msg-input", "this one disappears")
+        await alice.press("#msg-input", "Enter")
+        await alice.wait_for_selector(".bubble-row:has-text('this one disappears') .bubble-timer")
+        await bob.wait_for_selector(
+            ".bubble-row:has-text('this one disappears') .bubble-timer", timeout=10000
+        )
+        made = await alice.evaluate(
+            "async () => (await fetch('/api/backup', {method: 'POST', headers: "
+            "{'Content-Type': 'application/json'}, body: JSON.stringify({password: "
+            "'sim backup pass'})})).json()"
+        )
+        assert made.get("filename", "").endswith(".srltcp"), made
+        await alice.click("#btn-settings")
+        await alice.click(".settings-tab[data-tab=privacy]")
+        await alice.select_option("#set-disappear", "0")
+        await alice.click(".settings-tab[data-tab=general]")  # where the next step starts
+        await alice.click("#settings-form button[type=submit]")
+        await alice.wait_for_selector("text=Settings saved", timeout=5000)
+        await alice.keyboard.press("Escape")
+        print("privacy: disappearing timer shown on both sides; encrypted backup created")
         await alice.click("#btn-settings")
         await alice.fill("#set-name", "Alice")
         await alice.click("#settings-form button[type=submit]")

@@ -18,6 +18,7 @@ from srltcp.core.identity import Identity, IdentityStore
 from srltcp.core.messaging.announce import AnnounceMixin
 from srltcp.core.messaging.connect import ConnectMixin
 from srltcp.core.messaging.constants import COMPRESS_THRESHOLD, DISCOVERY_PORT
+from srltcp.core.messaging.disappear import DisappearMixin, expires_at, wire_ttl
 from srltcp.core.messaging.groups import GroupMixin
 from srltcp.core.messaging.links import PeerLink, PeerLinkMixin
 from srltcp.core.messaging.models import ChatMessage, FileTransfer
@@ -77,6 +78,7 @@ class NodeConfig:
     lan_ip: str = ""
     incoming_dir: str = ""
     message_retention_hours: int = 168
+    disappear_seconds: int = 0  # timer on messages we send (0 = keep)
 
 
 class MessagingBackend(
@@ -91,6 +93,7 @@ class MessagingBackend(
     GroupMixin,
     PunchMixin,
     TorMixin,
+    DisappearMixin,
 ):
     """Central messaging orchestrator."""
 
@@ -635,6 +638,7 @@ class MessagingBackend(
         sent_ts = data.get("ts")
         if isinstance(sent_ts, int | float) and abs(time.time() - float(sent_ts)) < 7 * 86400:
             msg.metadata["sent_at"] = float(sent_ts)
+        self.stamp_ttl(msg, wire_ttl(data))  # their timer, counted from now
         self._messages.append(msg)
         self._persist_messages()
         if self._on_message:
@@ -716,6 +720,7 @@ class MessagingBackend(
             transport=link.transport if link else transport,
         )
         msg.status = "pending"
+        self.stamp_ttl(msg, self.disappear_ttl(), msg.timestamp)
         self._messages.append(msg)
         self._persist_messages()
         if link and link.handshake_complete and self._is_link_reachable(link):
@@ -730,7 +735,10 @@ class MessagingBackend(
         link = self.get_link(msg.recipient_hash)
         if not link or not link.handshake_complete:
             return False
-        body = encode_payload({"id": msg.id, "text": msg.text, "ts": msg.timestamp})
+        data: dict[str, Any] = {"id": msg.id, "text": msg.text, "ts": msg.timestamp}
+        if msg.metadata.get("ttl"):
+            data["ttl"] = int(msg.metadata["ttl"])  # they delete it too
+        body = encode_payload(data)
         flags = 0
         if len(body) >= COMPRESS_THRESHOLD:
             compressed = zstd.ZstdCompressor(level=3).compress(body)
@@ -995,6 +1003,8 @@ class MessagingBackend(
                 msg.metadata["offset"] = transfer.offset
         self._messages = stored + [m for m in self._messages if m.id not in stored_ids]
         self._prune_messages()
+        now = time.time()  # timers that ran out while the app was closed
+        self._messages = [m for m in self._messages if not 0 < expires_at(m) <= now]
 
     def _persist_messages(self) -> None:
         """Debounced write of chat history to disk."""
@@ -1040,7 +1050,8 @@ class MessagingBackend(
     ) -> list[dict[str, Any]]:
         """Newest ``limit`` messages, optionally only one chat (a contact or a group)."""
         self._prune_messages()
-        msgs = self._messages
+        now = time.time()
+        msgs = [m for m in self._messages if not 0 < expires_at(m) <= now]
         if group:
             msgs = [m for m in msgs if m.metadata.get("group_id") == group]
         elif peer:
@@ -1130,6 +1141,7 @@ class MessagingBackend(
         transfer: dict[str, Any],
         direction: str,
     ) -> None:
+        meta = transfer.get("metadata") or {}
         msg = ChatMessage.create(
             sender_hash=sender_hash,
             recipient_hash=recipient_hash,
@@ -1145,10 +1157,11 @@ class MessagingBackend(
                 "offset": transfer.get("offset", 0),
                 "speed_mbps": transfer.get("speed_mbps", 0),
                 "direction": direction,
-                "is_folder_zip": transfer.get("metadata", {}).get("is_folder_zip"),
-                "folder_name": transfer.get("metadata", {}).get("folder_name"),
+                "is_folder_zip": meta.get("is_folder_zip"),
+                "folder_name": meta.get("folder_name"),
             },
         )
+        self.stamp_ttl(msg, wire_ttl(meta))
         self._messages.append(msg)
         self._persist_messages()
         if self._on_message:
@@ -1206,7 +1219,8 @@ class MessagingBackend(
             # handshake resumes queued transfers), without holding this
             # request open for a slow Tor dial.
             transfer = await self.queue_file(
-                recipient_hash, path, transport=effective_transport, filename=filename
+                recipient_hash, path, transport=effective_transport, filename=filename,
+                ttl=self.disappear_ttl(),
             )
             link = self.get_link(recipient_hash)
             if link and link.handshake_complete:
@@ -1220,6 +1234,7 @@ class MessagingBackend(
                 path,
                 transport=link.transport,
                 filename=filename,
+                ttl=self.disappear_ttl(),
             )
             link_transport = link.transport
         if not transfer:

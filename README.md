@@ -87,8 +87,8 @@ Identities are stored in `~/.srltcp/identities/` (or `%APPDATA%\SRLTCP` on Windo
 
 ### End-to-end encryption
 
-1. **Handshake** — Default: fresh ephemeral X25519 keys, signed (with a timestamp) by the Ed25519 identity key. Each side checks that the peer's hash ID is derived from the key it presents and that it matches the pinned contact key, so contacts cannot be impersonated; replayed handshakes are rejected. (The experimental Noise XX option was removed in 0.6.1: a device set to it couldn't talk to any other device.)
-2. **Session keys** — HKDF-SHA256 from the X25519 shared secret (salted with both ephemeral keys), separate keys per direction; new keys every session (forward secrecy)
+1. **Handshake (quantum-safe)** — fresh X25519 *and* ML-KEM-768 keys every session, signed (with a timestamp) by both identity keys: Ed25519 and ML-DSA-65. Each side checks that the peer's hash ID is derived from the key it presents and that both keys match the ones pinned for that contact, so contacts cannot be impersonated; replayed handshakes are rejected. Breaking one algorithm (with a quantum computer or a new attack) is not enough: the session key needs both secrets.
+2. **Session keys** — HKDF-SHA256 from the X25519 and ML-KEM shared secrets (salted with both ephemeral keys and the ML-KEM transcript), separate keys per direction; new keys every session (forward secrecy)
 3. **Payloads** — AES-256-GCM with 64-bit counter nonces and a sliding replay window; the message type and flags are authenticated. All chat text, receipts, file offers, call signalling and metadata are encrypted, and unencrypted application messages are rejected
 4. **Trust** — only trusted contacts' messages, files and share requests are accepted; anyone else becomes a contact request
 5. **File chunks** — Each chunk is encrypted before it leaves your node; it may be zstd-compressed **before** encryption (flag bit). Chunk size (1 MiB direct, 64 KiB Tor, 128 KiB relay) affects throughput only — not encryption.
@@ -124,7 +124,7 @@ Over the internet, paired phones meet at a relay you run (`srltcp relay`). It is
 - LAN/UDP discovery announces (names, IPs, ports — signed but not encrypted)
 - Relay metadata: the relay operator sees your IP address, when you are connected and roughly how much you send
 - Connection metadata (who talks to whom, when)
-- Local settings, trusted-peer list, and chat history on disk (owner-only permissions, not encrypted at rest)
+- Received files in your incoming folder (so other apps can open them). Your keys, contacts, chats, groups and settings **are** encrypted on the device: with a hardware-backed Android Keystore key on phones, DPAPI on Windows, an owner-only key file on Linux/macOS
 - Self-signed localhost HTTPS certificate (browser trust is manual; the Android app pins it)
 
 See [SECURITY.md](SECURITY.md) for vulnerability reporting, the threat model and hardening; the latest penetration test is in [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md).
@@ -334,6 +334,14 @@ Tap the contact's name at the top of a chat, the **⋮** next to a contact, or l
 **Check connection** (in *Edit contact*) tries every address the app knows for that contact and says in plain words what works and what to change — e.g. "the VPN must include the home network" or "set up a relay".
 
 **Deleting a contact** keeps your chat with them for 24 hours: add them back within that time and the conversation carries on. After 24 hours it is deleted for good, and adding them again starts fresh. Group chats are not affected.
+
+### Privacy: backup, restore, disappearing messages
+
+*Settings → Privacy*:
+
+- **Disappearing messages** (off by default): messages and files you send in one-to-one chats are deleted from both phones 1 hour, 1 day, 1 week or 4 weeks after sending; a small timer shows on those messages. Each person's setting applies to what they send.
+- **Backup**: enter a password (8+ characters, a passphrase is better) and tap *Create backup*. Android asks where to save the file (Downloads, a USB stick, Drive…); a PC downloads it. The file holds your identity, contacts, chats, groups and settings, encrypted with that password. Received files, shared folders and paused transfers are not in it.
+- **Restore**: on the new device tap *Restore from backup…* (also offered on the first-run screen), pick the file, enter the password. SRLTCP replaces its identity, contacts and chats with the backup's and restarts; your contacts see the same you. Use a restored identity on one device only.
 
 ### Calls
 

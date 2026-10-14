@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import contextlib
-import json
-import os
 import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from srltcp.utils.jsonstore import load_json, save_json
 from srltcp.utils.platform import data_dir
 
 _HASH_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -108,9 +106,9 @@ class TrustedStore:
         self.load()
 
     def load(self) -> None:
-        if not self.path.exists():
+        raw = load_json(self.path)
+        if not isinstance(raw, dict):
             return
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
         removed = raw.get("removed", {})
         if isinstance(removed, dict):
             self.removed = {
@@ -138,23 +136,12 @@ class TrustedStore:
             self.save()
 
     def save(self) -> None:
-        # Owner-only and atomic: the file holds the relay pair secrets.
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Encrypted, owner-only and atomic: the file holds the relay pair secrets.
         data: dict[str, Any] = {"peers": [p.to_dict() for p in self._peers.values()]}
         if self.removed:
             data["removed"] = self.removed
-        tmp = self.path.with_suffix(".json.tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp, self.path)
-        except OSError:
-            with contextlib.suppress(OSError):
-                tmp.unlink(missing_ok=True)
-            raise
-        with contextlib.suppress(OSError):
-            os.chmod(self.path, 0o600)
+        if not save_json(self.path, data):
+            raise OSError(f"could not save {self.path.name}")
 
     def is_trusted(self, hash_id: str) -> bool:
         peer = self._peers.get(hash_id)

@@ -1,23 +1,34 @@
-"""Small JSON files in the data folder: owner-only, written atomically."""
+"""The app's JSON files: encrypted at rest (see vault.py), owner-only,
+replaced atomically."""
 
 from __future__ import annotations
 
 import contextlib
 import json
-import os
+import time
 from pathlib import Path
 from typing import Any
 
+from srltcp.utils import vault
 from srltcp.utils.logging import get_logger
 
 log = get_logger(__name__)
 
 
 def load_json(path: Path, default: Any = None) -> Any:
-    """The file's content, or ``default`` if it is missing or unreadable."""
+    """The file's content, or ``default`` if it is missing or unreadable.
+
+    A file that can't be decrypted is moved aside (never overwritten), so
+    nothing is lost if the key comes back, e.g. after a restore."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(vault.read_text(path))
     except FileNotFoundError:
+        return default
+    except vault.VaultError as exc:
+        aside = path.with_name(f"{path.name}.unreadable-{int(time.time())}")
+        log.error("%s — moved to %s", exc, aside.name)
+        with contextlib.suppress(OSError):
+            path.replace(aside)
         return default
     except (OSError, ValueError) as exc:
         log.warning("Could not read %s (%s)", path.name, exc)
@@ -25,17 +36,11 @@ def load_json(path: Path, default: Any = None) -> Any:
 
 
 def save_json(path: Path, data: Any, *, indent: int | None = None) -> bool:
-    """Replace the file in one step (a crash leaves the old or the new one)."""
-    tmp = path.with_name(path.name + ".tmp")
+    """Seal and replace the file in one step (a crash leaves the old or the new one)."""
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=indent, separators=None if indent else (",", ":"))
-        os.replace(tmp, path)
+        text = json.dumps(data, indent=indent, separators=None if indent else (",", ":"))
+        vault.write_text(path, text)
     except OSError as exc:
         log.warning("Could not save %s: %s", path.name, exc)
-        with contextlib.suppress(OSError):
-            tmp.unlink(missing_ok=True)
         return False
     return True

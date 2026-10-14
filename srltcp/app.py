@@ -131,6 +131,7 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         lan_ip=settings.lan_ip,
         incoming_dir=str(settings.resolved_incoming_dir()),
         message_retention_hours=settings.message_retention_hours,
+        disappear_seconds=settings.disappear_seconds,
     )
 
 
@@ -367,6 +368,24 @@ def android_transfer_file(transfer_id: str) -> str:
     name = transfer.filename or path.name
     mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
     return json.dumps({"path": str(path), "filename": name, "mime": mime})
+
+
+def android_backup_file(filename: str) -> str:
+    """Locate a backup made in Settings so the Android app can save it where
+    the user picks. Returns JSON ``{"path", "filename", "mime"}`` or ``{"error"}``."""
+    import json
+
+    node = _running_node.get("node")
+    if node is None:
+        return json.dumps({"error": "SRLTCP is still starting"})
+    assert isinstance(node, SRLTCPNode)
+    folder = node.backend.trusted.path.parent / "backups"
+    path = folder / filename
+    if not filename.startswith("srltcp-backup-") or "/" in filename or not path.is_file():
+        return json.dumps({"error": "backup not found"})
+    return json.dumps(
+        {"path": str(path), "filename": filename, "mime": "application/octet-stream"}
+    )
 
 
 def get_android_web_port() -> int:

@@ -846,6 +846,10 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         updated.direct_internet = bool(updated.direct_internet)
         updated.tor_enabled = bool(updated.tor_enabled)
         updated.shrink_photos = bool(updated.shrink_photos)
+        from srltcp.core.messaging.disappear import CHOICES
+
+        if updated.disappear_seconds not in CHOICES:
+            updated.disappear_seconds = 0
         tor_path = str(updated.tor_path or "").strip()
         if tor_path and not (Path(tor_path).is_file() and Path(tor_path).name.lower() in (
             "tor", "tor.exe"
@@ -965,6 +969,89 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
 
         asyncio.create_task(_do_restart())
         return web.json_response({"restarting": True})
+
+    # ── Encrypted backup / restore ──
+
+    def _backup_dir() -> Path:
+        return node.backend.trusted.path.parent / "backups"
+
+    async def backup_create(request: web.Request) -> web.Response:
+        from srltcp.core.backup import BackupError, create_backup
+
+        data = await request.json()
+        password = str(data.get("password", ""))
+        root = node.backend.trusted.path.parent
+        node.backend.save_message_history()  # the backup has the latest chats
+        try:
+            blob = await asyncio.to_thread(
+                create_backup, root, password, app_version=__version__
+            )
+        except BackupError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        folder = _backup_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        for old in folder.glob("srltcp-backup-*.srltcp"):
+            old.unlink(missing_ok=True)  # only the newest one is kept here
+        name = f"srltcp-backup-{time.strftime('%Y-%m-%d-%H%M')}.srltcp"
+        fd = os.open(folder / name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(blob)
+        return web.json_response({"filename": name, "size": len(blob)})
+
+    async def backup_file(request: web.Request) -> web.Response:
+        name = request.match_info.get("name", "")
+        path = _backup_dir() / name
+        if not name.startswith("srltcp-backup-") or "/" in name or not path.is_file():
+            return web.json_response({"error": "backup not found"}, status=404)
+        return web.FileResponse(path, headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "Content-Type": "application/octet-stream",
+        })
+
+    async def backup_restore(request: web.Request) -> web.Response:
+        from srltcp.core.backup import (
+            MAX_BACKUP,
+            BackupError,
+            open_backup,
+            restore_backup,
+            summary,
+        )
+        from srltcp.utils.platform import is_android
+
+        blob, password = b"", ""
+        try:
+            reader = await request.multipart()
+            while (field := await reader.next()) is not None:
+                if field.name == "file":
+                    while chunk := await field.read_chunk():
+                        blob += chunk
+                        if len(blob) > MAX_BACKUP:
+                            raise BackupError("that file is too big to be a backup")
+                elif field.name == "password":
+                    password = (await field.text())[:1024]
+        except BackupError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except (ValueError, AssertionError, OSError):
+            return web.json_response({"error": "the backup file didn't arrive"}, status=400)
+        try:
+            data = await asyncio.to_thread(open_backup, blob, password)
+        except BackupError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        info = summary(data)
+        # Stop first: a running node saves its state on the way out and
+        # would overwrite what we restore.
+        await node.stop()
+        await asyncio.to_thread(restore_backup, node.backend.trusted.path.parent, data)
+        log.info("Restored a backup of %s (%d contacts)", info["name"], info["contacts"])
+        if is_android():
+            return web.json_response({"restored": True, "restart": "app", **info})
+
+        async def _restart() -> None:
+            await asyncio.sleep(0.5)
+            os.execv(sys.executable, [sys.executable, "-m", "srltcp", *sys.argv[1:]])
+
+        asyncio.create_task(_restart())
+        return web.json_response({"restored": True, "restart": "self", **info})
 
     async def interfaces(_request: web.Request) -> web.Response:
         return web.json_response({"interfaces": list_interfaces()})
@@ -1145,6 +1232,9 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_delete("/api/identities/{transport}", identity_delete)
     app.router.add_get("/api/release-notes", release_notes)
     app.router.add_post("/api/restart", restart)
+    app.router.add_post("/api/backup", backup_create)
+    app.router.add_get("/api/backup/{name}", backup_file)
+    app.router.add_post("/api/backup/restore", backup_restore)
     app.router.add_get("/api/interfaces", interfaces)
     app.router.add_get("/api/system", system)
     app.router.add_get("/api/timezones", timezones)

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import json
-import os
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 from srltcp.core.protocol.crypto import identity_hash, public_key_bytes
 from srltcp.core.protocol.pq import DSA_SEED_SIZE, DsaKey
+from srltcp.utils.jsonstore import load_json, save_json
 from srltcp.utils.platform import data_dir
 
 TransportKind = Literal["tcp", "serial"]
@@ -119,8 +117,8 @@ class IdentityStore:
         self, name: str, transport: TransportKind
     ) -> Identity:
         path = self._path(transport)
-        if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8"))
+        data = load_json(path)
+        if isinstance(data, dict):
             identity = Identity.from_dict(data)
             changed = "pq_seed" not in data  # identity from before 0.9: add its ML-DSA key
             if name and identity.name != name:
@@ -134,21 +132,13 @@ class IdentityStore:
         return identity
 
     def save(self, identity: Identity) -> None:
-        # Owner-only and atomic: the file holds the private keys.
-        path = self._path(identity.transport)
-        tmp = path.with_suffix(".json.tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(identity.to_dict(), f, indent=2)
-        os.replace(tmp, path)
-        with contextlib.suppress(OSError):
-            os.chmod(path, 0o600)
+        # Encrypted, owner-only and atomic: the file holds the private keys.
+        if not save_json(self._path(identity.transport), identity.to_dict()):
+            raise OSError("could not save the identity")
 
     def load(self, transport: TransportKind) -> Identity | None:
-        path = self._path(transport)
-        if not path.exists():
-            return None
-        return Identity.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        data = load_json(self._path(transport))
+        return Identity.from_dict(data) if isinstance(data, dict) else None
 
     def regenerate(self, name: str, transport: TransportKind) -> Identity:
         identity = Identity.generate(name, transport)

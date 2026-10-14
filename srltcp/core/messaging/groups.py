@@ -18,9 +18,7 @@ contact, and group traffic is accepted only from current members.
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 import secrets
 import time
 from pathlib import Path
@@ -30,6 +28,7 @@ from srltcp.core.messaging.models import ChatMessage
 from srltcp.core.protocol.crypto import sign_bytes, verify_bytes
 from srltcp.core.protocol.messages import MessageType, decode_payload, encode_payload
 from srltcp.core.protocol.signed import verify_identity_binding
+from srltcp.utils.jsonstore import load_json, save_json
 from srltcp.utils.logging import get_logger
 from srltcp.utils.platform import data_dir
 
@@ -71,30 +70,14 @@ class GroupStore:
         self.load()
 
     def load(self) -> None:
-        if not self.path.exists():
-            return
-        try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            log.warning("Could not read groups (%s)", exc)
-            return
+        raw = load_json(self.path, {})
         for item in raw.get("groups", []) if isinstance(raw, dict) else []:
             gid = str(item.get("id", ""))
             if is_valid_group_id(gid):
                 self._groups[gid] = item
 
     def save(self) -> None:
-        tmp = self.path.with_suffix(".json.tmp")
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"groups": list(self._groups.values())}, f, indent=1)
-            os.replace(tmp, self.path)
-        except OSError as exc:
-            log.warning("Could not save groups: %s", exc)
-            with contextlib.suppress(OSError):
-                tmp.unlink(missing_ok=True)
+        save_json(self.path, {"groups": list(self._groups.values())})
 
     def get(self, group_id: str) -> dict[str, Any] | None:
         return self._groups.get(group_id)

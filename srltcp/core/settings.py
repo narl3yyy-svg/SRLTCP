@@ -13,6 +13,7 @@ from srltcp.core.messaging.constants import (
     WEB_PORT,
 )
 from srltcp.utils.files import ensure_dir
+from srltcp.utils.jsonstore import load_json, save_json
 from srltcp.utils.platform import data_dir, is_android
 
 DEFAULT_INCOMING = "incoming"
@@ -114,6 +115,9 @@ class AppSettings:
     tor_path: str = ""
     # Re-encode photos before sending (smaller, and without location data).
     shrink_photos: bool = False
+    # Disappearing messages: what you send is deleted from both phones after
+    # this many seconds (0 = keep). One of disappear.CHOICES.
+    disappear_seconds: int = 0
     handshake_protocol: str = "identity"
     call_stun_server: str = ""  # stun:/turn:/turns: URL (empty = direct only)
     call_turn_username: str = ""
@@ -189,7 +193,9 @@ class SettingsStore:
                 self._ensure_dirs(settings)
             return settings
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            data = load_json(self.path)
+            if not isinstance(data, dict):
+                raise ValueError("settings unreadable")
             settings = AppSettings.from_dict(data)
             self._ensure_dirs(settings)
             return settings
@@ -204,10 +210,7 @@ class SettingsStore:
     def save(self, settings: AppSettings) -> None:
         settings.apply_retention_preset()
         ensure_dir(self.path.parent)
-        self.path.write_text(
-            json.dumps(settings.to_dict(), indent=2),
-            encoding="utf-8",
-        )
+        save_json(self.path, settings.to_dict())
         self._ensure_dirs(settings)
 
     def _ensure_dirs(self, settings: AppSettings) -> None:

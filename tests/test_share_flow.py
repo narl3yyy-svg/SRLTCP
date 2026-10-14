@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from srltcp.utils import vault
 from tests.test_e2e_nodes import make_node, trust, wait_for
 
 
@@ -55,7 +56,9 @@ async def test_password_protected_share(tmp_path: Path) -> None:
         gid = grants[0]["grant_id"]
         assert await wait_for(lambda: b.list_remote_share_grants())
         assert b.list_remote_share_grants()[0]["password"] is True
-        assert "s3cret" not in (tmp_path / "alice" / "shares.json").read_text()
+        shares = tmp_path / "alice" / "shares.json"
+        assert b"s3cret" not in shares.read_bytes()  # encrypted at rest…
+        assert "s3cret" not in vault.read_text(shares)  # …and only a hash inside
 
         assert await b.request_share_list(ah, gid, timeout=5) == []
         assert b.share_list_error(gid) == "password_required"

@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import json
 import os
 import secrets
 import shutil
@@ -28,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from srltcp.core.protocol.messages import MessageType, encode_payload
 from srltcp.utils.files import walk_directory
+from srltcp.utils.jsonstore import load_json, save_json
 from srltcp.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -243,8 +243,8 @@ class SharePeerMixin:
         return self.trusted.path.parent / "share_files"
 
     def _load_shares(self: MessagingBackend) -> None:
-        with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
-            raw = json.loads(self._shares_path().read_text(encoding="utf-8"))
+        raw = load_json(self._shares_path(), {})
+        with contextlib.suppress(ValueError, TypeError, AttributeError):
             stores = (("local", self._share_grants), ("remote", self._remote_share_grants))
             for key, store in stores:
                 for item in raw.get(key, [])[:1000]:
@@ -257,16 +257,7 @@ class SharePeerMixin:
             "local": [g.to_store() for g in self._share_grants.values()],
             "remote": [g.to_store() for g in self._remote_share_grants.values()],
         }
-        path = self._shares_path()
-        tmp = path.with_suffix(".json.tmp")
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-            os.replace(tmp, path)
-        except OSError as exc:
-            log.warning("Could not save shares: %s", exc)
+        save_json(self._shares_path(), data)
 
     def _share_root(self: MessagingBackend) -> Path:
         if self.config.incoming_dir:
@@ -508,7 +499,6 @@ class SharePeerMixin:
             return None
 
         fd, tmp_name = tempfile.mkstemp(suffix=".zip", prefix="srltcp-share-")
-        import os
 
         os.close(fd)
         zip_path = Path(tmp_name)
