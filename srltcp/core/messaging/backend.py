@@ -1089,6 +1089,7 @@ class MessagingBackend(
                     name = f"Peer {p.hash_id[:8]}"
             d = p.public_dict()
             d["name"] = name
+            d["verified"] = self.contact_verified(p.hash_id)
             link = self.get_link(p.hash_id)
             d["path"] = (
                 ("relay" if link.transport == "relay" else "direct")

@@ -75,6 +75,12 @@ class TrustedPeer:
     # Their post-quantum (ML-DSA-65) identity key, pinned at the first
     # handshake: a later handshake with a different key is refused.
     pq_key: str = ""
+    # SHA-256 of that key from a pairing code scanned in person: the first
+    # handshake must present exactly this key.
+    pq_expect: str = ""
+    # The safety number (hex digest) you confirmed for this contact; it counts
+    # only while it still matches both sides' keys (see srltcp.core.verify).
+    verified: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -82,7 +88,10 @@ class TrustedPeer:
     def public_dict(self) -> dict[str, Any]:
         """What the local UI/API may see: no pair secrets or relay keys."""
         data = asdict(self)
-        for key in ("pair_own", "pair_peer", "relay_code_peer", "pair_token_out", "pq_key"):
+        for key in (
+            "pair_own", "pair_peer", "relay_code_peer", "pair_token_out", "pq_key",
+            "pq_expect", "verified",
+        ):
             data.pop(key, None)
         data["pq_pinned"] = bool(self.pq_key)
         data["relay_ready"] = bool(self.pair_own and self.pair_peer)
@@ -226,6 +235,8 @@ class TrustedStore:
         pair_token_out: str | None = None,
         onion: str | None = None,
         pq_key: str | None = None,
+        pq_expect: str | None = None,
+        verified: str | None = None,
     ) -> TrustedPeer | None:
         peer = self._peers.get(hash_id)
         if not peer:
@@ -260,5 +271,9 @@ class TrustedStore:
             peer.onion = onion
         if pq_key is not None:
             peer.pq_key = pq_key
+        if pq_expect is not None:
+            peer.pq_expect = pq_expect
+        if verified is not None:
+            peer.verified = verified
         self.save()
         return peer

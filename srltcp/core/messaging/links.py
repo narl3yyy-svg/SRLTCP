@@ -29,6 +29,8 @@ class PeerLink:
     link_up_announced: bool = False
     # monotonic time of the last authenticated frame or pong from this peer
     last_seen: float = field(default_factory=time.monotonic)
+    # Their ML-DSA-65 key, proven in this session's handshake.
+    pq_public: bytes = b""
 
     def to_dict(self) -> dict[str, Any]:
         return {

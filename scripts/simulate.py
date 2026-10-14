@@ -258,6 +258,40 @@ async def features_flow() -> None:
         assert await alice.text_content("#chat-peer-name") == "Bobby"
         print("edit contact: renamed Bob -> Bobby")
 
+        # Verify each other (paired with a pasted link, so not verified yet):
+        # Bob compares the numbers, Alice "scans" Bob's code.
+        for pg in (alice, bob):
+            await pg.wait_for_selector("#chat-peer-verified:not(.hidden):not(.verified)")
+            await pg.click("#chat-peer-verified")
+            await pg.wait_for_selector("#verify-number span:nth-child(12)", timeout=5000)
+        numbers = [await pg.text_content("#verify-number") for pg in (alice, bob)]
+        assert numbers[0] == numbers[1] and len(numbers[0] or "") == 60, numbers
+        await shot(bob, "06-verify-contact")
+        await bob.click("#verify-confirm")
+        await bob.wait_for_selector("#verify-remove:not(.hidden)", timeout=5000)
+        alice_hash = await alice.evaluate(
+            "async () => (await (await fetch('/api/identities')).json()).tcp.hash_id"
+        )
+        bob_code = await bob.evaluate(  # what Alice's camera would read off Bob's screen
+            "async (h) => (await (await fetch(`/api/trusted/${h}/safety`)).json()).code",
+            alice_hash,
+        )
+        await alice.evaluate("code => window.onAndroidQrResult(code)", bob_code)
+        await alice.wait_for_selector("#verify-status.ok", timeout=5000)
+        for pg in (alice, bob):
+            await pg.click("#verify-close")
+            await pg.wait_for_selector("#chat-peer-verified.verified", timeout=5000)
+        print("verify: safety numbers match on both phones; confirmed and scanned")
+
+        # Several files picked at once
+        picked = [OUT / "one.txt", OUT / "two.txt"]
+        for f in picked:
+            f.write_text(f"{f.name}\n" * 1000)
+        await alice.set_input_files("#file-input", [str(f) for f in picked])
+        for f in picked:
+            await bob.wait_for_selector(f".file-bubble:has-text('{f.name}')", timeout=20000)
+        print("multi-file: two files picked together, both arrived")
+
         # Shared folder: Alice offers, Bob browses and downloads
         await alice.click("#btn-share-folder")
         await alice.wait_for_selector("#share-submit")

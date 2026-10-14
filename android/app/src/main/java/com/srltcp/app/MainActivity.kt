@@ -555,7 +555,7 @@ class MainActivity : AppCompatActivity() {
     fun launchQrScanner() {
         val options = ScanOptions()
             .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-            .setPrompt("Scan the SRLTCP pairing code on the other device")
+            .setPrompt("Scan the SRLTCP code on the other device")
             .setBeepEnabled(false)
             .setOrientationLocked(false)
         try {

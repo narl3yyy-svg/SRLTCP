@@ -734,10 +734,43 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         if not code:
             return web.json_response({"error": "pairing code required"}, status=400)
         try:
-            peer = await node.backend.import_pairing_card(code)
+            peer = await node.backend.import_pairing_card(
+                code, in_person=bool(data.get("in_person"))  # scanned QR / NFC, not a link
+            )
         except PairingError as exc:
             return web.json_response({"error": str(exc)}, status=400)
         return web.json_response(peer)
+
+    async def pairing_shared(request: web.Request) -> web.Response:
+        data = await request.json()
+        node.backend.mark_pairing_shared(str(data.get("uri", ""))[:4096])
+        return web.json_response({"ok": True})
+
+    def _contact(request: web.Request) -> str:
+        hash_id = request.match_info.get("hash_id", "").lower()
+        if not is_valid_hash_id(hash_id) or not node.backend.trusted.get(hash_id):
+            raise web.HTTPNotFound(
+                text='{"error": "not a contact"}', content_type="application/json"
+            )
+        return hash_id
+
+    async def trusted_safety(request: web.Request) -> web.Response:
+        return web.json_response(node.backend.safety_info(_contact(request)))
+
+    async def trusted_verify(request: web.Request) -> web.Response:
+        from srltcp.core.messaging.pairing import PairingError
+
+        hash_id = _contact(request)
+        data = await request.json()
+        if data.get("verified") is False:
+            return web.json_response(node.backend.unverify_contact(hash_id))
+        try:
+            info = node.backend.verify_contact(
+                hash_id, code=str(data.get("code", ""))[:512], confirm=data.get("confirm") is True
+            )
+        except PairingError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(info)
 
     async def call_signal(request: web.Request) -> web.Response:
         data = await request.json()
@@ -1091,6 +1124,9 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_get("/api/version", version_info)
     app.router.add_get("/api/pairing/card", pairing_card)
     app.router.add_post("/api/pairing/import", pairing_import)
+    app.router.add_post("/api/pairing/shared", pairing_shared)
+    app.router.add_get("/api/trusted/{hash_id}/safety", trusted_safety)
+    app.router.add_post("/api/trusted/{hash_id}/verify", trusted_verify)
     app.router.add_post("/api/contact-requests/{hash_id}/decline", contact_request_decline)
     app.router.add_get("/api/groups", groups_list)
     app.router.add_post("/api/groups", groups_create)

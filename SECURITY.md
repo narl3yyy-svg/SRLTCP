@@ -72,20 +72,27 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 | **Tor onion service** | When nothing faster works; between mutually trusted contacts only (onion address shared inside the E2EE session; Tor connections from non-contacts refused) | No |
 | **Direct WAN** | Advanced: you forward TCP 7825 | Yes, on the reachable peer |
 
+### Verified contacts
+
+Each contact has a **safety number**: 60 digits computed from both phones' identity keys (Ed25519 and the post-quantum ML-DSA-65 key), the same on both phones. If the numbers match, nobody swapped keys between you, not even when you first connected over Tor, a relay or a network someone else controls.
+
+- **Automatic when you pair in person.** A pairing QR code (or NFC card) carries a fingerprint of both keys. The phone that scans it marks the contact verified, and the first session must then present exactly that post-quantum key or it is refused. The phone that *showed* the code marks the scanner verified too, because only someone who saw its screen (or touched it, for NFC) had the one-time secret; if you pressed *Copy link* or *Share…* for that code, it doesn't, since the link could have gone anywhere.
+- **Otherwise:** tap the shield next to the contact's name. Scan the code on their phone (they open *Verify* in their chat with you), or compare the numbers in person or on a call and tap *The numbers match*. A code meant for another contact, or one that doesn't match, is refused with a warning.
+- A verification stays valid only while both sides' keys stay the same. Keys can't change silently: a different post-quantum key from a known contact is refused outright.
+
 ### Threat assumptions
 
 - Peers on the same LAN or serial bus may observe traffic patterns.
-- Users must **verify peer identity** (32-char hash ID) out-of-band before trusting a contact.
+- A contact is only as trustworthy as the way you added them. Pairing **in person** (scanning their QR code, or an NFC tap) verifies their keys at once; for anyone added another way (pasted link, *Discovered*), compare the **safety number** (see *Verified contacts* below) before relying on the contact.
 - LAN announce signatures authenticate discovery metadata but do **not** encrypt it — anyone on the LAN can still observe that you exist and read names/endpoints.
 - Pair locally (or compare the hash ID out of band); the relay is only used between contacts that are already paired.
 - Blocked peers are rejected at the application layer but may still appear in discovery until the entry expires.
-- Noise XX is experimental; mismatched handshake protocols between peers cause connection failure by design.
 
 ## Hardening Guidelines for Operators
 
 ### All platforms
 
-- Only trust peers whose hash IDs you have verified independently.
+- Verify your contacts: the shield next to a contact's name is filled once you did.
 - Keep SRLTCP updated; crypto and handshake behavior may change between minor versions.
 - Run the web UI on localhost; **do not** expose port **9876** to the internet.
 - File chunks use the same session keys as chat — larger TCP chunks do not reduce encryption strength.

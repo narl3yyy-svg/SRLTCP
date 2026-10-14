@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hashlib
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -729,7 +730,15 @@ class ConnectMixin:
             return True  # not a contact: nothing pinned (contact requests only)
         pinned = getattr(peer, "pq_key", "")
         if not pinned:
-            self.trusted.update(remote_hash, pq_key=pq_public.hex())
+            expect = getattr(peer, "pq_expect", "")
+            if expect and hashlib.sha256(pq_public).hexdigest() != expect:
+                # Not the key on the pairing code we scanned in person.
+                log.warning(
+                    "%s presented a post-quantum key that doesn't match their pairing code"
+                    " — refused", remote_hash[:8],
+                )
+                return False
+            self.trusted.update(remote_hash, pq_key=pq_public.hex(), pq_expect="")
             return True
         if pinned == pq_public.hex():
             return True
@@ -794,6 +803,7 @@ class ConnectMixin:
             return
         ack = self._identity_hello(MessageType.HANDSHAKE_ACK, kx, link.transport, remote_hash)
         await self._send_raw(peer_id, link.transport, ack)
+        link.pq_public = hello.pq_public
         self.set_link_keys(remote_hash, keys)
         await self._complete_handshake(remote_hash, remote_name)
 
@@ -832,6 +842,7 @@ class ConnectMixin:
         self._pending_handshakes.pop(remote_hash, None)
         link.public_key = remote_pub
         link.peer_name = remote_name or link.peer_name
+        link.pq_public = hello.pq_public
         self.set_link_keys(remote_hash, keys)
         await self._complete_handshake(remote_hash, link.peer_name, from_ack=True)
 
@@ -874,6 +885,7 @@ class ConnectMixin:
             address=address,
             public_key=remote_pub,
             peer_name=str(data.get("name", ""))[:64] or (old.peer_name if old else ""),
+            pq_public=hello.pq_public,
         )
         self.register_link(link)  # replaces the relay (or Tor) link
         if (

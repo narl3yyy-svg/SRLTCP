@@ -318,7 +318,7 @@ def android_import_pairing_card(uri: str) -> str:
         return json.dumps({"error": "SRLTCP is still starting"})
     assert isinstance(node, SRLTCPNode)
     future = asyncio.run_coroutine_threadsafe(
-        node.backend.import_pairing_card(uri), loop
+        node.backend.import_pairing_card(uri, in_person=True), loop  # a tap: verified too
     )
     try:
         peer = future.result(timeout=10)

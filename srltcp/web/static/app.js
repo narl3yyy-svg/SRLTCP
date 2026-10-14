@@ -831,6 +831,7 @@
       : `${g.members.length} members${online ? ` · ${online} online` : ""} · end-to-end encrypted`);
     const badge = $("#chat-peer-transport");
     badge?.classList.add("hidden");
+    $("#chat-peer-verified")?.classList.add("hidden");
     const input = $("#msg-input");
     const sendBtn = $("#send-btn");
     if (input) {
@@ -1173,8 +1174,7 @@
     return !!(b && typeof b[method] === "function");
   }
 
-  function renderPairQr(uri) {
-    const box = $("#pair-qr");
+  function renderPairQr(uri, box = $("#pair-qr")) {
     if (!box) return;
     box.innerHTML = "";
     if (typeof window.qrcode !== "function") {
@@ -1257,12 +1257,17 @@
       toast("Paste or scan a pairing code first", "error");
       return false;
     }
-    const { ok, data } = await apiPost("/api/pairing/import", { code: text }, { silent: true });
+    const { ok, data } = await apiPost(
+      "/api/pairing/import",
+      { code: text, in_person: source === "qr" },  // scanned from their screen
+      { silent: true }
+    );
     if (!ok) {
       toast(data?.error || "That pairing code did not work", "error");
       return false;
     }
-    toast(`Paired with ${data.name || data.hash_id?.slice(0, 8)}${source === "nfc" ? " via NFC" : ""}`);
+    toast(`Paired with ${data.name || data.hash_id?.slice(0, 8)}${source === "nfc" ? " via NFC" : ""}`
+      + (data.verified ? " — verified" : ""));
     logActivity(`Paired with ${data.name || data.hash_id?.slice(0, 8)} (${source})`);
     state.peerTab = "trusted";
     document.querySelectorAll(".peer-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === "trusted"));
@@ -1272,8 +1277,15 @@
     return true;
   }
 
+  // A copied or shared link can reach anyone: pairing through it must not
+  // count as "verified in person".
+  function markPairLinkShared() {
+    if (state.pairUri) apiPost("/api/pairing/shared", { uri: state.pairUri }, { silent: true });
+  }
+
   async function copyPairLink() {
     if (!state.pairUri) return;
+    markPairLinkShared();
     try {
       await navigator.clipboard.writeText(state.pairUri);
       toast("Pairing link copied — send it over a channel you trust");
@@ -1285,6 +1297,7 @@
 
   async function sharePairLink() {
     if (!state.pairUri) return;
+    markPairLinkShared();
     if (androidHas("shareText")) {
       androidBridge().shareText("My SRLTCP pairing link", state.pairUri);
     } else if (navigator.share) {
@@ -1294,31 +1307,37 @@
 
   let pairCameraStream = null;
   let pairCameraTimer = null;
+  let pairCameraVideo = null;
 
   function stopPairCamera() {
     if (pairCameraTimer) clearInterval(pairCameraTimer);
     pairCameraTimer = null;
     if (pairCameraStream) pairCameraStream.getTracks().forEach((t) => t.stop());
     pairCameraStream = null;
-    $("#pair-camera")?.classList.add("hidden");
+    pairCameraVideo?.classList.add("hidden");
+    pairCameraVideo = null;
   }
 
-  async function scanPairQr() {
+  /** Scan a QR code that starts with ``prefix``: the Android scanner, or
+   *  the browser's camera in ``video``. Android answers through
+   *  window.onAndroidQrResult, which routes the code by its prefix. */
+  async function scanQr(video, prefix, onHit) {
     if (androidHas("scanQrCode")) {
-      androidBridge().scanQrCode();  // result arrives via window.onAndroidQrResult
+      androidBridge().scanQrCode();
       return;
     }
     if (!("BarcodeDetector" in window)) {
-      toast("QR scanning is not supported in this browser — paste the link instead", "error");
+      toast("QR scanning is not supported in this browser", "error");
       return;
     }
-    const video = $("#pair-camera");
+    stopPairCamera();
     try {
       pairCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
     } catch (_) {
       toast("Camera permission denied", "error");
       return;
     }
+    pairCameraVideo = video;
     video.srcObject = pairCameraStream;
     video.classList.remove("hidden");
     await video.play();
@@ -1326,13 +1345,21 @@
     pairCameraTimer = setInterval(async () => {
       try {
         const codes = await detector.detect(video);
-        const hit = codes.find((c) => (c.rawValue || "").startsWith("srltcp://pair#"));
+        const hit = codes.find((c) => (c.rawValue || "").startsWith(prefix));
         if (hit) {
           stopPairCamera();
-          await importPairCode(hit.rawValue, { source: "qr" });
+          await onHit(hit.rawValue);
         }
       } catch (_) { /* keep scanning */ }
     }, 400);
+  }
+
+  function scanPairQr() {
+    if (!androidHas("scanQrCode") && !("BarcodeDetector" in window)) {
+      toast("QR scanning is not supported in this browser — paste the link instead", "error");
+      return;
+    }
+    scanQr($("#pair-camera"), "srltcp://pair#", (code) => importPairCode(code, { source: "qr" }));
   }
 
   function startNfcScan() {
@@ -1375,8 +1402,131 @@
 
   // Called by the Android app (MainActivity) — see SRLTCPBridge.kt.
   window.onAndroidQrResult = (text) => {
-    if (text) importPairCode(text, { source: "qr" });
+    if (!text) return;
+    if (text.startsWith(VERIFY_PREFIX)) {
+      submitVerifyCode(text);
+    } else {
+      importPairCode(text, { source: "qr" });
+    }
   };
+
+  // ── Verified contacts (safety numbers) ──
+
+  const VERIFY_PREFIX = "srltcp://verify#";
+
+  function contactVerified(hashId) {
+    return !!state.trusted.find((p) => p.hash_id === hashId)?.verified;
+  }
+
+  function setVerifiedMark(el, verified, name) {
+    if (!el) return;
+    el.classList.toggle("verified", verified);
+    const label = verified
+      ? `Verified: you checked ${name || "this contact"}'s keys`
+      : `Not verified yet: tap to compare safety numbers with ${name || "this contact"}`;
+    el.title = label;
+    el.setAttribute("aria-label", label);
+  }
+
+  function updateVerifiedMark(hashId) {
+    const mark = $("#chat-peer-verified");
+    if (!mark) return;
+    const peer = !state.selectedGroup && state.trusted.find((p) => p.hash_id === hashId);
+    mark.classList.toggle("hidden", !peer);
+    if (peer) setVerifiedMark(mark, !!peer.verified, peer.name);
+  }
+
+  function setPeerVerified(hashId, verified) {
+    const peer = state.trusted.find((p) => p.hash_id === hashId);
+    if (peer) peer.verified = verified;
+    if (state.selectedPeer === hashId) updateVerifiedMark(hashId);
+    if (state.editContactTarget === hashId) renderEditContactVerify(hashId);
+  }
+
+  function renderEditContactVerify(hashId) {
+    const verified = contactVerified(hashId);
+    setVerifiedMark($("#edit-contact-verified"), verified);
+    const text = $("#edit-contact-verify-text");
+    if (text) text.textContent = verified ? "Verified" : "Not verified yet";
+  }
+
+  function renderVerifyInfo(info) {
+    const verified = !!info.verified;
+    const status = $("#verify-status");
+    if (status) {
+      status.textContent = !info.available
+        ? "Connect with this contact once to see your safety number."
+        : verified ? "✓ Verified: these are their real keys." : "Not verified yet.";
+      status.classList.toggle("ok", verified);
+    }
+    const number = $("#verify-number");
+    if (number) {
+      number.innerHTML = info.available
+        ? info.number.split(" ").map((g) => `<span>${escapeHtml(g)}</span>`).join("")
+        : "—";
+    }
+    const qr = $("#verify-qr");
+    if (qr) {
+      qr.classList.toggle("hidden", !info.available);
+      if (info.available) renderPairQr(info.code, qr);
+    }
+    $("#verify-scan")?.classList.toggle(
+      "hidden",
+      !info.available || (!androidHas("scanQrCode") && !("BarcodeDetector" in window))
+    );
+    $("#verify-confirm")?.classList.toggle("hidden", !info.available || verified);
+    $("#verify-remove")?.classList.toggle("hidden", !verified);
+    setPeerVerified(state.verifyTarget, verified);
+  }
+
+  async function openVerify(hashId) {
+    const peer = state.trusted.find((p) => p.hash_id === hashId);
+    if (!peer) return;
+    state.verifyTarget = hashId;
+    const nameEl = $("#verify-name");
+    if (nameEl) nameEl.textContent = peer.name || hashId.slice(0, 8);
+    renderVerifyInfo({ available: false, verified: !!peer.verified });
+    openModal($("#verify-modal"));
+    const { ok, data } = await apiGet(
+      `/api/trusted/${encodeURIComponent(hashId)}/safety`, { fallback: null }
+    );
+    if (ok && data && state.verifyTarget === hashId) renderVerifyInfo(data);
+  }
+
+  function closeVerify() {
+    stopPairCamera();
+    state.verifyTarget = null;
+    closeModal($("#verify-modal"));
+  }
+
+  async function postVerify(body) {
+    const hashId = state.verifyTarget;
+    if (!hashId) return;
+    const { ok, data } = await apiPost(
+      `/api/trusted/${encodeURIComponent(hashId)}/verify`, body, { silent: true }
+    );
+    if (!ok) {
+      toast(data?.error || "Could not verify", "error");
+      return;
+    }
+    if (state.verifyTarget === hashId) renderVerifyInfo(data);
+    else setPeerVerified(hashId, !!data.verified);
+    if (data.verified) toast(`${state.trusted.find((p) => p.hash_id === hashId)?.name || "Contact"} is verified`);
+  }
+
+  function submitVerifyCode(code) {
+    if (!state.verifyTarget) {
+      toast("Open the contact's Verify screen first, then scan their code", "error");
+      return;
+    }
+    postVerify({ code });
+  }
+
+  function confirmVerify() {
+    const name = $("#verify-name")?.textContent || "this contact";
+    if (!confirm(`Only confirm if every digit matches the number on ${name}'s phone.`)) return;
+    postVerify({ confirm: true });
+  }
   window.onAndroidNfcResult = (result) => {
     let r = {};
     try { r = typeof result === "string" ? JSON.parse(result) : result || {}; } catch (_) { r = {}; }
@@ -1434,10 +1584,6 @@
     if (state.selectedPeer === hashId) loadMessages();
   }
 
-  function formatSafetyNumber(hashId) {
-    return (hashId || "").replace(/(.{4})/g, "$1 ").trim();
-  }
-
   function openEditContact(hashId) {
     closeContactMenu();
     const peer = state.trusted.find((p) => p.hash_id === hashId);
@@ -1455,8 +1601,7 @@
       altEl.textContent = alts.length ? `Also tried: ${alts.join(", ")}` : "";
       altEl.classList.toggle("hidden", !alts.length);
     }
-    const hashEl = $("#edit-contact-hash");
-    if (hashEl) hashEl.textContent = formatSafetyNumber(hashId);
+    renderEditContactVerify(hashId);
     const checkEl = $("#edit-contact-check-result");
     if (checkEl) { checkEl.innerHTML = ""; checkEl.classList.add("hidden"); }
     const adv = $("#edit-contact-modal details");
@@ -1696,6 +1841,7 @@
       updateGroupHeader();
       return;
     }
+    updateVerifiedMark(hashId);
     const linked = isPeerLinked(hashId) || inTransferCooldown(hashId);
     const latency = formatLatency(hashId);
     updateChatTransportBadge(hashId, linked);
@@ -4020,6 +4166,20 @@
       }
     });
   }
+  $("#chat-peer-verified")?.addEventListener("click", () => {
+    if (state.selectedPeer && !state.selectedGroup) openVerify(state.selectedPeer);
+  });
+  $("#edit-contact-verify")?.addEventListener("click", () => {
+    const hashId = state.editContactTarget;
+    closeEditContact();
+    if (hashId) openVerify(hashId);
+  });
+  $("#verify-scan")?.addEventListener("click", () =>
+    scanQr($("#verify-camera"), VERIFY_PREFIX, submitVerifyCode));
+  $("#verify-confirm")?.addEventListener("click", confirmVerify);
+  $("#verify-remove")?.addEventListener("click", () => postVerify({ verified: false }));
+  $("#verify-close")?.addEventListener("click", closeVerify);
+  setupModalClose($("#verify-modal"), closeVerify);
   $("#pair-close")?.addEventListener("click", closePairModal);
   $("#pair-copy")?.addEventListener("click", copyPairLink);
   $("#pair-share")?.addEventListener("click", sharePairLink);

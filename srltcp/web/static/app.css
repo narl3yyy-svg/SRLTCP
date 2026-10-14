@@ -1582,6 +1582,24 @@ label.field > span {
 .pair-qr img { width: 100%; max-width: 260px; height: auto; image-rendering: pixelated; }
 .pair-actions { justify-content: flex-start; flex-wrap: wrap; }
 .pair-fingerprint { font-size: 0.75rem; color: var(--text-muted, #8b93a8); word-break: break-all; }
+/* Verified contacts: a shield next to the name, filled once verified. */
+.chat-peer-name-row { display: flex; align-items: center; gap: 0.3rem; min-width: 0; }
+.chat-peer-name-row .chat-peer-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.verified-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; background: none; color: var(--text-secondary); cursor: pointer; border-radius: 6px; }
+.verified-mark svg { width: 17px; height: 17px; }
+.verified-mark .tick { display: none; }
+.verified-mark.verified { color: var(--success, #2ecc71); }
+.verified-mark.verified svg path:first-child { fill: currentColor; fill-opacity: 0.18; }
+.verified-mark.verified .tick { display: inline; }
+.verified-mark.static { cursor: default; }
+.contact-verify { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0.5rem 0; font-size: 0.9rem; }
+.contact-verify #edit-contact-verify-text { flex: 1; min-width: 8rem; }
+.verify-card .pair-qr { min-height: 0; max-width: 240px; margin: 0 auto 0.5rem; }
+.verify-card .pair-qr img { max-width: 220px; }
+.verify-status { font-weight: 600; margin: 0 0 0.5rem; }
+.verify-status.ok { color: var(--success, #2ecc71); }
+.safety-number { font-family: var(--mono); font-size: 1rem; letter-spacing: 0.04em; display: grid; grid-template-columns: repeat(4, auto); justify-content: center; gap: 0.3rem 0.9rem; margin: 0.5rem 0 0.75rem; user-select: all; }
+.verify-actions { flex-wrap: wrap; }
 .pair-buttons { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.75rem; }
 .pair-nfc-status { font-size: 0.85rem; padding: 0.5rem 0.75rem; border-radius: 8px; background: rgba(91, 141, 239, 0.12); }
 .pair-camera { width: 100%; border-radius: 10px; margin-top: 0.5rem; background: #000; }

@@ -95,7 +95,10 @@
 </button>
 <div class="avatar peer-avatar" id="peer-avatar">?</div>
 <div class="chat-header-info">
+<div class="chat-peer-name-row">
 <div class="chat-peer-name" id="chat-peer-name">Peer</div>
+<button type="button" class="verified-mark hidden" id="chat-peer-verified"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path class="tick" d="m9 12 2 2 4-4"/></svg></button>
+</div>
 <div class="chat-peer-status" id="chat-peer-status">
 <span class="status-dot"></span>
 <span id="chat-peer-transport" class="transport-badge header-badge hidden" aria-hidden="true"></span>
@@ -604,7 +607,7 @@
 <button type="button" class="action-btn small hidden" id="pair-share">Share…</button>
 <button type="button" class="action-btn small secondary" id="pair-refresh">New code</button>
 </div>
-<p class="pair-fingerprint">Safety number: <code id="pair-my-hash">—</code></p>
+<p class="pair-fingerprint">Your ID: <code id="pair-my-hash">—</code></p>
 </section>
 <section class="pair-section">
 <h4>Add someone</h4>
@@ -646,12 +649,33 @@
 <button type="button" class="action-btn small" id="edit-contact-check">Check connection</button>
 <div id="edit-contact-check-result" class="contact-check-result hidden" aria-live="polite"></div>
 </div>
-<p class="pair-fingerprint">Safety number: <code id="edit-contact-hash">—</code></p>
+<div class="contact-verify">
+<span class="verified-mark static" id="edit-contact-verified"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path class="tick" d="m9 12 2 2 4-4"/></svg></span>
+<span id="edit-contact-verify-text">Not verified yet</span>
+<button type="button" class="action-btn small" id="edit-contact-verify">Verify…</button>
+</div>
 <div class="modal-actions">
 <button type="button" class="action-btn small danger" id="edit-contact-delete">Delete</button>
 <span class="spacer"></span>
 <button type="button" class="action-btn secondary" id="edit-contact-cancel">Cancel</button>
 <button type="button" class="action-btn" id="edit-contact-save">Save</button>
+</div>
+</div>
+</div>
+<div class="modal-overlay" id="verify-modal" aria-hidden="true">
+<div class="modal-card verify-card">
+<h3>Verify <span id="verify-name">contact</span></h3>
+<p class="verify-status" id="verify-status"></p>
+<div class="pair-qr" id="verify-qr" aria-label="Your safety code for this contact"></div>
+<p class="hint">Let them scan this from your chat with them, or scan theirs. Or compare the numbers, in person or on a call: they must be the same on both phones.</p>
+<div class="safety-number" id="verify-number">—</div>
+<video id="verify-camera" class="pair-camera hidden" playsinline muted></video>
+<div class="modal-actions verify-actions">
+<button type="button" class="action-btn" id="verify-scan">Scan their code</button>
+<button type="button" class="action-btn secondary" id="verify-confirm">The numbers match</button>
+<button type="button" class="action-btn small secondary hidden" id="verify-remove">Remove verification</button>
+<span class="spacer"></span>
+<button type="button" class="action-btn secondary" id="verify-close">Close</button>
 </div>
 </div>
 </div>
