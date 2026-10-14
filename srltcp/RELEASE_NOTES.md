@@ -1,5 +1,53 @@
 # SRLTCP Release Notes
 
+## v0.9.0 (2026-10-15)
+
+Both devices need 0.9.0: the handshake changed (older versions can't connect
+to it and say so in the log).
+
+### Quantum-safe encryption
+- Every session now combines **X25519 with ML-KEM-768** (the NIST
+  post-quantum standard) for the session key, and every handshake is signed
+  with **Ed25519 and ML-DSA-65**. Recorded traffic stays private even against
+  a future quantum computer; breaking one algorithm alone isn't enough.
+  Speed is unchanged after the first second of a connection.
+- Each contact's post-quantum key is remembered the first time you connect;
+  a different key later is refused.
+
+### Faster paths
+- **Direct over IPv6, straight from Tor.** When both devices have IPv6
+  internet, they swap addresses inside the Tor session and connect directly
+  (no relay, no server): the badge goes from TOR to DIRECT and files move at
+  the full speed of both connections. If a network blocks it, Tor carries on.
+
+### Verified contacts
+- A shield next to each contact's name shows whether you checked their keys.
+  **Pairing in person (QR scan or NFC tap) verifies both phones by itself.**
+  For anyone else, tap the shield: scan the code on their phone, or compare
+  the 60-digit safety number and tap *The numbers match*.
+
+### Privacy (Settings → Privacy)
+- **Encrypted on the device:** your keys, contacts, chats, groups and
+  settings are stored encrypted; on Android the key is held by the phone's
+  secure hardware (Keystore). Existing data is encrypted on first start.
+- **Encrypted backup and restore:** one file locked with your password, with
+  your identity, contacts, chats, groups and settings. Restore it on a new
+  phone (also offered on the first-run screen) and your contacts see the same
+  you.
+- **Disappearing messages** (off by default): what you send is deleted from
+  both phones after 1 hour, 1 day, 1 week or 4 weeks.
+- **App lock** (Android, off by default): fingerprint, face or screen lock to
+  open SRLTCP, and again after 30 seconds away.
+- **Hide message content on the lock screen** (Android, off by default).
+
+### Files
+- **Transfers survive restarts:** close the app (or restart the phone) in the
+  middle of a file and it carries on from where it was once both of you are
+  back. A file that was edited in the meantime isn't resumed.
+- **Send several files at once** with the paperclip.
+- **Shrink photos before sending** (Settings → General, off by default):
+  smaller and faster to send, and without the photo's location data.
+
 ## v0.8.3 (2026-10-14)
 
 - **No more connect/disconnect alerts.** A contact connecting or dropping
