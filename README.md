@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks over **Tor** (no server needed), **direct IPv6**, or your own optional **relay**, switching automatically. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.9.0 — update every device: 0.9 uses a new quantum-safe handshake (v6) and doesn't connect to 0.8.x or older.
+**Current version:** 0.10.0 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -251,7 +251,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.9.0.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.10.0.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -259,7 +259,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.9.0.apk` (one APK for phon
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.9.0.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.10.0.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -581,7 +581,7 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 
 ## Roadmap
 
-**Done (next release)**
+**Done (v0.10.0)**
 
 - [x] Folder sync with a contact: two-way, incremental, conflict copies, 30-day trash for deletes
 
@@ -667,7 +667,7 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [ ] Per-contact "always use Tor" (hide who talks to whom even when a direct path exists)
 - [ ] Several relays per contact (failover) and multi-hop relaying
 - [ ] Android USB serial Chaquopy shim (full OTG support)
-- [ ] QUIC transport backend
+- [ ] QUIC (UDP) as an extra direct path: UDP hole punching gets through more routers and carrier NATs than TCP, so fewer contacts fall back to Tor. Plan: keep TCP whenever a direct TCP path works (faster), use QUIC when only UDP gets through, Tor as the last resort; SRLTCP's quantum-safe handshake runs inside QUIC. Needs aioquic built for Android (Chaquopy has no wheel yet) or a Java QUIC library
 - [ ] Bandwidth limiting and QoS per transfer
 - [ ] Signed APK releases with a stable release key (updates install over the old app)
 - [ ] Desktop system tray wrapper (Tauri/Electron)

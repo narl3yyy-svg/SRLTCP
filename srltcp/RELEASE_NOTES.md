@@ -1,6 +1,6 @@
 # SRLTCP Release Notes
 
-## Unreleased
+## v0.10.0 (2026-10-15)
 
 ### Folder sync
 - **Keep a folder the same on your device and a contact's.** Contact's ⋮ →
