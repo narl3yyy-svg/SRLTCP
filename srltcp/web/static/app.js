@@ -1989,13 +1989,15 @@
   // Photos only (not screenshots or graphics, which JPEG would blur; not GIFs,
   // which would lose their animation).
   const SHRINK_TYPES = /^image\/(jpeg|webp|heic|heif)$/i;
+  const SHRINK_NAMES = /\.(jpe?g|webp|heic|heif)$/i;  // Android often gives no type
   const PHOTO_MAX_SIDE = 2560;
 
-  /** A smaller JPEG copy of a photo, or the file itself when that doesn't
-   *  help. Re-encoding keeps none of the photo's metadata (GPS location,
-   *  camera, time), which is a privacy win of its own. */
+  /** A JPEG copy of a photo, at most PHOTO_MAX_SIDE on its longest side.
+   *  Always re-encoded (even when not smaller): that leaves out all of the
+   *  photo's metadata (GPS location, camera, time). A photo this device
+   *  can't decode is sent as it is. */
   async function shrinkPhoto(file) {
-    if (!SHRINK_TYPES.test(file.type || "") || file.size < 300 * 1024) return file;
+    if (!SHRINK_TYPES.test(file.type || "") && !SHRINK_NAMES.test(file.name || "")) return file;
     try {
       const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
       const scale = Math.min(1, PHOTO_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
@@ -2007,7 +2009,7 @@
       canvas.getContext("2d").drawImage(bitmap, 0, 0, w, h);
       bitmap.close?.();
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
-      if (!blob || blob.size >= file.size) return file;
+      if (!blob) return file;
       const name = `${file.name.replace(/\.[^.]+$/, "") || "photo"}.jpg`;
       return new File([blob], name, { type: "image/jpeg", lastModified: Date.now() });
     } catch {

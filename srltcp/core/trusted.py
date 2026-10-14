@@ -106,7 +106,7 @@ class TrustedStore:
         self.load()
 
     def load(self) -> None:
-        raw = load_json(self.path)
+        raw = load_json(self.path, critical=True)
         if not isinstance(raw, dict):
             return
         removed = raw.get("removed", {})

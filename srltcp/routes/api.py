@@ -1001,7 +1001,9 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     async def backup_file(request: web.Request) -> web.Response:
         name = request.match_info.get("name", "")
         path = _backup_dir() / name
-        if not name.startswith("srltcp-backup-") or "/" in name or not path.is_file():
+        from srltcp.core.backup import valid_backup_name
+
+        if not valid_backup_name(name) or not path.is_file():
             return web.json_response({"error": "backup not found"}, status=404)
         return web.FileResponse(path, headers={
             "Content-Disposition": f'attachment; filename="{name}"',
@@ -1013,7 +1015,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             MAX_BACKUP,
             BackupError,
             open_backup,
-            restore_backup,
+            stage_restore,
             summary,
         )
         from srltcp.utils.platform import is_android
@@ -1028,7 +1030,9 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                         if len(blob) > MAX_BACKUP:
                             raise BackupError("that file is too big to be a backup")
                 elif field.name == "password":
-                    password = (await field.text())[:1024]
+                    password = await field.text()
+                    if len(password) > 1024:
+                        raise BackupError("that password is too long")
         except BackupError as exc:
             return web.json_response({"error": str(exc)}, status=400)
         except (ValueError, AssertionError, OSError):
@@ -1038,10 +1042,10 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         except BackupError as exc:
             return web.json_response({"error": str(exc)}, status=400)
         info = summary(data)
-        # Stop first: a running node saves its state on the way out and
-        # would overwrite what we restore.
+        # Staged: applied at the next start, before anything is loaded, so
+        # nothing this process still writes can overwrite the restore.
+        await asyncio.to_thread(stage_restore, node.backend.trusted.path.parent, data)
         await node.stop()
-        await asyncio.to_thread(restore_backup, node.backend.trusted.path.parent, data)
         log.info("Restored a backup of %s (%d contacts)", info["name"], info["contacts"])
         if is_android():
             return web.json_response({"restored": True, "restart": "app", **info})

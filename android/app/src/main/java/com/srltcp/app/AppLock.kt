@@ -63,6 +63,14 @@ class AppLock(private val activity: MainActivity, private val root: FrameLayout)
             unlock()
             return
         }
+        if (!available()) {
+            // The phone's screen lock was removed: nothing could unlock the
+            // app any more, so the lock switches itself off.
+            PrivacyPrefs.setAppLock(activity, false)
+            hideFromRecents(false)
+            unlock()
+            return
+        }
         hideFromRecents(true)
         val away = backgroundAt > 0 && SystemClock.elapsedRealtime() - backgroundAt >= LOCK_AFTER_MS
         if (away) processLocked = true
@@ -78,7 +86,10 @@ class AppLock(private val activity: MainActivity, private val root: FrameLayout)
 
     /** Ask for the user's fingerprint/face/screen lock; [done] gets the result. */
     fun prompt(title: String, done: (Boolean) -> Unit) {
-        if (authenticating) return
+        if (authenticating) {
+            done(false)
+            return
+        }
         authenticating = true
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
@@ -109,10 +120,19 @@ class AppLock(private val activity: MainActivity, private val root: FrameLayout)
     /** Turn the lock on (after the user proved they can unlock) or off. */
     fun setEnabled(on: Boolean, done: (String) -> Unit) {
         if (!on) {
-            PrivacyPrefs.setAppLock(activity, false)
-            hideFromRecents(false)
-            unlock()
-            done("off")
+            if (!available()) {
+                PrivacyPrefs.setAppLock(activity, false)
+                done("off")
+                return
+            }
+            // Someone holding the unlocked phone mustn't turn it off silently.
+            prompt("Turn off app lock") { ok ->
+                if (ok) {
+                    PrivacyPrefs.setAppLock(activity, false)
+                    hideFromRecents(false)
+                }
+                done(state())
+            }
             return
         }
         if (!available()) {
@@ -124,7 +144,7 @@ class AppLock(private val activity: MainActivity, private val root: FrameLayout)
                 PrivacyPrefs.setAppLock(activity, true)
                 hideFromRecents(true)
             }
-            done(if (ok) "on" else "off")
+            done(state())
         }
     }
 
@@ -139,6 +159,7 @@ class AppLock(private val activity: MainActivity, private val root: FrameLayout)
         backgroundAt = 0L
         overlay?.let { root.removeView(it) }
         overlay = null
+        activity.setContentHidden(false)
     }
 
     private fun hideFromRecents(hide: Boolean) {
@@ -149,6 +170,7 @@ class AppLock(private val activity: MainActivity, private val root: FrameLayout)
     }
 
     private fun showOverlay() {
+        activity.setContentHidden(true)
         if (overlay != null) return
         val panel = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -181,6 +203,7 @@ class AppLock(private val activity: MainActivity, private val root: FrameLayout)
             )
         )
         overlay = panel
+        panel.requestFocus()
     }
 
     companion object {

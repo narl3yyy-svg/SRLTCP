@@ -178,7 +178,7 @@
 <input type="checkbox" id="set-shrink-photos" />
 <span>Shrink photos before sending</span>
 </label>
-<small class="field-hint">Photos go out smaller (longest side 2560 px), so they send faster over Tor or mobile data. Shrinking also removes the location and camera details stored in the photo. Off = the original file, untouched.</small>
+<small class="field-hint">JPEG, WebP and HEIC photos go out as JPEG with the longest side at most 2560 px, so they send faster over Tor or mobile data, without the location and camera details stored in the photo. Screenshots (PNG), GIFs and photos this device can't open are sent as they are. Off = the original file, untouched.</small>
 </div>
 <div class="settings-panel" data-panel="privacy">
 <p class="hint">Your keys, contacts, chats and settings are stored encrypted on this device. On Android the key is kept by the phone's secure hardware (Keystore), so a copy of the app's files is useless anywhere else.</p>
@@ -191,7 +191,7 @@
 <option value="604800">1 week</option>
 <option value="2419200">4 weeks</option>
 </select>
-<small>Messages and files you send are deleted from both phones this long after they're sent (one-to-one chats). Your contacts' own setting decides for their messages. It can't undo a screenshot or a copy someone saved.</small>
+<small>Messages and files you send are deleted this long after sending on your phone, and this long after they arrive on theirs (one-to-one chats). Your contacts' own setting decides for their messages. It can't undo a screenshot or a copy someone saved.</small>
 </label>
 <fieldset class="settings-group hidden" id="phone-privacy">
 <legend>This phone</legend>
@@ -204,7 +204,7 @@
 <input type="checkbox" id="set-private-notifications" />
 <span>Hide message content on the lock screen</span>
 </label>
-<small class="field-hint">A locked phone then shows only "SRLTCP — New message", and calls without the caller's name. Once unlocked, notifications show who wrote and what.</small>
+<small class="field-hint">A locked phone then shows only "SRLTCP — New message", and calls ring without the caller's name instead of opening over the lock screen. Once unlocked, notifications show who wrote and what.</small>
 </fieldset>
 <fieldset class="settings-group" id="backup-settings">
 <legend>Backup</legend>
@@ -236,7 +236,7 @@
 <input type="checkbox" id="set-direct-internet" />
 <span>Try direct internet connections</span>
 </label>
-<small class="field-hint">Connects straight through both routers, no port forwarding. Your public IP address is shared only with your contacts, inside the encrypted connection. Off = relay only: contacts never see your IP.</small>
+<small class="field-hint">Connects straight through both routers (and over IPv6 from a Tor connection), no port forwarding. Your public IP address is shared only with your contacts, inside the encrypted connection, but on a direct connection your network can see which IP you talk to. Off = Tor or relay only: contacts never see your IP.</small>
 <div class="relay-status" id="relay-status" aria-live="polite"></div>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-tor-enabled" />

@@ -117,7 +117,7 @@ class IdentityStore:
         self, name: str, transport: TransportKind
     ) -> Identity:
         path = self._path(transport)
-        data = load_json(path)
+        data = load_json(path, critical=True)
         if isinstance(data, dict):
             identity = Identity.from_dict(data)
             changed = "pq_seed" not in data  # identity from before 0.9: add its ML-DSA key
@@ -137,7 +137,7 @@ class IdentityStore:
             raise OSError("could not save the identity")
 
     def load(self, transport: TransportKind) -> Identity | None:
-        data = load_json(self._path(transport))
+        data = load_json(self._path(transport), critical=True)
         return Identity.from_dict(data) if isinstance(data, dict) else None
 
     def regenerate(self, name: str, transport: TransportKind) -> Identity:

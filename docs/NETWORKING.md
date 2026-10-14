@@ -102,8 +102,11 @@ your contact doesn't learn your IP address and you don't learn theirs. The
 first Tor relay sees your IP but not who you talk to, and no relay sees
 both. Your internet provider can see that you use Tor, but not with whom or
 what. Exception: with *Try direct internet connections* on (default), your
-contacts learn your IPv6 address so the two of you can connect directly.
-Turn it off to stay on Tor and keep your address hidden from contacts too.
+contacts learn your IPv6 address so the two of you can connect directly, and
+once you're on that direct connection, your networks (Wi-Fi owner, mobile
+carrier) can see which IP address you're talking to, as with any direct
+connection. The content stays end-to-end encrypted. Turn the setting off to
+stay on Tor: then neither contacts nor networks learn who talks to whom.
 
 ## Hole punching (direct internet connections)
 

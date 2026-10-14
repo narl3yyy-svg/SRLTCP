@@ -136,6 +136,12 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
 
 
 async def run_web(args: argparse.Namespace) -> None:
+    from srltcp.core.backup import apply_pending_restore
+    from srltcp.utils.platform import data_dir
+
+    restored = apply_pending_restore(data_dir())  # before anything is loaded
+    if restored:
+        log.info("Restored a backup of %s (%d contacts)", restored["name"], restored["contacts"])
     store = SettingsStore()
     settings = store.load()
 
@@ -381,7 +387,9 @@ def android_backup_file(filename: str) -> str:
     assert isinstance(node, SRLTCPNode)
     folder = node.backend.trusted.path.parent / "backups"
     path = folder / filename
-    if not filename.startswith("srltcp-backup-") or "/" in filename or not path.is_file():
+    from srltcp.core.backup import valid_backup_name
+
+    if not valid_backup_name(filename) or not path.is_file():
         return json.dumps({"error": "backup not found"})
     return json.dumps(
         {"path": str(path), "filename": filename, "mime": "application/octet-stream"}

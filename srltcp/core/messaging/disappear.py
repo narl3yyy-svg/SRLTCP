@@ -91,3 +91,4 @@ class DisappearMixin:
                 with contextlib.suppress(OSError):
                     path.unlink(missing_ok=True)
         self._transfers.pop(tid, None)
+        self._journal_changed()

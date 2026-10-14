@@ -100,7 +100,8 @@ class SRLTCPBridge(private val activity: MainActivity) {
     }
 
     @JavascriptInterface
-    fun privateNotifications(): Boolean = PrivacyPrefs.privateNotifications(activity)
+    fun privateNotifications(): Boolean =
+        activity.isTrustedPage && PrivacyPrefs.privateNotifications(activity)
 
     /** Lock screen shows "New message" without the sender or the text. */
     @JavascriptInterface

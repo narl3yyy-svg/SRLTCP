@@ -654,7 +654,9 @@ class ConnectMixin:
         kx = KeyExchange(identity.private_key, identity.pq)
         kx.start_kem()
         self._pending_handshakes[hash_id] = kx
-        packet = self._identity_hello(MessageType.HANDSHAKE, kx, link.transport, hash_id)
+        packet = await asyncio.to_thread(
+            self._identity_hello, MessageType.HANDSHAKE, kx, link.transport, hash_id
+        )
         await self._send_raw(link.transport_peer_id, link.transport, packet)
 
     def _identity_hello(
@@ -686,7 +688,10 @@ class ConnectMixin:
         kx.start_kem()
         try:
             await self._send_raw(
-                peer_id, "tcp", self._identity_hello(MessageType.HANDSHAKE, kx, "tcp", hash_id)
+                peer_id, "tcp",
+                await asyncio.to_thread(
+                    self._identity_hello, MessageType.HANDSHAKE, kx, "tcp", hash_id
+                ),
             )
         except (KeyError, OSError, ConnectionError) as exc:
             log.debug("Direct upgrade to %s failed: %s", hash_id[:8], exc)
@@ -787,8 +792,11 @@ class ConnectMixin:
         identity = self._identity_for_transport(transport)
         kx = KeyExchange(identity.private_key, identity.pq)
         try:
-            kx.respond_kem(hello.kem)
-            keys = self._complete_kx(kx, hello, ed_pub, identity.hash_id, remote_hash)
+            # Post-quantum math is pure Python on Android: off the event loop.
+            await asyncio.to_thread(kx.respond_kem, hello.kem)
+            keys = await asyncio.to_thread(
+                self._complete_kx, kx, hello, ed_pub, identity.hash_id, remote_hash
+            )
         except Exception as exc:
             log.warning("Handshake verification failed from %s: %s", remote_hash[:8], exc)
             await self._reject_connection(peer_id)
@@ -801,7 +809,9 @@ class ConnectMixin:
         link = await self._bind_link(peer_id, remote_hash, remote_pub, remote_name)
         if not link:
             return
-        ack = self._identity_hello(MessageType.HANDSHAKE_ACK, kx, link.transport, remote_hash)
+        ack = await asyncio.to_thread(
+            self._identity_hello, MessageType.HANDSHAKE_ACK, kx, link.transport, remote_hash
+        )
         await self._send_raw(peer_id, link.transport, ack)
         link.pq_public = hello.pq_public
         self.set_link_keys(remote_hash, keys)
@@ -830,7 +840,7 @@ class ConnectMixin:
             return
         own = self._identity_for_transport(link.transport).hash_id
         try:
-            keys = self._complete_kx(kx, hello, ed_pub, own, remote_hash)
+            keys = await asyncio.to_thread(self._complete_kx, kx, hello, ed_pub, own, remote_hash)
         except Exception as exc:
             log.warning("Handshake ack verification failed from %s: %s", remote_hash[:8], exc)
             return
@@ -862,7 +872,7 @@ class ConnectMixin:
         try:
             if remote_hash != expected:
                 raise ValueError("wrong identity on the direct path")
-            keys = self._complete_kx(kx, hello, ed_pub, own, remote_hash)
+            keys = await asyncio.to_thread(self._complete_kx, kx, hello, ed_pub, own, remote_hash)
             if not self._handshake_is_fresh(hello.ephemeral, hello.timestamp):
                 raise ValueError("stale handshake")
             if not self._pq_key_ok(remote_hash, hello.pq_public):

@@ -203,9 +203,13 @@ class SRLTCPNode:
             tcp_host=peer.tcp_host,
             tcp_port=peer.tcp_port,
         )
-        result = self.backend.trusted.add(trusted).public_dict()
+        self.backend.trusted.add(trusted)
+        link = self.backend.get_link(hash_id)
+        if link and link.handshake_complete and link.pq_public:
+            # Already connected: pin the post-quantum key this session proved.
+            self.backend._pq_key_ok(hash_id, link.pq_public)
         self.backend.discovery.remove(hash_id)
-        return result
+        return self.backend.trusted_view(hash_id)
 
     def create_share_session(self, folder: Path | None, owner_hash: str) -> ShareSession:
         root = folder or self.settings.resolved_shared_folder()

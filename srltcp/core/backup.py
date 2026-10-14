@@ -14,7 +14,9 @@ on-device data key never leaves the device). Not in it: received files,
 paused transfers, shared folders, Tor keys (a restored device gets a new
 onion address and tells its contacts), the localhost certificate and token.
 
-Restoring replaces those files on this device and needs an app restart.
+Restoring is staged (:func:`stage_restore`, one sealed file) and applied by
+:func:`apply_pending_restore` at the next start, before anything is loaded:
+nothing still running in the old process can write over the restored files.
 Run the restored identity on one device only: two devices with the same
 identity would keep pushing each other off the network.
 """
@@ -37,6 +39,8 @@ from srltcp.utils import vault
 MAGIC = b"SRLTCP-BACKUP1\n"
 SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P = 16, 8, 1
 MIN_PASSWORD = 8
+MAX_PASSWORD = 1024
+NAME_PATTERN = r"srltcp-backup-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}\.srltcp"
 MAX_BACKUP = 256 * 1024 * 1024
 BACKUP_FILES = (
     "identities/identity_tcp.json",
@@ -59,7 +63,9 @@ class BackupError(ValueError):
 
 
 def _key(password: str, salt: bytes, log_n: int, r: int, p: int) -> bytes:
-    if not (14 <= log_n <= 20 and 1 <= r <= 16 and 1 <= p <= 4):
+    # Only what this version writes: the header is read before anything is
+    # authenticated, and a crafted one must not make scrypt eat gigabytes.
+    if (log_n, r, p) != (SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P):
         raise BackupError("unsupported backup settings")
     return Scrypt(salt=salt, length=32, n=1 << log_n, r=r, p=p).derive(password.encode())
 
@@ -68,6 +74,8 @@ def create_backup(root: Path, password: str, *, app_version: str = "") -> bytes:
     """Seal this device's data into one backup file (bytes)."""
     if len(password) < MIN_PASSWORD:
         raise BackupError(f"use a password of at least {MIN_PASSWORD} characters")
+    if len(password) > MAX_PASSWORD:
+        raise BackupError(f"use a password of at most {MAX_PASSWORD} characters")
     files: dict[str, str] = {}
     for name in BACKUP_FILES:
         path = root / name
@@ -138,6 +146,30 @@ def summary(data: dict[str, Any]) -> dict[str, Any]:
         "messages": len(messages),
         "created": data.get("created"),
     }
+
+
+PENDING = "restore-pending.json"
+
+
+def valid_backup_name(name: str) -> bool:
+    import re
+
+    return re.fullmatch(NAME_PATTERN, name) is not None
+
+
+def stage_restore(root: Path, data: dict[str, Any]) -> None:
+    vault.write_text(root / PENDING, json.dumps(data, separators=(",", ":")))
+
+
+def apply_pending_restore(root: Path) -> dict[str, Any] | None:
+    """At startup: apply a restore staged before the restart (its summary)."""
+    path = root / PENDING
+    if not path.is_file():
+        return None
+    data = json.loads(vault.read_text(path))
+    restore_backup(root, data)
+    path.unlink()
+    return summary(data)
 
 
 def restore_backup(root: Path, data: dict[str, Any]) -> None:

@@ -186,6 +186,7 @@ class MessagingBackend(
             self._wire_transport(self.serial_transport)
         self.restore_transfers()  # needs the identities: which side of each file we are
         self.load_message_history()
+        await self.expire_messages(notify=False)  # timers that ran out while closed
 
         if self.tcp_transport:
             await self.tcp_transport.start()
@@ -1002,9 +1003,7 @@ class MessagingBackend(
             if transfer:
                 msg.metadata["offset"] = transfer.offset
         self._messages = stored + [m for m in self._messages if m.id not in stored_ids]
-        self._prune_messages()
-        now = time.time()  # timers that ran out while the app was closed
-        self._messages = [m for m in self._messages if not 0 < expires_at(m) <= now]
+        self._prune_messages()  # expired ones go in start() (their files too)
 
     def _persist_messages(self) -> None:
         """Debounced write of chat history to disk."""

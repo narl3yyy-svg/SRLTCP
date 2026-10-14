@@ -340,7 +340,7 @@ Tap the contact's name at the top of a chat, the **⋮** next to a contact, or l
 *Settings → Privacy*:
 
 - **App lock** (Android, off by default): SRLTCP asks for your fingerprint, face or screen lock when it's opened and after 30 seconds in the background. Messages and calls still arrive while it's locked; a call can be declined from its notification. Turning it on asks you to unlock once, to be sure you can.
-- **Hide message content on the lock screen** (Android, off by default): a locked phone shows "SRLTCP — New message" and calls without the caller's name; unlocked, notifications show everything.
+- **Hide message content on the lock screen** (Android, off by default): a locked phone shows "SRLTCP — New message", and calls ring without the caller's name (the call screen opens when you unlock or answer); unlocked, notifications show everything.
 - **Disappearing messages** (off by default): messages and files you send in one-to-one chats are deleted from both phones 1 hour, 1 day, 1 week or 4 weeks after sending; a small timer shows on those messages. Each person's setting applies to what they send.
 - **Backup**: enter a password (8+ characters, a passphrase is better) and tap *Create backup*. Android asks where to save the file (Downloads, a USB stick, Drive…); a PC downloads it. The file holds your identity, contacts, chats, groups and settings, encrypted with that password. Received files, shared folders and paused transfers are not in it.
 - **Restore**: on the new device tap *Restore from backup…* (also offered on the first-run screen), pick the file, enter the password. SRLTCP replaces its identity, contacts and chats with the backup's and restarts; your contacts see the same you. Use a restored identity on one device only.

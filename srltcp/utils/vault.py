@@ -17,6 +17,11 @@ other. Where the data key lives decides what this protects against:
 Files written by older versions (plain JSON) are read as they are and
 sealed the next time they are saved; :func:`seal_existing` does that at
 startup for all of them.
+
+A missing or unusable data key is never papered over: if sealed files exist
+and their key can't be loaded, :class:`VaultKeyError` stops the app instead
+of creating a new key (which would make everything look empty and let a new
+identity replace the old one).
 """
 
 from __future__ import annotations
@@ -44,6 +49,10 @@ class VaultError(OSError):
     """A sealed file can't be opened (wrong device, damaged, key lost)."""
 
 
+class VaultKeyError(VaultError):
+    """The data key itself can't be loaded: nothing may be read or written."""
+
+
 # ── The data key ──
 
 
@@ -59,10 +68,29 @@ def _key_for(folder: Path) -> bytes:
 def _load_or_create_key(folder: Path) -> bytes:
     folder.mkdir(parents=True, exist_ok=True)
     if is_android():
-        return _android_key(folder / "datakey.keystore")
-    if os.name == "nt":
-        return _windows_key(folder / "datakey.dpapi")
-    return _file_key(folder / "datakey")
+        path, load = folder / "datakey.keystore", _android_key
+    elif os.name == "nt":
+        path, load = folder / "datakey.dpapi", _windows_key
+    else:
+        path, load = folder / "datakey", _file_key
+    if not path.exists() and _has_sealed_files(folder):
+        raise VaultKeyError(
+            f"the data key ({path.name}) is missing but encrypted files exist in {folder}: "
+            "refusing to start with an empty identity. Restore the key file or a backup."
+        )
+    try:
+        return load(path)
+    except VaultKeyError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise VaultKeyError(f"the data key can't be loaded: {exc}") from exc
+
+
+def _has_sealed_files(folder: Path) -> bool:
+    for candidate in (*folder.glob("*.json"), *folder.glob("identities/*.json")):
+        if is_sealed(candidate):
+            return True
+    return False
 
 
 def _write_private(path: Path, raw: bytes) -> None:
@@ -79,7 +107,7 @@ def _file_key(path: Path) -> bytes:
     if path.exists():
         raw = path.read_bytes()
         if len(raw) != 32:
-            raise VaultError(f"{path.name} is damaged")
+            raise VaultKeyError(f"{path.name} is damaged")
         return raw
     key = secrets.token_bytes(32)
     _write_private(path, key)
@@ -94,7 +122,9 @@ def _android_key(path: Path) -> bytes:
         try:
             return bytes(vault.unwrap(path.read_bytes()))
         except Exception as exc:  # noqa: BLE001 - Java exception
-            raise VaultError(f"Android Keystore could not unlock the data key: {exc}") from exc
+            raise VaultKeyError(
+                f"Android Keystore could not unlock the data key: {exc}"
+            ) from exc
     key = secrets.token_bytes(32)
     _write_private(path, bytes(vault.wrap(key)))
     return key
@@ -122,7 +152,7 @@ def _dpapi(data: bytes, *, protect: bool) -> bytes:  # pragma: no cover - Window
     blob_out = Blob()
     fn = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
     if not fn(ctypes.byref(blob_in), None, None, None, None, 0x1, ctypes.byref(blob_out)):
-        raise VaultError("Windows could not unlock the data key (DPAPI)")
+        raise VaultKeyError("Windows could not unlock the data key (DPAPI)")
     try:
         return ctypes.string_at(blob_out.pbData, blob_out.cbData)
     finally:

@@ -391,8 +391,8 @@ class PairingMixin:
 
     # ── Safety numbers (verified contacts) ──
 
-    def _own_fingerprint(self: MessagingBackend) -> bytes | None:
-        identity = self.identities.get("tcp") or next(iter(self.identities.values()), None)
+    def _own_fingerprint(self: MessagingBackend, transport: str = "tcp") -> bytes | None:
+        identity = self.identities.get(transport) or next(iter(self.identities.values()), None)
         if identity is None:
             return None
         return verify.fingerprint(identity.public_bytes(), verify.pq_hash(identity.pq.public))
@@ -413,7 +413,7 @@ class PairingMixin:
                 pq_hash = verify.pq_hash(bytes.fromhex(peer.pq_key))
             elif peer.pq_expect:
                 pq_hash = bytes.fromhex(peer.pq_expect)
-        own = self._own_fingerprint()
+        own = self._own_fingerprint(peer.transport if peer else "tcp")
         if own is None or not ed_public or not pq_hash:
             return None
         return verify.safety_digest(own, verify.fingerprint(ed_public, pq_hash))
@@ -441,7 +441,9 @@ class PairingMixin:
 
     def safety_info(self: MessagingBackend, hash_id: str) -> dict[str, Any]:
         digest = self._safety_digest(hash_id)
-        own = self.identities.get("tcp") or next(iter(self.identities.values()), None)
+        peer = self.trusted.get(hash_id)
+        transport = peer.transport if peer else "tcp"
+        own = self.identities.get(transport) or next(iter(self.identities.values()), None)
         if digest is None or own is None:
             return {"available": False, "verified": False}
         return {

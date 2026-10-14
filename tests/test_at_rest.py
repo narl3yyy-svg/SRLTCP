@@ -184,9 +184,55 @@ async def test_backup_and_restore_over_the_api(
         assert not fresh.backend._running  # stopped before the files were replaced
         await asyncio.sleep(0.7)
         assert restarts  # the desktop app restarts itself
+    # Something in the old process still writes after the restore was staged…
+    fresh.backend.trusted.save()
+    # …and the restarted app applies the restore first (run_web does this).
+    assert backup.apply_pending_restore(tmp_path / "fresh") is not None
+    assert not (tmp_path / "fresh" / backup.PENDING).exists()
     again = make("fresh")
     await again.start()
     try:
         assert again.backend.identities["tcp"].hash_id == old_hash
     finally:
         await again.stop()
+
+
+def test_lost_data_key_stops_instead_of_making_a_new_identity(tmp_path: Path) -> None:
+    from srltcp.core.identity import IdentityStore
+
+    store = IdentityStore(tmp_path)
+    first = store.load_or_create("me", "tcp").hash_id
+    (tmp_path / "datakey").unlink()  # key gone, sealed files still there
+    vault.forget_keys()
+    with pytest.raises(vault.VaultKeyError):
+        IdentityStore(tmp_path).load_or_create("me", "tcp")
+    assert vault.is_sealed(tmp_path / "identities" / "identity_tcp.json")  # untouched
+    vault.forget_keys()
+    assert first
+
+
+def test_damaged_identity_is_never_replaced(tmp_path: Path) -> None:
+    from srltcp.core.identity import IdentityStore
+
+    store = IdentityStore(tmp_path)
+    store.load_or_create("me", "tcp")
+    path = tmp_path / "identities" / "identity_tcp.json"
+    raw = bytearray(path.read_bytes())
+    raw[-1] ^= 1
+    path.write_bytes(bytes(raw))
+    with pytest.raises(vault.VaultError):
+        IdentityStore(tmp_path).load_or_create("me", "tcp")
+    assert path.read_bytes() == bytes(raw)
+
+
+def test_crafted_backup_header_cannot_demand_huge_scrypt(tmp_path: Path) -> None:
+    save_json(tmp_path / "identities" / "identity_tcp.json", {"name": "x"})
+    blob = bytearray(backup.create_backup(tmp_path, "long enough"))
+    at = len(backup.MAGIC) + 16
+    blob[at:at + 3] = bytes((20, 16, 1))  # 2 GiB of scrypt memory
+    with pytest.raises(backup.BackupError, match="unsupported"):
+        backup.open_backup(bytes(blob), "long enough")
+    assert backup.valid_backup_name("srltcp-backup-2026-10-15-0930.srltcp")
+    for bad in ("srltcp-backup-x\\..\\trusted.json", "../srltcp-backup-2026-10-15-0930.srltcp",
+                "srltcp-backup-.srltcp"):
+        assert not backup.valid_backup_name(bad)

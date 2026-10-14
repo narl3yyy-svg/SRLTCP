@@ -89,3 +89,34 @@ async def test_expired_messages_are_gone_after_a_restart(tmp_path: Path) -> None
         assert not any(m["text"] == "brief" for m in again.get_messages())
     finally:
         await again.stop()
+
+
+async def test_received_disappearing_file_is_deleted_after_a_restart(tmp_path: Path) -> None:
+    a = make_node(tmp_path, "alice", disappear_seconds=3600)
+    b = make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    try:
+        trust(a, b)
+        trust(b, a)
+        src = tmp_path / "photo.jpg"
+        src.write_bytes(os.urandom(50_000))
+        tid = (await a.send_file(b.identities["tcp"].hash_id, src))["id"]
+        assert await wait_for(
+            lambda: b._transfers.get(tid) and b._transfers[tid].state == "complete"
+        )
+        received = b._incoming_paths[tid]
+        _run_out(b, {tid})
+        b.save_message_history()
+        b.save_transfer_journal()
+    finally:
+        await a.stop()
+        await b.stop()
+    assert received.exists()
+    again = make_node(tmp_path, "bob")
+    await again.start()  # the timer ran out while the app was closed
+    try:
+        assert not received.exists()
+        assert tid not in again._transfers
+    finally:
+        await again.stop()

@@ -280,7 +280,7 @@ class MainActivity : AppCompatActivity() {
                         null
                     )
                     statusView?.visibility = android.view.View.GONE
-                    view.visibility = android.view.View.VISIBLE
+                    if (appLock?.locked != true) view.visibility = android.view.View.VISIBLE
                     maybeStartForegroundService()
                 }
 
@@ -330,7 +330,7 @@ class MainActivity : AppCompatActivity() {
             if (!url.isNullOrBlank() && url != "about:blank") {
                 uiRestored = true
                 pageLoaded = true
-                webView?.visibility = android.view.View.VISIBLE
+                if (appLock?.locked != true) webView?.visibility = android.view.View.VISIBLE
                 statusView?.visibility = android.view.View.GONE
             }
         }
@@ -546,6 +546,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun hasPermission(permission: String): Boolean =
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+    /** App lock: hide the chats completely (no touch, keyboard or screen
+     *  reader input reaches them) or show them again. */
+    fun setContentHidden(hidden: Boolean) {
+        val wv = webView ?: return
+        if (hidden) {
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.hideSoftInputFromWindow(wv.windowToken, 0)
+            wv.clearFocus()
+            wv.visibility = android.view.View.INVISIBLE
+            wv.importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        } else {
+            wv.importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+            if (pageLoaded) wv.visibility = android.view.View.VISIBLE
+        }
+    }
 
     /** Call a global JS callback in the UI with an already-encoded JS argument. */
     fun deliverToWeb(function: String, jsArg: String) {

@@ -87,8 +87,9 @@ object SRLTCPNotifier {
         )
         // Private notifications: the call channel shows on the lock screen in
         // full, so the caller's name is left out of the notification itself.
-        val shown = if (PrivacyPrefs.privateNotifications(context)) "SRLTCP" else caller
-        val notification = NotificationCompat.Builder(context, CHANNEL_CALLS)
+        val private = PrivacyPrefs.privateNotifications(context)
+        val shown = if (private) "SRLTCP" else caller
+        val builder = NotificationCompat.Builder(context, CHANNEL_CALLS)
             .setSmallIcon(R.drawable.ic_launcher_legacy)
             .setContentTitle(shown.ifBlank { "SRLTCP" })
             .setContentText(if (video) "Incoming video call" else "Incoming voice call")
@@ -98,14 +99,16 @@ object SRLTCPNotifier {
             .setOngoing(true)
             .setAutoCancel(true)
             .setContentIntent(open)
-            .setFullScreenIntent(open, true)  // shows the call over the lock screen
             .setTimeoutAfter(RING_MS)
             // Android 7 and older have no channels: sound set here.
             .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), AudioManager.STREAM_RING)
             .setVibrate(RING_VIBRATION)
             .addAction(0, "Decline", decline)
             .addAction(0, "Answer", open)
-            .build()
+        // Shows the call screen (with the caller's name) over the lock screen;
+        // with private notifications it rings as a notification only.
+        if (!private) builder.setFullScreenIntent(open, true)
+        val notification = builder.build()
         notification.flags = notification.flags or Notification.FLAG_INSISTENT  // keep ringing
         try {
             NotificationManagerCompat.from(context).notify(NOTIFICATION_CALL, notification)

@@ -269,12 +269,21 @@ class TransferMixin:
                 self._journal_path.unlink(missing_ok=True)
             return
         keep = [
-            {**t.to_dict(), "path": str(t.path)}
+            {**t.to_dict(), "path": str(self._incoming_paths.get(t.id, t.path))}
             for t in self._transfers.values()
-            if t.state not in TERMINAL or t.metadata.get("reject_unsent")
+            if t.state not in TERMINAL or t.metadata.get("reject_unsent") or self._awaits_expiry(t)
         ]
         if keep or self._journal_path.exists():
             save_json(self._journal_path, {"version": 1, "transfers": keep[-MAX_JOURNAL:]})
+
+    def _awaits_expiry(self: MessagingBackend, transfer: FileTransfer) -> bool:
+        """A received disappearing file: kept in the journal until its timer
+        deletes it, so that also happens after a restart."""
+        return bool(
+            transfer.metadata.get("ttl")
+            and transfer.state == TransferState.COMPLETE
+            and not self._is_outgoing(transfer)
+        )
 
     def restore_transfers(self: MessagingBackend) -> None:
         """Load the transfers that were unfinished when the app stopped: they
@@ -316,6 +325,9 @@ class TransferMixin:
             state=state, offset=max(0, min(offset, size)), created=created, metadata=meta,
         )
         if state in TERMINAL:
+            if self._awaits_expiry(transfer):
+                self._incoming_paths[tid] = path  # deleted when its timer runs out
+                return transfer
             return transfer if meta.get("reject_unsent") else None
         transfer.state = TransferState.PAUSED
         if outgoing:

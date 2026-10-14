@@ -15,16 +15,23 @@ from srltcp.utils.logging import get_logger
 log = get_logger(__name__)
 
 
-def load_json(path: Path, default: Any = None) -> Any:
+def load_json(path: Path, default: Any = None, *, critical: bool = False) -> Any:
     """The file's content, or ``default`` if it is missing or unreadable.
 
-    A file that can't be decrypted is moved aside (never overwritten), so
-    nothing is lost if the key comes back, e.g. after a restore."""
+    The data key not loading (:class:`vault.VaultKeyError`) always raises:
+    the app must stop rather than start empty. A single damaged file is
+    moved aside (kept, never overwritten) and the default returned, except
+    for ``critical`` files (identity, contacts), which raise instead: a new
+    identity must never silently replace the old one."""
     try:
         return json.loads(vault.read_text(path))
     except FileNotFoundError:
         return default
+    except vault.VaultKeyError:
+        raise
     except vault.VaultError as exc:
+        if critical:
+            raise
         aside = path.with_name(f"{path.name}.unreadable-{int(time.time())}")
         log.error("%s — moved to %s", exc, aside.name)
         with contextlib.suppress(OSError):
