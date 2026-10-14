@@ -62,14 +62,23 @@ def folder_zip_temp_dir() -> Path:
     return ensure_dir(data_dir() / "transfers" / ".zip-temp")
 
 
-def purge_dir(directory: Path) -> int:
-    """Delete the files directly inside ``directory``; returns how many."""
+def uploads_dir() -> Path:
+    """Copies of files picked in the browser, kept while they are being sent."""
+    return data_dir() / "uploads"
+
+
+def purge_dir(directory: Path, *, keep: set[Path] | frozenset[Path] = frozenset()) -> int:
+    """Delete the files directly inside ``directory`` (except ``keep``);
+    returns how many."""
     removed = 0
     try:
         entries = list(directory.iterdir())
     except OSError:
         return 0
+    kept = {p.resolve() for p in keep}
     for entry in entries:
+        if entry.resolve() in kept:
+            continue
         try:
             if entry.is_file() or entry.is_symlink():
                 entry.unlink()

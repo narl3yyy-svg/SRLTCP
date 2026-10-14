@@ -19,10 +19,10 @@ from srltcp.core.protocol.messages import is_valid_transfer_id
 from srltcp.core.relay_proto import RelayCode, RelayCodeError
 from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.core.trusted import TrustedPeer, is_valid_hash_id
+from srltcp.utils.files import uploads_dir
 from srltcp.utils.folders import list_directory
 from srltcp.utils.logging import get_logger
 from srltcp.utils.network import list_interfaces
-from srltcp.utils.platform import data_dir
 from srltcp.utils.serial_ports import baud_rates, list_serial_ports
 from srltcp.utils.system_stats import list_timezones, system_stats
 
@@ -47,16 +47,10 @@ def _validate_path(path_str: str, *, must_exist: bool = False) -> Path | None:
 
 def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     store = SettingsStore()
-    upload_dir = data_dir() / "uploads"
+    # Copies of files sent from the browser. They only matter while their
+    # transfer can run: the backend removes the rest at startup.
+    upload_dir = uploads_dir()
     upload_dir.mkdir(parents=True, exist_ok=True)
-    # Copies of files sent from the browser, and folder zips, only matter
-    # while their transfer can run, and transfers don't survive a restart:
-    # don't keep a second copy of everything ever sent.
-    from srltcp.utils.files import folder_zip_temp_dir, purge_dir
-
-    purged = purge_dir(upload_dir) + purge_dir(folder_zip_temp_dir())
-    if purged:
-        log.info("Removed %d leftover copies of sent files", purged)
 
     async def status(_request: web.Request) -> web.Response:
         return web.json_response(node.status())
@@ -818,6 +812,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         updated.relay_enabled = bool(updated.relay_enabled)
         updated.direct_internet = bool(updated.direct_internet)
         updated.tor_enabled = bool(updated.tor_enabled)
+        updated.shrink_photos = bool(updated.shrink_photos)
         tor_path = str(updated.tor_path or "").strip()
         if tor_path and not (Path(tor_path).is_file() and Path(tor_path).name.lower() in (
             "tor", "tor.exe"

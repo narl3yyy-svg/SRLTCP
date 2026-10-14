@@ -121,7 +121,7 @@
 <button class="icon-btn" id="btn-file" title="Send file">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
 </button>
-<input type="file" id="file-input" class="hidden" />
+<input type="file" id="file-input" class="hidden" multiple />
 </div>
 </header>
 <div class="messages" id="messages" role="log" aria-live="polite"></div>
@@ -170,6 +170,11 @@
 <option value="restart">Until restart</option>
 </select>
 </label>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-shrink-photos" />
+<span>Shrink photos before sending</span>
+</label>
+<small class="field-hint">Photos go out smaller (longest side 2560 px), so they send faster over Tor or mobile data. Shrinking also removes the location and camera details stored in the photo. Off = the original file, untouched.</small>
 </div>
 <div class="settings-panel" data-panel="network">
 <p class="hint">Most people never need to change anything here. SRLTCP picks the best path by itself: same Wi-Fi or VPN first, then a direct internet connection, then your relay, then Tor.</p>

@@ -29,6 +29,11 @@ Protocol (every message travels inside the session)::
   accept for a transfer it cancelled answers with FILE_REJECT again, so a
   cancel lost with a dropping link still gets through. A cancelled or
   corrupt download is deleted.
+- Restarts: unfinished transfers are kept in ``transfers.json`` and come
+  back PAUSED; they resume like after a dropped link once the contact is
+  connected. The receiver's partial file is what it has (it hashes that part
+  again before writing more); the sender re-reads the part already sent, and
+  gives up if the file was changed meanwhile.
 """
 
 from __future__ import annotations
@@ -59,7 +64,8 @@ from srltcp.core.protocol.messages import (
     pack_file_chunk,
     unpack_file_chunk,
 )
-from srltcp.utils.files import ensure_dir, safe_filename, unique_dest_path
+from srltcp.utils.files import ensure_dir, purge_dir, safe_filename, unique_dest_path
+from srltcp.utils.jsonstore import load_json, save_json
 from srltcp.utils.logging import get_logger
 from srltcp.utils.platform import data_dir
 
@@ -79,6 +85,8 @@ ACK_BYTES = 1024 * 1024  # confirm at least every MiB written…
 ACK_INTERVAL = 0.1  # …and never leave newer bytes unconfirmed longer than this
 REJECT_REPEAT = 2.0  # answer stray data for a cancelled transfer at most this often
 LINK_WAIT = 10.0  # a sender waits this long for a dropped session before pausing
+JOURNAL_DELAY = 1.0  # batch journal writes (state changes come in bursts)
+MAX_JOURNAL = 500
 MiB = 1024 * 1024
 
 # Already-compressed formats: compressing them only burns CPU (and battery).
@@ -140,15 +148,32 @@ class _Incoming:
     ack_task: asyncio.Task[None] | None = None
     last_data: float = field(default_factory=time.monotonic)
     closed: bool = False
+    prehash: int = 0  # bytes on disk from before a restart, not hashed yet
 
 
 def _valid_sha(value: str) -> bool:
     return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
+def _catch_up_hash(rx: _Incoming) -> None:
+    """Worker thread: hash the part of the file written before a restart."""
+    if not rx.prehash:
+        return
+    with open(rx.path, "rb") as fh:
+        left = rx.prehash
+        while left:
+            block = fh.read(min(MiB, left))
+            if not block:
+                raise OSError("the partial download was changed or deleted")
+            rx.hasher.update(block)
+            left -= len(block)
+    rx.prehash = 0
+
+
 def _write_blocks(rx: _Incoming, blocks: list[bytes]) -> None:
     """Worker thread: append blocks to the file and the running hash."""
     if rx.fh is None:
+        _catch_up_hash(rx)
         fh = open(rx.path, "r+b" if rx.path.exists() else "wb")  # noqa: SIM115
         fh.seek(rx.written)
         fh.truncate()
@@ -156,6 +181,12 @@ def _write_blocks(rx: _Incoming, blocks: list[bytes]) -> None:
     for block in blocks:
         rx.fh.write(block)
         rx.hasher.update(block)
+
+
+def _finish_file(rx: _Incoming) -> None:
+    """Worker thread: complete the hash and flush the file to disk."""
+    _catch_up_hash(rx)
+    _close_file(rx, sync=True)
 
 
 def _close_file(rx: _Incoming, *, sync: bool) -> None:
@@ -196,6 +227,12 @@ class TransferMixin:
         self._reject_sent_at: dict[str, float] = {}
         # Outgoing offers not yet accepted: transfer id -> (sent at, tries).
         self._offer_sent_at: dict[str, tuple[float, int]] = {}
+        # Unfinished transfers survive a restart (see restore_transfers).
+        self._journal_path = data_dir() / "transfers.json"
+        self._journal_handle: asyncio.TimerHandle | None = None
+        # Copies of files sent from the browser, and folder zips: only needed
+        # while their transfer can still run.
+        self._copy_dirs = (data_dir() / "uploads", data_dir() / "transfers" / ".zip-temp")
 
     async def stop_transfers(self: MessagingBackend) -> None:
         tasks = [t for t in self._transfer_tasks.values() if not t.done()]
@@ -208,6 +245,107 @@ class TransferMixin:
             await self._rx_close(rx, delete=False)
         self._transfer_cooldown_until.clear()
         self._transfer_progress_emit.clear()
+        self.save_transfer_journal()
+
+    # ── Surviving a restart ──
+
+    def _journal_changed(self: MessagingBackend) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.save_transfer_journal()
+            return
+        if self._journal_handle is None:
+            self._journal_handle = loop.call_later(JOURNAL_DELAY, self.save_transfer_journal)
+
+    def save_transfer_journal(self: MessagingBackend) -> None:
+        if self._journal_handle:
+            self._journal_handle.cancel()
+            self._journal_handle = None
+        if not self._history_enabled():
+            # "Keep messages: until restart" keeps no trace of files either.
+            with contextlib.suppress(OSError):
+                self._journal_path.unlink(missing_ok=True)
+            return
+        keep = [
+            {**t.to_dict(), "path": str(t.path)}
+            for t in self._transfers.values()
+            if t.state not in TERMINAL or t.metadata.get("reject_unsent")
+        ]
+        if keep or self._journal_path.exists():
+            save_json(self._journal_path, {"version": 1, "transfers": keep[-MAX_JOURNAL:]})
+
+    def restore_transfers(self: MessagingBackend) -> None:
+        """Load the transfers that were unfinished when the app stopped: they
+        wait (PAUSED) and resume when their contact is connected. Call once
+        the identities are loaded."""
+        raw = load_json(self._journal_path, {}) if self._history_enabled() else {}
+        items = raw.get("transfers") if isinstance(raw, dict) else None
+        own = self._own_hash_ids()
+        for item in items if isinstance(items, list) else []:
+            transfer = self._transfer_from_journal(item, own) if isinstance(item, dict) else None
+            if transfer and transfer.id not in self._transfers:
+                self._transfers[transfer.id] = transfer
+        if items:
+            log.info("%d unfinished transfer(s) will resume when their contacts connect",
+                     sum(t.state == TransferState.PAUSED for t in self._transfers.values()))
+        self._purge_copies()
+
+    def _transfer_from_journal(
+        self: MessagingBackend, item: dict[str, Any], own: set[str]
+    ) -> FileTransfer | None:
+        try:
+            tid = normalize_transfer_id(str(item["id"]))
+            sender, recipient = str(item["sender_hash"]), str(item["recipient_hash"])
+            path = Path(str(item["path"]))
+            size = int(item["size"])
+            state = TransferState(str(item["state"]))
+            meta = dict(item.get("metadata") or {})
+            offset = int(item.get("offset", 0))
+            created = float(item.get("created", time.time()))
+        except (KeyError, ValueError, TypeError):
+            return None
+        outgoing = sender in own
+        if (not outgoing and recipient not in own) or size < 0:
+            return None  # another identity (it was reset)
+        transfer = FileTransfer(
+            id=tid, sender_hash=sender, recipient_hash=recipient,
+            filename=safe_filename(str(item.get("filename") or path.name)),
+            path=path, size=size, sha256="", transport=str(item.get("transport") or "tcp"),
+            state=state, offset=max(0, min(offset, size)), created=created, metadata=meta,
+        )
+        if state in TERMINAL:
+            return transfer if meta.get("reject_unsent") else None
+        transfer.state = TransferState.PAUSED
+        if outgoing:
+            try:
+                st = path.stat()
+                same = st.st_size == size and meta.get("mtime_ns", st.st_mtime_ns) == st.st_mtime_ns
+            except OSError:
+                same = False
+            if not same:
+                log.info("%s changed or was removed since the restart — not resumed",
+                         transfer.filename)
+                transfer.state = TransferState.FAILED
+                meta.update(reason="changed", reject_unsent=True)
+            return transfer
+        try:
+            have = min(path.stat().st_size, size)
+        except OSError:
+            have = 0  # partial file gone: start over
+        self._incoming_paths[tid] = path
+        self._in[tid] = _Incoming(path=path, expected=have, written=have, prehash=have)
+        transfer.offset = have
+        return transfer
+
+    def _purge_copies(self: MessagingBackend) -> None:
+        keep = {
+            t.path for t in self._transfers.values()
+            if t.state not in TERMINAL and self._is_outgoing(t)
+        }
+        removed = sum(purge_dir(d, keep=keep) for d in self._copy_dirs)
+        if removed:
+            log.info("Removed %d leftover copies of sent files", removed)
 
     # ── Queries ──
 
@@ -310,6 +448,8 @@ class TransferMixin:
             self._speed_sample.pop(transfer.id, None)
         if terminal:
             self._transfer_progress_emit.pop(transfer.id, None)
+        if terminal or force:
+            self._journal_changed()
         payload = transfer.to_dict()
         if self._on_transfer_progress:
             await self._on_transfer_progress(payload)
@@ -362,7 +502,11 @@ class TransferMixin:
             transfer.filename = safe_filename(filename)
         if Path(transfer.filename).suffix.lower() in _NO_COMPRESS:
             transfer.metadata["no_compress"] = True
+        with contextlib.suppress(OSError):
+            # A restart resumes the transfer only if the file is unchanged.
+            transfer.metadata["mtime_ns"] = path.stat().st_mtime_ns
         self._transfers[transfer.id] = transfer
+        self._journal_changed()
         return transfer
 
     async def offer_file(
@@ -529,6 +673,7 @@ class TransferMixin:
         # Reserve the name so concurrent offers with the same filename don't collide.
         with contextlib.suppress(OSError):
             dest.touch(exist_ok=True)
+        self._journal_changed()
         await self._send_control(
             hash_id, MessageType.FILE_ACCEPT, {"transfer_id": transfer_id, "offset": 0}
         )
@@ -683,7 +828,7 @@ class TransferMixin:
         rx.closed = True  # set before any await: finalize runs once
         self._in.pop(transfer.id, None)
         try:
-            await asyncio.to_thread(_close_file, rx, sync=True)
+            await asyncio.to_thread(_finish_file, rx)
             ok = hmac.compare_digest(rx.hasher.hexdigest(), rx.sha256)
         except OSError as exc:
             log.warning("Finishing %s failed: %s", transfer.filename, exc)
@@ -850,6 +995,13 @@ class TransferMixin:
             if transfer.state not in TERMINAL:
                 await self.resume_transfer(tid)
             return
+        if transfer is None:
+            # We don't have it any more (e.g. "Keep messages: until restart"):
+            # the receiver must not wait for it forever.
+            await self._send_control(
+                hash_id, MessageType.FILE_REJECT, {"transfer_id": tid, "reason": "failed"}
+            )
+            return
         await self._handle_file_accept(hash_id, body)
 
     async def _await_link(
@@ -878,7 +1030,7 @@ class TransferMixin:
         framed: bool,
     ) -> tuple[bytes, int]:
         """Worker thread: read, hash, maybe compress, encrypt (and frame) one chunk."""
-        if out.hashed < offset:  # resumed past what we hashed (never in practice)
+        if out.hashed < offset:  # resumed after a restart: hash what they already have
             fh.seek(out.hashed)
             while out.hashed < offset:
                 block = fh.read(min(MiB, offset - out.hashed))
@@ -1019,8 +1171,10 @@ class TransferMixin:
                 transfer.state = TransferState.FAILED
                 await self._emit_transfer_progress(transfer, force=True)
         except asyncio.CancelledError:
+            # Only shutdown cancels a running transfer (a cancel or reject
+            # sets the final state first): it resumes after the restart.
             if transfer.state not in TERMINAL:
-                transfer.state = TransferState.CANCELLED
+                transfer.state = TransferState.PAUSED
             raise
         except Exception as exc:
             log.warning("Transfer failed for %s: %s", transfer.filename, exc)
@@ -1073,9 +1227,12 @@ class TransferMixin:
         for tid, transfer in list(self._transfers.items()):
             if self._peer_hash_for_transfer(transfer) != peer_hash:
                 continue
-            if transfer.metadata.pop("reject_unsent", None) and transfer.state in TERMINAL:
-                # Cancelled while the contact was away: tell them now.
-                await self._send_reject(peer_hash, tid)
+            if transfer.metadata.get("reject_unsent") and transfer.state in TERMINAL:
+                # Ended while the contact was away: tell them now.
+                reason = "failed" if transfer.state == TransferState.FAILED else "cancelled"
+                if await self._send_reject(peer_hash, tid, reason):
+                    transfer.metadata.pop("reject_unsent", None)
+                    self._journal_changed()
                 continue
             if transfer.state != TransferState.PAUSED:
                 continue

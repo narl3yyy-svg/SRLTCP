@@ -163,7 +163,6 @@ class MessagingBackend(
         if self._running:
             return
         self._running = True
-        self.load_message_history()
 
         if self.config.enable_tcp:
             self.identities["tcp"] = self.identity_store.load_or_create(self.config.name, "tcp")
@@ -182,6 +181,8 @@ class MessagingBackend(
             port = self.config.serial_port or None
             self.serial_transport = SerialTransport(port=port, baudrate=self.config.serial_baud)
             self._wire_transport(self.serial_transport)
+        self.restore_transfers()  # needs the identities: which side of each file we are
+        self.load_message_history()
 
         if self.tcp_transport:
             await self.tcp_transport.start()
@@ -982,15 +983,16 @@ class MessagingBackend(
         stored = self._message_store.load()
         stored_ids = {m.id for m in stored}
         for msg in stored:
-            # Transfers do not survive a restart; show unfinished ones as failed.
-            if msg.msg_type != "text" and msg.metadata.get("state") in (
-                "pending",
-                "offered",
-                "accepted",
-                "transferring",
-                "paused",
+            if msg.msg_type == "text" or msg.metadata.get("state") not in (
+                "pending", "offered", "accepted", "transferring", "paused",
             ):
-                msg.metadata["state"] = "failed"
+                continue
+            # Unfinished file: it resumes if restore_transfers() brought it back.
+            transfer = self._transfers.get(str(msg.metadata.get("transfer_id", "")))
+            msg.metadata["state"] = transfer.state.value if transfer else "failed"
+            msg.metadata["speed_mbps"] = 0
+            if transfer:
+                msg.metadata["offset"] = transfer.offset
         self._messages = stored + [m for m in self._messages if m.id not in stored_ids]
         self._prune_messages()
 

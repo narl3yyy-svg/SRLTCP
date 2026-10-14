@@ -112,6 +112,8 @@ class AppSettings:
     # server or port forwarding). Bundled on Android; needs Tor on a PC.
     tor_enabled: bool = True
     tor_path: str = ""
+    # Re-encode photos before sending (smaller, and without location data).
+    shrink_photos: bool = False
     handshake_protocol: str = "identity"
     call_stun_server: str = ""  # stun:/turn:/turns: URL (empty = direct only)
     call_turn_username: str = ""

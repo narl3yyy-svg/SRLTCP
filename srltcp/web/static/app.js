@@ -1837,12 +1837,45 @@
     }
   }
 
-  async function sendFileToPeer(file, hashId, peerName) {
+  // Photos only (not screenshots or graphics, which JPEG would blur; not GIFs,
+  // which would lose their animation).
+  const SHRINK_TYPES = /^image\/(jpeg|webp|heic|heif)$/i;
+  const PHOTO_MAX_SIDE = 2560;
+
+  /** A smaller JPEG copy of a photo, or the file itself when that doesn't
+   *  help. Re-encoding keeps none of the photo's metadata (GPS location,
+   *  camera, time), which is a privacy win of its own. */
+  async function shrinkPhoto(file) {
+    if (!SHRINK_TYPES.test(file.type || "") || file.size < 300 * 1024) return file;
+    try {
+      const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+      const scale = Math.min(1, PHOTO_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+      const w = Math.max(1, Math.round(bitmap.width * scale));
+      const h = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, w, h);
+      bitmap.close?.();
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+      if (!blob || blob.size >= file.size) return file;
+      const name = `${file.name.replace(/\.[^.]+$/, "") || "photo"}.jpg`;
+      return new File([blob], name, { type: "image/jpeg", lastModified: Date.now() });
+    } catch {
+      return file; // a format this device can't decode: send the original
+    }
+  }
+
+  /** Upload and send one file. Resolves to "sending", "queued" (the
+   *  contact is away; it goes out when they're back) or false. ``quiet``
+   *  leaves the progress toasts to the caller (several files at once). */
+  async function sendFileToPeer(file, hashId, peerName, { quiet = false } = {}) {
     if (!hashId || !file) return false;
     // Not connected right now is fine: the file waits and goes out when the
     // contact is reachable again, like a message.
     if (!isPeerLinked(hashId)) await connectPeer(hashId, false);
-    toast(`Uploading ${file.name}…`);
+    if (state.settings?.shrink_photos) file = await shrinkPhoto(file);
+    if (!quiet) toast(`Uploading ${file.name}…`);
     const form = new FormData();
     form.append("file", file);
     const { ok: upOk, status, data: uploaded, error } = await safeFetch(
@@ -1870,22 +1903,25 @@
       toast(sent?.error || "File send failed", "error");
       return false;
     }
-    if (sent?.state === "paused") {
+    const queued = sent?.state === "paused";
+    if (quiet) {
+      // the caller sums up
+    } else if (queued) {
       toast(`${peerName || "Contact"} isn't reachable right now — ${file.name} will be sent when they're back`);
     } else {
       toast(`Sending ${file.name}…`);
     }
     if (state.selectedPeer === hashId) loadMessages();
-    return true;
+    return queued ? "queued" : "sending";
   }
 
-  async function sendFile(file) {
-    if (!state.selectedPeer || !file) return;
+  async function sendFiles(files) {
+    if (!state.selectedPeer || !files?.length) return;
     if (state.selectedGroup) {
       toast("Files can't be sent to groups yet");
       return;
     }
-    await sendFileToPeer(file, state.selectedPeer, state.selectedName);
+    await sendDroppedFiles(files, state.selectedPeer, state.selectedName);
   }
 
   async function sendFolderToPeer(folderPath, hashId, peerName) {
@@ -1924,11 +1960,22 @@
   async function sendDroppedFiles(files, hashId, peerName) {
     const list = [...files].filter((f) => f && f.size >= 0);
     if (!list.length) return;
-    let sent = 0;
-    for (const file of list) {
-      if (await sendFileToPeer(file, hashId, peerName)) sent += 1;
+    if (list.length === 1) {
+      await sendFileToPeer(list[0], hashId, peerName);
+      return;
     }
-    if (sent > 1) toast(`Sent ${sent} files`);
+    toast(`Uploading ${list.length} files…`);
+    let sending = 0;
+    let queued = 0;
+    for (const file of list) {
+      const result = await sendFileToPeer(file, hashId, peerName, { quiet: true });
+      if (result === "sending") sending += 1;
+      else if (result === "queued") queued += 1;
+    }
+    if (sending) toast(`Sending ${sending} file${sending === 1 ? "" : "s"}…`);
+    if (queued) {
+      toast(`${peerName || "Contact"} isn't reachable right now — ${queued} file${queued === 1 ? "" : "s"} will be sent when they're back`);
+    }
   }
 
   function setupDragDrop() {
@@ -2387,6 +2434,7 @@
     setInputValue("set-relay-code", settings.relay_code || "");
     setCheckbox("set-direct-internet", settings.direct_internet !== false);
     setCheckbox("set-tor-enabled", settings.tor_enabled !== false);
+    setCheckbox("set-shrink-photos", !!settings.shrink_photos);
     setInputValue("set-tor-path", settings.tor_path || "");
     setCheckbox("set-wan-expose", !!settings.wan_expose_port);
     setCheckbox("set-enable-serial", !!settings.enable_serial);
@@ -4059,9 +4107,9 @@
   $("#btn-file")?.addEventListener("click", () => $("#file-input")?.click());
 
   $("#file-input")?.addEventListener("change", (e) => {
-    const file = e.target.files[0];
-    if (file) sendFile(file);
+    const files = [...(e.target.files || [])];
     e.target.value = "";
+    sendFiles(files);
   });
 
   document.addEventListener("keydown", (e) => {
@@ -4099,6 +4147,7 @@
       relay_code: ($("#set-relay-code")?.value || "").trim(),
       direct_internet: $("#set-direct-internet")?.checked ?? true,
       tor_enabled: $("#set-tor-enabled")?.checked ?? true,
+      shrink_photos: $("#set-shrink-photos")?.checked || false,
       tor_path: ($("#set-tor-path")?.value || "").trim(),
       wan_expose_port: $("#set-wan-expose")?.checked || false,
       handshake_protocol: "identity",
