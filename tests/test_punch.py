@@ -303,3 +303,23 @@ async def test_a_file_over_tor_looks_for_a_direct_path_at_once(
     finally:
         await a.stop()
         await b.stop()
+
+
+def test_speed_advice_names_the_missing_piece() -> None:
+    """Check connection explains why a contact on another network isn't direct."""
+    peer = "a" * 32
+    node = _Node(me="f" * 32, trusted={peer}, public=("198.51.100.7", 7828))
+    node.config = SimpleNamespace(direct_internet=True)  # type: ignore[attr-defined]
+    node.tor_circuits = lambda h: 9  # type: ignore[method-assign]
+    sp = node._speed_advice(peer, "tor")  # type: ignore[arg-type]
+    assert not sp["my_ipv6"] and "no IPv6" in sp["reason"] and "APN" in sp["tips"][0]
+    assert any("relay" in t for t in sp["tips"]) and sp["tor_circuits"] == 9
+    node.public = ("2a01:4f8::b", 7828)
+    sp = node._speed_advice(peer, "tor")  # type: ignore[arg-type]
+    assert sp["my_ipv6"] and not sp["their_ipv6"] and "contact's network" in sp["reason"]
+    node._peer_public[peer] = [("2a01:4f8::a", 7828)]
+    node._punch_failures[peer] = 2
+    assert "firewall" in node._speed_advice(peer, "tor")["reason"]  # type: ignore[arg-type]
+    assert node._speed_advice(peer, "direct")["reason"].startswith("Direct")  # type: ignore[arg-type]
+    node.config.direct_internet = False  # type: ignore[attr-defined]
+    assert "off" in node._speed_advice(peer, "tor")["reason"]  # type: ignore[arg-type]

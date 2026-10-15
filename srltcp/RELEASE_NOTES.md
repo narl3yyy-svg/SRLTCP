@@ -1,5 +1,24 @@
 # SRLTCP Release Notes
 
+## v0.10.10 (2026-10-15)
+
+### Faster Tor when only one side knows the other's Tor address
+- Files over Tor are split across several Tor circuits, opened by the
+  sender, which needs the receiver's Tor address. When a contact had
+  reached you over Tor before sharing theirs, the file crawled over a single
+  circuit (about 0.1 MB/s). Now the sender asks, and the **receiver opens the
+  circuits** instead; the sender uses circuits opened by either side.
+  Tested: 8 circuits, about 2 MB/s on a private Tor network instead of one.
+
+### Why isn't it direct? (Edit contact → Check connection)
+- A new **Speed** line explains why a contact on another network is on Tor
+  or the relay instead of a direct (full-speed) connection: whether each
+  side has IPv6 (needed to connect directly between two mobile networks),
+  whether direct tries were blocked, and how many Tor circuits are in use,
+  with what to change: e.g. the phone's APN protocol set to IPv4/IPv6 (some
+  carriers and MVNOs default to IPv4 only), your own relay, or a VPN such as
+  WireGuard or Tailscale on both phones.
+
 ## v0.10.9 (2026-10-15)
 
 ### New logo

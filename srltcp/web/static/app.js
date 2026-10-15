@@ -4849,8 +4849,19 @@
       : `${data.tor.state}${data.tor.detail ? ` — ${data.tor.detail}` : ""}`;
     out.innerHTML = `<p>${escapeHtml(data.summary || "")}</p>` +
       (rows ? `<ul>${rows}</ul>` : "") +
-      `<p class="muted">Now: ${escapeHtml(data.path || "not connected")} · Relay: ${escapeHtml(relay)} · Tor: ${escapeHtml(tor)} · Your addresses: ${escapeHtml((data.my_addresses || []).join(", ") || "none")}</p>`;
+      `<p class="muted">Now: ${escapeHtml(data.path || "not connected")} · Relay: ${escapeHtml(relay)} · Tor: ${escapeHtml(tor)} · Your addresses: ${escapeHtml((data.my_addresses || []).join(", ") || "none")}</p>` +
+      speedHtml(data.speed);
   });
+  // Why a contact on another network isn't on the fast (direct) path.
+  function speedHtml(sp) {
+    if (!sp) return "";
+    const yn = (v) => (v ? "yes" : "no");
+    const tips = (sp.tips || []).map((t) => `<li>${escapeHtml(t)}</li>`).join("");
+    return `<p><strong>Speed:</strong> ${escapeHtml(sp.reason || "")}</p>` +
+      `<p class="muted">IPv6 here: ${yn(sp.my_ipv6)} · IPv6 on their side: ${yn(sp.their_ipv6)}` +
+      (sp.tor_circuits ? ` · Tor circuits: ${sp.tor_circuits}` : "") + `</p>` +
+      (tips ? `<ul>${tips}</ul>` : "");
+  }
   document.querySelectorAll(".share-tab").forEach((b) => {
     b.addEventListener("click", () => setShareTab(b.dataset.shareTab));
   });

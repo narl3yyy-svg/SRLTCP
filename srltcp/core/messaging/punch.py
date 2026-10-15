@@ -369,6 +369,45 @@ class PunchMixin:
 
     # ── "Check connection" (Edit contact) ──
 
+    def _speed_advice(self: MessagingBackend, hash_id: str, path: str) -> dict[str, Any]:
+        """Why a contact on another network is on Tor/the relay rather than
+        direct (the fast path), in plain words. Across mobile networks the
+        phones can only connect directly over IPv6: carrier NAT on IPv4 lets
+        nothing in."""
+        mine6 = any(":" in h for h, _p in self.public_candidates())
+        theirs6 = any(":" in h for h, _p in self._peer_public.get(hash_id, []))
+        failed = self._punch_failures.get(hash_id, 0)
+        tips = []
+        if path == "direct":
+            reason = "Direct connection: full speed."
+        elif not self.direct_internet_enabled():
+            reason = ("Direct internet connections are off on this device "
+                      "(Settings → Network → Try direct internet connections).")
+        elif not mine6:
+            reason = ("This device's network has no IPv6, so it can't connect directly to a "
+                      "phone on another network.")
+            tips.append("On mobile data: Settings → Network → SIM → Access Point Names → your "
+                        "APN → APN protocol: IPv4/IPv6 (some carriers and MVNOs default to IPv4 "
+                        "only).")
+        elif not theirs6:
+            reason = ("Your contact's network has no IPv6 (or they turned direct connections "
+                      "off), so the phones can't connect directly.")
+            tips.append("On their phone: APN protocol IPv4/IPv6 (Settings → Network → SIM → "
+                        "Access Point Names).")
+        elif failed:
+            reason = ("Both devices have IPv6, but a carrier's firewall blocked the direct "
+                      f"connection ({failed} tr{'y' if failed == 1 else 'ies'}).")
+        else:
+            reason = "Both devices have IPv6: a direct connection is being tried."
+        if path in ("tor", "relay"):
+            tips.append("Works on any network at full speed: run your own relay "
+                        "(Settings → Network → Internet relay) or put both phones on the same "
+                        "VPN (WireGuard, or Tailscale which works through carrier NAT).")
+        return {
+            "my_ipv6": mine6, "their_ipv6": theirs6, "direct_tries_failed": failed,
+            "tor_circuits": self.tor_circuits(hash_id), "reason": reason, "tips": tips,
+        }
+
     async def diagnose_contact(
         self: MessagingBackend, hash_id: str, *, probe_tor: bool = True
     ) -> dict[str, Any]:
@@ -439,6 +478,7 @@ class PunchMixin:
         return {
             "hash_id": hash_id,
             "path": path,
+            "speed": self._speed_advice(hash_id, path),
             "addresses": results,
             "relay": {"configured": relay_known, "connected": relay_ok},
             "my_addresses": self.local_candidates(),

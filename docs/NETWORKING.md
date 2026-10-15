@@ -96,6 +96,9 @@ forwarding.
   get. Messages and calls stay on the main circuit and don't queue behind the
   file. Calls work but can be choppier than on a direct path.
   The file bubble shows how many circuits carry it ("Tor ×9" = main + 8).
+  The sender opens the circuits; if it doesn't know the receiver's onion
+  address yet (the receiver reached it over Tor first), it asks and the
+  receiver opens them, and data flows over circuits opened by either side.
   A circuit that gets stuck holds up the whole file, so when nothing is
   confirmed for 6 seconds the chunks it holds go out on the other circuits
   and a fresh one replaces it. A contact on an older version that accepts

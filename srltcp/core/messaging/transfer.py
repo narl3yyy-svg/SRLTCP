@@ -594,6 +594,8 @@ class TransferMixin:
             offer["ttl"] = int(transfer.metadata["ttl"])
         if transfer.metadata.get("sync"):
             offer["sync"] = transfer.metadata["sync"]
+        if self.lanes_wanted(link.hash_id):
+            offer["lr"] = 1  # please open the extra Tor circuits (we can't)
         packet = self._seal(link, MessageType.FILE_OFFER, encode_payload(offer))
         await self._send_raw(link.transport_peer_id, link.transport, packet)
 
@@ -734,6 +736,8 @@ class TransferMixin:
         )
         if self._link_on_tor(link):
             self.request_direct_upgrade(hash_id, punch=True)  # a file over Tor: try direct now
+            if data.get("lr"):
+                self.request_lanes(hash_id)
         if sync_meta is not None:
             return  # no chat bubble for sync files
         if self._on_file_offer:
@@ -932,6 +936,9 @@ class TransferMixin:
         for tid, other in list(self._in.items()):
             if other is rx:
                 self._in.pop(tid, None)
+                done = self._transfers.get(tid)
+                if done:
+                    self._lanes_maybe_idle(done.sender_hash)  # lanes we opened for it
 
     async def _handle_file_complete(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)

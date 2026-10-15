@@ -178,6 +178,30 @@ async def main() -> int:
               f"receiver {shown['b']}")
         ok = await wait_for(lambda: a._transfers[tid].state == "complete", 20)
         check("sender sees the file verified by the receiver", ok)
+        # The sender doesn't know the receiver's onion address (the receiver
+        # reached it over Tor first): the receiver opens the lanes instead.
+        a._close_lanes(bh)
+        b._close_lanes(ah)
+        a.trusted.update(bh, onion="")
+        a._lane_tried.clear()
+        await asyncio.sleep(1)
+        src2 = base / "video.mp4"
+        src2.write_bytes(os.urandom(8_000_000))
+        start = time.monotonic()
+        sent = await a.send_file(bh, src2)
+        tid2 = sent["id"] if sent else ""
+        theirs = 0
+
+        def done2() -> bool:
+            nonlocal theirs
+            theirs = max(theirs, len(b._tor_lanes.get(ah, [])))
+            return tid2 in b._transfers and b._transfers[tid2].state == "complete"
+
+        ok = await wait_for(done2, 180)
+        took = time.monotonic() - start
+        check("sender without the receiver's onion: the receiver opens the lanes",
+              ok and theirs >= 2 and b._incoming_paths[tid2].read_bytes() == src2.read_bytes(),
+              f"{theirs} lanes from the receiver, {took:.1f}s, {8 / took:.2f} MB/s")
         await b.send_message(ah, "chat after a file over tor")
         ok = await wait_for(lambda: "chat after a file over tor" in texts(a), 30)
         check("chat still flows on the main circuit", ok)

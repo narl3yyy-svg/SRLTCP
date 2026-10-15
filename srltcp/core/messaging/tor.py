@@ -537,9 +537,7 @@ class TorMixin:
         link = self.get_link(hash_id)
         if not link or not self._link_on_tor(link):
             return 0
-        ours = len(self._tor_lanes.get(hash_id, []))
-        theirs = sum(1 for owner in self._lane_owner.values() if owner == hash_id) - ours
-        return 1 + max(ours, theirs)
+        return 1 + sum(1 for owner in self._lane_owner.values() if owner == hash_id)
 
     def _send_lanes(self: MessagingBackend, hash_id: str, link: PeerLink) -> list[str]:
         """Lanes ready to carry this contact's file chunks (opening more if
@@ -554,17 +552,46 @@ class TorMixin:
         transport = self.tcp_transport
         lanes = [p for p in self._tor_lanes.get(hash_id, []) if transport.has_peer(p)]
         self._tor_lanes[hash_id] = lanes
+        # Lanes the contact opened to us carry data just as well (they open
+        # them when we don't know their onion address, see request_lanes).
+        theirs = [p for p, h in self._lane_owner.items()
+                  if h == hash_id and p not in lanes and transport.has_peer(p)]
         dialing = self._lane_dialing.get(hash_id)
-        if not lanes and (dialing is None or dialing.done()):
+        if not lanes and not theirs and (dialing is None or dialing.done()):
             # A file is starting over Tor: look for a direct path right away
             # (LAN, VPN, IPv6), it is many times faster than any Tor circuit.
             self.request_direct_upgrade(hash_id, punch=True)
+        self._dial_lanes(hash_id, len(lanes) + len(theirs))
+        return lanes + theirs
+
+    def lanes_wanted(self: MessagingBackend, hash_id: str) -> bool:
+        """Ask the receiver to open the lanes (FILE_OFFER "lr"): we can't
+        without their onion address (e.g. they reached us over Tor before
+        telling us theirs)."""
+        link = self.get_link(hash_id)
+        return bool(link and self._link_on_tor(link) and not self.peer_onion(hash_id))
+
+    def request_lanes(self: MessagingBackend, hash_id: str) -> None:
+        """The sender asked us (the receiver) to open the lanes."""
+        link = self.get_link(hash_id)
+        if not link or not self._link_on_tor(link) or not self.tcp_transport:
+            return
+        idle = self._lane_idle.pop(hash_id, None)
+        if idle:
+            idle.cancel()
+        transport = self.tcp_transport
+        have = sum(1 for p, h in self._lane_owner.items() if h == hash_id and transport.has_peer(p))
+        self._dial_lanes(hash_id, have)
+
+    def _dial_lanes(self: MessagingBackend, hash_id: str, have: int) -> None:
+        dialing = self._lane_dialing.get(hash_id)
+        lanes = self._tor_lanes.get(hash_id, [])
         want = TOR_LANES
         cap = self._lane_cap.get(hash_id)
         if cap and cap[1] > time.monotonic():
             want = min(want, cap[0])
         if (
-            len(lanes) < want
+            max(len(lanes), have) < want
             and (dialing is None or dialing.done())
             and time.monotonic() - self._lane_tried.get(hash_id, 0.0) > LANE_RETRY
             and self.tor_ready()
@@ -572,9 +599,8 @@ class TorMixin:
         ):
             self._lane_tried[hash_id] = time.monotonic()
             self._lane_dialing[hash_id] = asyncio.create_task(
-                self._open_lanes(hash_id, want - len(lanes))
+                self._open_lanes(hash_id, want - max(len(lanes), have))
             )
-        return lanes
 
     async def _open_lanes(self: MessagingBackend, hash_id: str, count: int) -> None:
         async def one() -> None:
@@ -652,20 +678,24 @@ class TorMixin:
             lanes.remove(peer_id)
             if opened and time.monotonic() - opened < LANE_REFUSED:
                 self._lane_cap[hash_id] = (max(1, len(lanes)), time.monotonic() + LANE_CAP_FOR)
-            for tid, out in self._out.items():
-                transfer = self._transfers.get(tid)
-                if transfer and transfer.recipient_hash == hash_id:
-                    out.rewind = True
-                    out.wake.set()
+        # Ours or theirs: whatever we sent on it is lost.
+        for tid, out in self._out.items():
+            transfer = self._transfers.get(tid)
+            if transfer and transfer.recipient_hash == hash_id:
+                out.rewind = True
+                out.wake.set()
 
     def _lanes_maybe_idle(self: MessagingBackend, hash_id: str) -> None:
-        """No more outgoing files for this contact: close its lanes soon."""
+        """No more files to or from this contact: close our lanes soon."""
         if not self._tor_lanes.get(hash_id) or hash_id in self._lane_idle:
             return
         if any(
             self._transfers[tid].recipient_hash == hash_id
             for tid, task in self._transfer_tasks.items()
             if not task.done() and tid in self._transfers
+        ) or any(
+            not rx.closed and tid in self._transfers and self._transfers[tid].sender_hash == hash_id
+            for tid, rx in self._in.items()
         ):
             return
         loop = asyncio.get_running_loop()
