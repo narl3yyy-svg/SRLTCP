@@ -1351,6 +1351,34 @@
     }, 400);
   }
 
+  const RELAY_PREFIX = "srltcp-relay://";
+
+  /* A relay code from the QR the relay installer shows: fill it in and save. */
+  async function applyRelayCode(code) {
+    const input = $("#set-relay-code");
+    if (!input) return;
+    input.value = code.trim();
+    const enabled = $("#set-relay-enabled");
+    if (enabled) enabled.checked = true;
+    if (await saveSettings(settingsPayload("set"), false)) toast("Relay added");
+  }
+
+  $("#btn-scan-relay")?.addEventListener("click", () => {
+    if (!androidHas("scanQrCode") && !("BarcodeDetector" in window)) {
+      toast("QR scanning is not supported in this browser — paste the code instead", "error");
+      return;
+    }
+    scanQr($("#relay-camera"), RELAY_PREFIX, applyRelayCode);
+  });
+  $("#btn-copy-relay-cmd")?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText($("#relay-cmd")?.textContent || "");
+      toast("Command copied");
+    } catch (_) {
+      toast("Copy failed — select the command and copy it");
+    }
+  });
+
   function scanPairQr() {
     if (!androidHas("scanQrCode") && !("BarcodeDetector" in window)) {
       toast("QR scanning is not supported in this browser — paste the link instead", "error");
@@ -1400,7 +1428,9 @@
   // Called by the Android app (MainActivity) — see SRLTCPBridge.kt.
   window.onAndroidQrResult = (text) => {
     if (!text) return;
-    if (text.startsWith(VERIFY_PREFIX)) {
+    if (text.startsWith(RELAY_PREFIX)) {
+      applyRelayCode(text);
+    } else if (text.startsWith(VERIFY_PREFIX)) {
       submitVerifyCode(text);
     } else {
       importPairCode(text, { source: "qr" });
@@ -2577,6 +2607,7 @@
     setCheckbox("set-auto-announce", !!settings.auto_announce);
     setCheckbox("set-relay-enabled", settings.relay_enabled !== false);
     setInputValue("set-relay-code", settings.relay_code || "");
+    setCheckbox("set-relay-first", settings.relay_first_restricted === true);
     setCheckbox("set-direct-internet", settings.direct_internet !== false);
     setInputValue("set-stun-servers", settings.stun_servers || "");
     setCheckbox("set-tor-enabled", settings.tor_enabled !== false);
@@ -4559,6 +4590,7 @@
       auto_announce: $(`#${prefix}-auto-announce`)?.checked || false,
       relay_enabled: $("#set-relay-enabled")?.checked ?? true,
       relay_code: ($("#set-relay-code")?.value || "").trim(),
+      relay_first_restricted: $("#set-relay-first")?.checked || false,
       direct_internet: $("#set-direct-internet")?.checked ?? true,
       stun_servers: ($("#set-stun-servers")?.value || "").trim(),
       tor_enabled: $("#set-tor-enabled")?.checked ?? true,

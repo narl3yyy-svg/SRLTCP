@@ -843,6 +843,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         updated.tcp_port = max(1024, min(updated.tcp_port, 65535))
         updated.discovery_port = max(1024, min(updated.discovery_port, 65535))
         updated.relay_enabled = bool(updated.relay_enabled)
+        updated.relay_first_restricted = bool(updated.relay_first_restricted)
         updated.direct_internet = bool(updated.direct_internet)
         updated.stun_servers = str(updated.stun_servers or "").strip()[:600]
         try:

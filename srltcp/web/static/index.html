@@ -233,6 +233,25 @@
 <input type="text" id="set-relay-code" placeholder="srltcp-relay://… (from the srltcp relay command)" autocomplete="off" spellcheck="false" />
 <small>Run <code>srltcp relay</code> on a server you control and paste its code on <strong>one</strong> phone — contacts get it automatically, inside the encrypted connection. Leave empty if a contact already has one.</small>
 </label>
+<button type="button" class="btn btn-secondary btn-sm" id="btn-scan-relay">Scan relay code</button>
+<video id="relay-camera" class="hidden" playsinline muted></video>
+<details class="relay-guide">
+<summary>Set up your own relay (5 minutes)</summary>
+<ol>
+<li>Rent the smallest Linux server any cloud provider offers (Ubuntu or Debian, a public IPv4 address; about $4–6 a month) or use one you have.</li>
+<li>Log in to it and run:
+<pre class="relay-cmd" id="relay-cmd">curl -fsSLO https://raw.githubusercontent.com/narl3yyy-svg/SRLTCP/main/scripts/install-relay.sh &amp;&amp; sudo bash install-relay.sh</pre>
+<button type="button" class="btn btn-secondary btn-sm" id="btn-copy-relay-cmd">Copy command</button>
+It installs the relay as a service on port 443 (the standard web port), starts it after every reboot, and at the end shows the relay code and a QR code. Running it again updates the relay.</li>
+<li>Here, tap <strong>Scan relay code</strong> and scan that QR code (or paste the code above). One phone is enough: your contacts get it inside the encrypted connection.</li>
+</ol>
+<small>The relay only passes on sealed, padded packets between your phones: it can't read messages or files, see names or fake anything. It sees IP addresses, timing and amounts. Keep the code private (it contains the access key).</small>
+</details>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-relay-first" />
+<span>Relay first on restricted networks</span>
+</label>
+<small class="field-hint">Off by default. When this network can't carry a direct connection to a contact (a Wi-Fi that keeps devices apart, like plane or hotel Wi-Fi, or both of you behind the same public address, like Starlink), go straight to your relay instead of trying direct first, and stop direct tries that can't work there (saves time and battery). Back to normal on the next network. Needs your relay, and a network that allows ordinary internet traffic.</small>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-direct-internet" />
 <span>Try direct internet connections</span>

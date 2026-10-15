@@ -317,6 +317,11 @@ class ConnectMixin:
                     cand = (alt, endpoint[1])
                     if cand not in candidates:
                         candidates.append(cand)
+            if not host and self.relay_first(hash_id):
+                # (Opt-in) this network can't carry a direct path: don't wait.
+                log.info("Restricted network (%s) — straight to the relay for %s",
+                         self.restricted_reason(hash_id), hash_id[:8])
+                return await self.open_relay_link(hash_id)
             peer_id = ""
             target_host, target_port = endpoint
             # With a relay (or Tor) to fall back on, don't wait long for a dead
@@ -329,6 +334,7 @@ class ConnectMixin:
             # from the contact…), slightly staggered; the first to answer wins.
             peer_id, target_host, target_port = await self._dial_first(candidates, timeout)
             if not peer_id:
+                self.note_lan_unreachable(hash_id, candidates)
                 if relay_fallback:
                     log.info("No direct path to %s — using the relay", hash_id[:8])
                     return await self.open_relay_link(hash_id)

@@ -11,6 +11,23 @@ little as possible.
 
 ## Setting it up
 
+**One command** (Ubuntu/Debian; also in the app: *Settings → Network → Set up your
+own relay*):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/narl3yyy-svg/SRLTCP/main/scripts/install-relay.sh
+less install-relay.sh      # read it first
+sudo bash install-relay.sh # options: --port 443 (default)  --public-host relay.example.com
+```
+
+It installs the relay as a sandboxed service (its own user, only the right to use
+port 443), opens the port in `ufw` if that's active, starts it after every reboot and
+shows the relay code and a QR code. On **one** phone tap *Settings → Network → Scan
+relay code*. Run it again to update. Your cloud provider's own firewall (security
+group) must allow the port too.
+
+**By hand:**
+
 ```bash
 git clone https://github.com/narl3yyy-svg/SRLTCP.git && cd SRLTCP
 python3 -m venv .venv && .venv/bin/pip install -e .
@@ -59,6 +76,15 @@ it up).
   packets in as replies, and the connection must pass the normal signed handshake
   before it replaces the relay. Strict carrier NAT defeats it; the relay keeps working.
   Details: [NETWORKING.md](NETWORKING.md).
+- **Relay first on restricted networks** (*Settings → Network*, off by default). On a
+  Wi-Fi that keeps devices apart (planes, hotels, guest Wi-Fi) or when both phones are
+  behind the same public address (Starlink, a carrier), no direct path can work. With
+  this on, the app notices (the contact's address on this Wi-Fi didn't answer, or the
+  contact reports the same public address) and goes straight to the relay instead of
+  first waiting for a direct dial, moves a session that came in over Tor to the relay
+  (nothing waits for a direct path that won't come), and stops direct tries until the
+  network changes. It needs the network to allow ordinary internet traffic; the app
+  doesn't try to get around a network's sign-in page or rules.
 - **Which relay:** if both contacts have a relay, the one of the contact with the lower
   identity hash is used, so both sides agree. Only one of you needs one.
 

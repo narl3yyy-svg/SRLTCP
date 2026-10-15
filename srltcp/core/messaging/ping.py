@@ -109,6 +109,7 @@ class PingMixin:
                         if self._on_link_down:
                             await self._on_link_down(hash_id, name)
                         self._kick_connect(hash_id)
+                self.network_changed_for_paths()  # (a new Wi-Fi may not keep devices apart)
                 await self.relay_network_changed(ips)
                 await self.addresses_changed()
                 await self._refresh_udp()  # new network: new public UDP address

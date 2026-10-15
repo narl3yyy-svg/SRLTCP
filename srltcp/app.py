@@ -120,6 +120,7 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         strict_ports=settings.strict_ports,
         relay_enabled=settings.relay_enabled,
         relay_code=settings.relay_code,
+        relay_first_restricted=settings.relay_first_restricted,
         direct_internet=settings.direct_internet,
         stun_servers=settings.stun_servers,
         tor_enabled=settings.tor_enabled,

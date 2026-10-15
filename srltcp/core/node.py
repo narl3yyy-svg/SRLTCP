@@ -160,6 +160,7 @@ class SRLTCPNode:
         self.config.serial_baud = settings.serial_baud
         self.config.relay_enabled = settings.relay_enabled
         self.config.relay_code = settings.relay_code
+        self.config.relay_first_restricted = settings.relay_first_restricted
         direct_changed = self.config.direct_internet != settings.direct_internet
         self.config.direct_internet = settings.direct_internet
         tor_changed = (

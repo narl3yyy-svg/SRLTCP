@@ -165,6 +165,8 @@ class PunchMixin:
         self._udp_offers: dict[str, tuple[bytes, bytes, float]] = {}  # our secret, id, when
         self._prime_max: dict[str, int] = {}  # highest priming hop limit per contact
         self._punch_asked: dict[str, float] = {}
+        self._lan_unreachable: set[str] = set()  # their address on our Wi-Fi didn't answer
+        self._tor_to_relay_busy: set[str] = set()
 
     def _prime_hops(self: MessagingBackend, hash_id: str) -> tuple[int, ...]:
         return tuple(range(2, self._prime_max.get(hash_id, 4) + 1))
@@ -661,6 +663,47 @@ class PunchMixin:
             "symmetric_nat": symmetric, "direct_tries_failed": failed,
             "reason": reason, "tips": tips,
         }
+
+    # ── Restricted networks (planes, hotels): relay first, if the user wants ──
+
+    def note_lan_unreachable(
+        self: MessagingBackend, hash_id: str, candidates: list[tuple[str, int]]
+    ) -> None:
+        """A dial to the contact's address on our own Wi-Fi went unanswered:
+        the network keeps devices apart (or they left it). Forgotten when our
+        network changes."""
+        from srltcp.utils.network import same_network
+
+        if any(same_network(h) for h, _p in candidates):
+            self._lan_unreachable.add(hash_id)
+
+    def network_changed_for_paths(self: MessagingBackend) -> None:
+        self._lan_unreachable.clear()
+
+    def restricted_reason(self: MessagingBackend, hash_id: str) -> str:
+        """Why a direct connection to this contact can't work on this network
+        ("" = no sign of that). Only from what the app already knows."""
+        import socket
+
+        if hash_id in self._lan_unreachable:
+            return "the Wi-Fi keeps devices apart"
+        udp = self.udp
+        mapped = udp.mapped.get(socket.AF_INET) if udp else None
+        theirs = self._peer_udp.get(hash_id, []) + self._peer_public.get(hash_id, [])
+        if mapped and any(h == mapped[0] for h, _p in theirs):
+            return "you share one public address"
+        # (UDP blocked alone isn't enough: a VPN or the same Wi-Fi still works
+        # over TCP. Check connection reports it.)
+        return ""
+
+    def relay_first(self: MessagingBackend, hash_id: str) -> bool:
+        """*Relay first on restricted networks* is on, this network is
+        restricted for the contact, and the relay can reach them."""
+        return bool(
+            getattr(self.config, "relay_first_restricted", False)
+            and self.restricted_reason(hash_id)
+            and self.relay_link_reachable(hash_id)
+        )
 
     def _network_blockers(
         self: MessagingBackend, hash_id: str, results: list[dict[str, Any]]

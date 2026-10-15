@@ -14,6 +14,7 @@ Wants=network-online.target
 User=srltcp
 ExecStart=/var/lib/srltcp-relay/venv/bin/srltcp relay --port 7827 --public-host YOUR.SERVER.IP --data-dir /var/lib/srltcp-relay/keys
 Restart=always
+Environment=PYTHONUNBUFFERED=1
 RestartSec=3
 # Hardening: the relay needs only its key directory and the network.
 NoNewPrivileges=yes

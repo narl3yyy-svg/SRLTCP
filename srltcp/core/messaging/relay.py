@@ -711,6 +711,9 @@ class RelayMixin:
             )
             if (link.transport != "relay" and not on_tor) or not link.handshake_complete:
                 continue
+            if on_tor and self.relay_first(hash_id):
+                self.request_direct_upgrade(hash_id)  # (moves it to the relay)
+                continue
             # One side drives upgrades so both don't race each other.
             if self._me_hash() > hash_id or hash_id in self._upgrades:
                 continue
@@ -724,6 +727,8 @@ class RelayMixin:
             # the last confirmed byte on the new path (and gets much faster).
             if self._call_active():
                 continue
+            if link.transport == "relay" and self.relay_first(hash_id):
+                continue  # (opt-in) restricted network: direct can't work here
             self._upgrade_attempts[hash_id] = now
             asyncio.create_task(self._try_direct_upgrade(hash_id))
 
@@ -739,12 +744,23 @@ class RelayMixin:
             return
         if link.transport != "relay" and not self._link_on_tor(link):
             return
+        if (
+            self._link_on_tor(link) and self._me_hash() < hash_id and self.relay_first(hash_id)
+            and hash_id not in self._tor_to_relay_busy
+        ):
+            # (Opt-in) restricted network: what waits on the Tor doorbell goes
+            # through the relay instead of waiting for a direct path.
+            self._tor_to_relay_busy.add(hash_id)
+            asyncio.create_task(self._tor_to_relay(hash_id, link.transport_peer_id))
+            return
         if self._me_hash() > hash_id and punch:
             # The other side leads hole punching: ask it to start a round now.
             self.ask_for_punch(hash_id)
             return
         if self._me_hash() > hash_id or hash_id in self._upgrades or self._call_active():
             return
+        if link.transport == "relay" and self.relay_first(hash_id):
+            return  # (opt-in) restricted network: direct can't work here
         now = time.monotonic()
         if now - self._upgrade_attempts.get(hash_id, 0.0) < 5.0:
             return
@@ -752,6 +768,18 @@ class RelayMixin:
         if punch:
             self._punch_next.pop(hash_id, None)
         asyncio.create_task(self._try_direct_upgrade(hash_id))
+
+    async def _tor_to_relay(self: MessagingBackend, hash_id: str, tor_peer: str) -> None:
+        try:
+            log.info("Restricted network (%s) — moving %s from Tor to the relay",
+                     self.restricted_reason(hash_id), hash_id[:8])
+            moved = await self.open_relay_link(hash_id) and await self.wait_for_handshake(
+                hash_id, timeout=15.0
+            )
+            if moved and self.tcp_transport and not self.get_link_by_peer_id(tor_peer):
+                await self.tcp_transport.disconnect(tor_peer)  # (the doorbell isn't needed)
+        finally:
+            self._tor_to_relay_busy.discard(hash_id)
 
     def _call_active(self: MessagingBackend) -> bool:
         relay = getattr(self, "call_relay", None)
@@ -763,6 +791,8 @@ class RelayMixin:
         candidates = self._direct_candidates(hash_id)
         if candidates:
             peer_id, host, port = await self._dial_first(candidates, DIRECT_TIMEOUT)
+            if not peer_id:
+                self.note_lan_unreachable(hash_id, candidates)
             if peer_id:
                 kx = await self._send_upgrade_handshake(hash_id, peer_id)
                 if kx is None:

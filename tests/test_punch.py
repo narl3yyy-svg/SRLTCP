@@ -497,3 +497,41 @@ async def test_udp_connection_only_takes_the_contact_it_was_made_for(
     finally:
         await a.stop()
         await b.stop()
+
+
+def test_relay_first_only_when_turned_on_and_the_network_is_restricted() -> None:
+    """*Relay first on restricted networks* (off by default): a network that
+    can't carry a direct path to this contact sends it straight to the relay."""
+    import socket
+
+    peer = "a" * 32
+    node = _Node(me="f" * 32, trusted={peer})
+    node.config = SimpleNamespace(direct_internet=True, relay_first_restricted=False)  # type: ignore[attr-defined]
+    node.relay_link_reachable = lambda h: True  # type: ignore[attr-defined]
+    node.udp = None
+    assert node.restricted_reason(peer) == ""
+    # Their address on our own Wi-Fi didn't answer: the Wi-Fi keeps devices apart.
+    node.note_lan_unreachable(peer, [("8.8.8.8", 7825)])  # (not our network: no sign)
+    assert node.restricted_reason(peer) == ""
+    node.note_lan_unreachable(peer, [("127.0.0.1", 7825)])
+    assert "apart" in node.restricted_reason(peer)
+    assert not node.relay_first(peer)  # the option is off
+    node.config.relay_first_restricted = True  # type: ignore[attr-defined]
+    assert node.relay_first(peer)
+    node.relay_link_reachable = lambda h: False  # type: ignore[attr-defined]
+    assert not node.relay_first(peer)  # no relay: nothing changes
+    node.relay_link_reachable = lambda h: True  # type: ignore[attr-defined]
+    node.network_changed_for_paths()  # a new network
+    assert not node.relay_first(peer)
+    # Both behind one public address (plane Wi-Fi via Starlink, carrier NAT).
+    node.udp = SimpleNamespace(  # type: ignore[assignment]
+        mapped={socket.AF_INET: ("203.0.113.5", 40000)}, mapped_at=1.0,
+        stun_servers=(("stun", 3478),), ports={},
+    )
+    node._peer_udp[peer] = [("203.0.113.5", 41000)]
+    assert "public address" in node.restricted_reason(peer) and node.relay_first(peer)
+    # UDP blocked alone: a VPN or the same Wi-Fi may still work over TCP.
+    node._peer_udp[peer] = []
+    node.udp.mapped = {}  # type: ignore[attr-defined]
+    node.udp_candidates = lambda: []  # type: ignore[method-assign]
+    assert node.restricted_reason(peer) == ""

@@ -78,6 +78,7 @@ class NodeConfig:
     strict_ports: bool = True
     relay_enabled: bool = True
     relay_code: str = ""
+    relay_first_restricted: bool = False  # restricted network: relay at once (opt-in)
     direct_internet: bool = True  # hole punching; shares public IP with contacts
     stun_servers: str = ""  # for direct UDP ("host:port, ..."; empty = defaults)
     tor_enabled: bool = False  # reach contacts over Tor (onion service)

@@ -239,3 +239,49 @@ async def test_relay_limits(relay: RelayServer) -> None:
     data = await asyncio.wait_for(reader.read(100), 5)
     assert data == b"" or not data.startswith(b"SRL")
     writer.close()
+
+
+async def test_relay_first_on_a_restricted_network(tmp_path: Path, relay: RelayServer) -> None:
+    """*Relay first on restricted networks* (opt-in): once this Wi-Fi is known
+    to keep the phones apart, connecting goes straight to the relay (no wait
+    for a dead direct dial) and no direct tries are made; a new network
+    brings direct back."""
+    a, b = await paired_over_lan(tmp_path, relay)
+    try:
+        real_ports = {h(a): a.config.tcp_port, h(b): b.config.tcp_port}
+        low, high = (a, b) if h(a) < h(b) else (b, a)
+        for n in (a, b):
+            n.config.relay_first_restricted = True
+        await cut_direct_path(a, b)
+        await low.send_message(h(high), "plane wifi")
+        assert await wait_for(lambda: "plane wifi" in texts(high), timeout=15)
+        assert low.get_link(h(high)).transport == "relay"
+        assert h(high) in low._lan_unreachable  # the dial on "our Wi-Fi" went unanswered
+        # Reconnecting skips the direct dial entirely.
+        dials: list[object] = []
+        real_dial = low._dial_first
+
+        async def counting(*args, **kw):  # type: ignore[no-untyped-def]
+            dials.append(args)
+            return await real_dial(*args, **kw)
+
+        low._dial_first = counting  # type: ignore[method-assign]
+        await low.disconnect_peer(h(high))
+        await low.connect_to_peer(h(high))
+        assert await wait_for(lambda: low.get_link(h(high)) is not None
+                              and low.get_link(h(high)).handshake_complete, timeout=15)
+        assert low.get_link(h(high)).transport == "relay" and not dials
+        # The direct address would work, but this network is restricted: no tries.
+        low.trusted.update(h(high), tcp_host="127.0.0.1", tcp_port=real_ports[h(high)])
+        low._upgrade_attempts.clear()
+        await low.maintain_paths()
+        await asyncio.sleep(2.0)
+        assert low.get_link(h(high)).transport == "relay" and not dials
+        # Another network: back to normal, the direct path takes over.
+        low.network_changed_for_paths()
+        low._upgrade_attempts.clear()
+        await low.maintain_paths()
+        assert await wait_for(lambda: low.get_link(h(high)).transport == "tcp", timeout=15)
+    finally:
+        await a.stop()
+        await b.stop()
