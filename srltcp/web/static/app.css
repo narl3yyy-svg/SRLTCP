@@ -1636,15 +1636,17 @@ label.field > span {
 .call-info { position: relative; z-index: 2; text-align: center; margin-top: 3rem; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
 .call-peer-name { font-size: 1.6rem; font-weight: 600; }
 .call-status { color: #c6cbd8; margin-top: 0.35rem; }
-.call-actions { position: relative; z-index: 2; display: flex; gap: 1.5rem; }
+/* Buttons scale with the screen: five in a row fit a small phone (e.g. Pixel 5,
+   360-393 px wide) and stay at 64 px on bigger screens. */
+.call-actions { position: relative; z-index: 2; display: flex; justify-content: center; gap: min(1.5rem, 3vw); max-width: 100%; }
 .call-actions.hidden { display: none; }
-.call-btn { width: 64px; height: 64px; border-radius: 50%; border: none; font-size: 1.5rem; background: rgba(255,255,255,0.14); color: #fff; cursor: pointer; }
+.call-btn { width: min(64px, 15vw); height: min(64px, 15vw); min-width: 44px; min-height: 44px; flex: 0 0 auto; border-radius: 50%; border: none; font-size: 1.5rem; background: rgba(255,255,255,0.14); color: #fff; cursor: pointer; }
 .call-btn.active { background: #fff; color: #111; }
 .call-btn.accept { background: #3ecf8e; }
 .call-btn.decline { background: #f0546a; }
 .call-btn.hidden { display: none; }
 .call-btn { display: inline-flex; align-items: center; justify-content: center; }
-.call-btn svg { width: 28px; height: 28px; }
+.call-btn svg { width: 44%; height: 44%; }
 .call-btn .hangup-icon { transform: rotate(0deg); }
 .call-btn .icon-off { display: none; }
 .call-btn.off .icon-on { display: none; }

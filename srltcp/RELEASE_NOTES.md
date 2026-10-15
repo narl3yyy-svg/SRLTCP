@@ -1,5 +1,19 @@
 # SRLTCP Release Notes
 
+## v0.10.7 (2026-10-15)
+
+### Fixes
+- **Call buttons fit small phones.** With the camera-switch button there are
+  five buttons in a video call, and on phones like the Pixel 5 the outer ones
+  were cut off. They now size themselves to the screen (64 px on larger
+  screens, smaller on narrow ones) and always fit.
+- **App icon:** the logo on black now fills the icon shape. Android showed it
+  as a small black square inside a white circle because the app used a
+  plain (non-adaptive) icon. On Android 13+ the icon also follows the
+  phone's themed-icons setting.
+- **Notification icon:** the status bar now shows the logo outline instead of
+  a white square.
+
 ## v0.10.6 (2026-10-15)
 
 ### Calls
