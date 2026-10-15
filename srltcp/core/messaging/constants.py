@@ -16,6 +16,10 @@ TOR_CHUNK_SIZE = 64 * 1024  # small: chat and pings never queue behind a big chu
 # speed comes from many circuits at once.
 TOR_WINDOW = 8 * 1024 * 1024  # spread over the parallel Tor circuits
 TOR_LANES = 8  # extra Tor circuits that carry file data (chat stays on the main one)
+# One stuck circuit holds the chunk the receiver needs next and so the whole
+# window. Nothing confirmed this long: send that circuit's chunks on the
+# others and replace it (much sooner than the full-window resend below).
+TOR_REPAIR = 6.0
 RELAY_CHUNK_SIZE = 128 * 1024  # stays under the relay's 256 KiB frame limit
 RELAY_WINDOW = 2 * 1024 * 1024
 SERIAL_CHUNK_SIZE = 8 * 1024  # serial/RF links have smaller frames

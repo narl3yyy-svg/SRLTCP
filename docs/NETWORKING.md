@@ -95,6 +95,11 @@ forwarding.
   after the last file): typically 1-2 MB/s, depending on the Tor relays you
   get. Messages and calls stay on the main circuit and don't queue behind the
   file. Calls work but can be choppier than on a direct path.
+  The file bubble shows how many circuits carry it ("Tor ×9" = main + 8).
+  A circuit that gets stuck holds up the whole file, so when nothing is
+  confirmed for 6 seconds the chunks it holds go out on the other circuits
+  and a fresh one replaces it. A contact on an older version that accepts
+  fewer circuits is not asked for more.
 - **Leaving Tor for speed:** as soon as a file starts over Tor, both devices
   look for a direct path (same Wi-Fi, VPN, IPv6), then every 15 seconds
   while it's moving. When one works, the session moves over in the middle of

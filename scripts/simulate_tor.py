@@ -158,10 +158,13 @@ async def main() -> int:
         sent = await a.send_file(bh, src)
         tid = sent["id"] if sent else ""
         lanes_seen = 0
+        shown = {"a": 0, "b": 0}  # what each side's file bubble says (Tor ×N)
 
         def done() -> bool:
             nonlocal lanes_seen
             lanes_seen = max(lanes_seen, len(a._tor_lanes.get(bh, [])))
+            shown["a"] = max(shown["a"], a.tor_circuits(bh))
+            shown["b"] = max(shown["b"], b.tor_circuits(ah))
             return tid in b._transfers and b._transfers[tid].state == "complete"
 
         ok = await wait_for(done, 180)
@@ -170,6 +173,9 @@ async def main() -> int:
               == src.read_bytes(), f"{took:.1f}s, {8 / took:.2f} MB/s")
         check("file data spread over parallel Tor circuits (lanes)", lanes_seen >= 2,
               f"{lanes_seen} lanes")
+        check("both sides show how many Tor circuits carry the file",
+              shown["a"] == shown["b"] == lanes_seen + 1, f"sender {shown['a']}, "
+              f"receiver {shown['b']}")
         ok = await wait_for(lambda: a._transfers[tid].state == "complete", 20)
         check("sender sees the file verified by the receiver", ok)
         await b.send_message(ah, "chat after a file over tor")
@@ -207,4 +213,9 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
+    if os.environ.get("SRLTCP_SIM_LOG"):
+        import logging
+
+        logging.basicConfig(filename=os.environ["SRLTCP_SIM_LOG"], level=logging.INFO,
+                            format="%(asctime)s %(name)s %(levelname)s %(message)s")
     sys.exit(asyncio.run(main()))

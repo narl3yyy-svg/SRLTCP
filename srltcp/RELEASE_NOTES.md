@@ -1,5 +1,21 @@
 # SRLTCP Release Notes
 
+## v0.10.2 (2026-10-15)
+
+### Tor files no longer freeze for 40 seconds
+- **A stuck Tor circuit no longer stops the whole file.** Files over Tor are
+  split across several circuits; when one of them stalled, the file waited
+  about 40 seconds and then sent everything in flight again, which is why a
+  Tor transfer could crawl at ~0.2 MB/s. Now, after 6 seconds without
+  progress, only the stuck circuit's part is sent again on the other
+  circuits and that circuit is replaced.
+- **Mixed versions:** a phone on 0.10.0 accepts fewer Tor circuits than
+  0.10.1 opens; the refused ones made the sender start over again and again.
+  The sender now uses only as many as the other phone accepts (and this
+  version accepts up to 16). Update both phones for the best speed.
+- **See the circuits:** a file moving over Tor shows "Tor ×N" (how many
+  circuits carry it) next to its speed.
+
 ## v0.10.1 (2026-10-15)
 
 ### Faster files when you start on Tor

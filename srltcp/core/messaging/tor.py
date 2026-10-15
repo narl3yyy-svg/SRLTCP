@@ -61,6 +61,11 @@ TOR_DIAL_TIMEOUT = 60.0
 TOR_BOOTSTRAP_TIMEOUT = 180.0
 LANE_RETRY = 60.0  # wait this long before dialing lanes again after a failure
 LANE_IDLE = 60.0  # close a contact's lanes this long after its last transfer
+LANE_ACCEPT = 16  # lanes we take from one contact (theirs may use more than ours)
+# A lane closed this soon after we opened it was refused (an older app takes
+# fewer lanes): use only as many as are up, for a while, instead of redialing.
+LANE_REFUSED = 15.0
+LANE_CAP_FOR = 600.0
 LANE_TAG = b"srltcp-lane"
 _ONION_RE = re.compile(r"^[a-z2-7]{56}\.onion$")
 
@@ -208,6 +213,8 @@ class TorMixin:
         self._lane_dialing: dict[str, asyncio.Task[None]] = {}
         self._lane_tried: dict[str, float] = {}
         self._lane_idle: dict[str, asyncio.TimerHandle] = {}
+        self._lane_opened: dict[str, float] = {}  # our lane peer id -> when it opened
+        self._lane_cap: dict[str, tuple[int, float]] = {}  # contact -> (lanes it takes, until)
 
     # ── Settings / status ──
 
@@ -524,6 +531,16 @@ class TorMixin:
             and self.tcp_transport.is_tor(link.transport_peer_id)
         )
 
+    def tor_circuits(self: MessagingBackend, hash_id: str) -> int:
+        """Tor circuits a file to/from this contact is using right now (the
+        main one plus lanes, ours or theirs); 0 when not on Tor."""
+        link = self.get_link(hash_id)
+        if not link or not self._link_on_tor(link):
+            return 0
+        ours = len(self._tor_lanes.get(hash_id, []))
+        theirs = sum(1 for owner in self._lane_owner.values() if owner == hash_id) - ours
+        return 1 + max(ours, theirs)
+
     def _send_lanes(self: MessagingBackend, hash_id: str, link: PeerLink) -> list[str]:
         """Lanes ready to carry this contact's file chunks (opening more if
         needed). Empty off Tor, or until the first lane is up."""
@@ -542,8 +559,12 @@ class TorMixin:
             # A file is starting over Tor: look for a direct path right away
             # (LAN, VPN, IPv6), it is many times faster than any Tor circuit.
             self.request_direct_upgrade(hash_id, punch=True)
+        want = TOR_LANES
+        cap = self._lane_cap.get(hash_id)
+        if cap and cap[1] > time.monotonic():
+            want = min(want, cap[0])
         if (
-            len(lanes) < TOR_LANES
+            len(lanes) < want
             and (dialing is None or dialing.done())
             and time.monotonic() - self._lane_tried.get(hash_id, 0.0) > LANE_RETRY
             and self.tor_ready()
@@ -551,7 +572,7 @@ class TorMixin:
         ):
             self._lane_tried[hash_id] = time.monotonic()
             self._lane_dialing[hash_id] = asyncio.create_task(
-                self._open_lanes(hash_id, TOR_LANES - len(lanes))
+                self._open_lanes(hash_id, want - len(lanes))
             )
         return lanes
 
@@ -576,6 +597,7 @@ class TorMixin:
                 peer_id, build_header(MessageType.LANE_JOIN, flags=flags, body=body)
             )
             self._tor_lanes.setdefault(hash_id, []).append(peer_id)
+            self._lane_opened[peer_id] = time.monotonic()
 
         results = await asyncio.gather(*(one() for _ in range(count)), return_exceptions=True)
         failed = [r for r in results if isinstance(r, BaseException)]
@@ -607,7 +629,7 @@ class TorMixin:
             if tag != LANE_TAG:
                 return
             lanes = [p for p, h in self._lane_owner.items() if h == hash_id]
-            if len(lanes) >= TOR_LANES + 2:
+            if len(lanes) >= LANE_ACCEPT:
                 await transport.disconnect(peer.peer_id)
                 return
             self._lane_owner[peer.peer_id] = hash_id
@@ -621,12 +643,15 @@ class TorMixin:
     def _lane_closed(self: MessagingBackend, peer_id: str) -> None:
         """A lane went away: data in flight on it is lost, so the sender goes
         back to the last confirmed byte."""
+        opened = self._lane_opened.pop(peer_id, None)
         hash_id = self._lane_owner.pop(peer_id, None)
         if not hash_id:
             return
         lanes = self._tor_lanes.get(hash_id)
         if lanes and peer_id in lanes:
             lanes.remove(peer_id)
+            if opened and time.monotonic() - opened < LANE_REFUSED:
+                self._lane_cap[hash_id] = (max(1, len(lanes)), time.monotonic() + LANE_CAP_FOR)
             for tid, out in self._out.items():
                 transfer = self._transfers.get(tid)
                 if transfer and transfer.recipient_hash == hash_id:
@@ -646,12 +671,27 @@ class TorMixin:
         loop = asyncio.get_running_loop()
         self._lane_idle[hash_id] = loop.call_later(LANE_IDLE, self._close_lanes, hash_id)
 
+    def _drop_lane(self: MessagingBackend, hash_id: str, peer_id: str) -> None:
+        """Stop using one lane (stuck) without rewinding the transfer; a fresh
+        circuit replaces it on the next chunk."""
+        lanes = self._tor_lanes.get(hash_id)
+        if lanes and peer_id in lanes:
+            lanes.remove(peer_id)
+        self._lane_owner.pop(peer_id, None)
+        self._lane_opened.pop(peer_id, None)
+        self._lane_tried.pop(hash_id, None)
+        if self.tcp_transport:
+            task = asyncio.ensure_future(self.tcp_transport.disconnect(peer_id))
+            self.__dict__.setdefault("_lane_close_tasks", set()).add(task)
+            task.add_done_callback(self.__dict__["_lane_close_tasks"].discard)
+
     def _close_lanes(self: MessagingBackend, hash_id: str) -> None:
         self._lane_idle.pop(hash_id, None)
         lanes = self._tor_lanes.pop(hash_id, [])
         transport = self.tcp_transport
         for peer_id in lanes:
             self._lane_owner.pop(peer_id, None)
+            self._lane_opened.pop(peer_id, None)
             if transport:
                 task = asyncio.ensure_future(transport.disconnect(peer_id))
                 self.__dict__.setdefault("_lane_close_tasks", set()).add(task)

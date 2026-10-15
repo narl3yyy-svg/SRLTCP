@@ -1,3 +1,3 @@
 """SRLTCP — Secure Relay-Less TCP/Serial peer-to-peer communication."""
 
-__version__ = "0.10.1"
+__version__ = "0.10.2"

@@ -122,6 +122,8 @@ class _Outgoing:
     progress_at: float = field(default_factory=time.monotonic)
     stalls: int = 0
     rewind: bool = False
+    lane_of: dict[int, tuple[str, int]] = field(default_factory=dict)  # offset -> (lane, length)
+    repair_at: float = 0.0
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     compress: bool = True
     skip: int = 0  # chunks to send uncompressed before trying again
@@ -475,6 +477,9 @@ class TransferMixin:
                 self._transfers.pop(transfer.id, None)
             return
         payload = transfer.to_dict()
+        if transfer.state == TransferState.TRANSFERRING:
+            # Shown in the bubble: how many Tor circuits carry it (0 = not Tor).
+            payload["tor_circuits"] = self.tor_circuits(self._peer_hash_for_transfer(transfer))
         if self._on_transfer_progress:
             await self._on_transfer_progress(payload)
         await self._update_file_message(payload, notify=terminal or force)
@@ -1025,6 +1030,8 @@ class TransferMixin:
             out.progress_at = time.monotonic()
             out.stalls = 0
             transfer.offset = offset
+            if out.lane_of:
+                out.lane_of = {k: v for k, v in out.lane_of.items() if k + v[1] > offset}
         out.next = max(out.next, out.acked)
         if "ok" in data and offset >= transfer.size:
             out.result = bool(data.get("ok"))
@@ -1070,6 +1077,50 @@ class TransferMixin:
                 return link
             await asyncio.sleep(0.25)
         return None
+
+    async def _repair_lanes(
+        self: MessagingBackend,
+        hash_id: str,
+        link: PeerLink,
+        fh: BinaryIO,
+        out: _Outgoing,
+        transfer: FileTransfer,
+    ) -> None:
+        """The receiver has waited a while for the chunk at ``out.acked``: the
+        Tor circuit carrying it is stuck. Send what that circuit holds on the
+        other circuits and replace it; the rest of the window stays where it is."""
+        transport = self.tcp_transport
+        if not transport:
+            return
+        stuck = next(
+            (lane for off, (lane, n) in out.lane_of.items() if off <= out.acked < off + n), None
+        )
+        if stuck:
+            self._drop_lane(hash_id, stuck)
+            redo = sorted((off, n) for off, (lane, n) in out.lane_of.items() if lane == stuck)
+        else:  # it went on the main circuit, or its record is gone: just that chunk
+            redo = [(out.acked, min(C.TOR_CHUNK_SIZE, transfer.size - out.acked))]
+        lanes = [p for p in self._tor_lanes.get(hash_id, []) if transport.has_peer(p)]
+        log.info("Transfer %s waits at %d — resending %d chunk(s) from a stuck Tor circuit",
+                 transfer.id, out.acked, len(redo))
+        for off, n in redo:
+            if off + n <= out.acked or off >= out.next:
+                continue
+            target = min(lanes, key=transport.buffered) if lanes else link.transport_peer_id
+            nonce, aes = link.crypto.reserve()
+            frame, sent = await asyncio.to_thread(
+                self._prep_chunk, fh, out, transfer, off, n, 0, nonce, aes, True
+            )
+            try:
+                await transport.send_framed(target, frame)
+            except (KeyError, OSError, ConnectionError) as exc:
+                log.debug("Chunk resend to %s failed: %s", hash_id[:8], exc)
+                out.rewind = True
+                return
+            if lanes:
+                out.lane_of[off] = (target, sent)
+            else:
+                out.lane_of.pop(off, None)
 
     def _prep_chunk(
         self: MessagingBackend,
@@ -1148,10 +1199,12 @@ class TransferMixin:
                     if path_key is not None:
                         out.next = out.acked  # new path or keys: in-flight data is gone
                         out.complete_sent = False
+                        out.lane_of.clear()
                     path_key = key
                 if out.rewind:
                     out.rewind = False
                     out.next = out.acked
+                    out.lane_of.clear()
                 params = self._path_params(link)
                 if out.next < transfer.size and out.next - out.acked < params.window:
                     lanes = self._send_lanes(hash_id, link)
@@ -1171,6 +1224,8 @@ class TransferMixin:
                                 if lanes else link.transport_peer_id
                             )
                             await self.tcp_transport.send_framed(target, frame)
+                            if lanes:
+                                out.lane_of[out.next] = (target, sent)
                         else:
                             await self._send_raw(link.transport_peer_id, link.transport, frame)
                     except (KeyError, OSError, ConnectionError) as exc:
@@ -1192,6 +1247,13 @@ class TransferMixin:
                     )
                 out.wake.clear()
                 wait = params.stall - (now - out.progress_at)
+                if out.lane_of and out.next > out.acked:
+                    due = max(out.progress_at, out.repair_at) + C.TOR_REPAIR - now
+                    if due <= 0:
+                        out.repair_at = now
+                        await self._repair_lanes(hash_id, link, fh, out, transfer)
+                        continue
+                    wait = min(wait, due)
                 if wait > 0:
                     with contextlib.suppress(TimeoutError):
                         await asyncio.wait_for(out.wake.wait(), timeout=wait)
@@ -1201,6 +1263,7 @@ class TransferMixin:
                 out.progress_at = now
                 out.next = out.acked
                 out.complete_sent = False
+                out.lane_of.clear()
                 if out.stalls >= 3:
                     log.warning(
                         "No answer from %s for %s — reconnecting", hash_id[:8], transfer.filename

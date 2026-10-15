@@ -327,3 +327,72 @@ async def test_lane_join_refused_off_tor(backend: MessagingBackend) -> None:
     backend.tcp_transport = FakeTcp()  # type: ignore[assignment]
     await backend._handle_lane_join(TransportPeer("lan-x", "10.0.0.2:1", "tcp"), 0, b"\0" * 64)
     assert backend.lane_owner("lan-x") is None
+
+
+class FakeLanes:
+    """Just enough of the TCP transport for lane bookkeeping."""
+
+    def __init__(self, lanes: list[str]) -> None:
+        self.up = set(lanes)
+        self.sent: list[str] = []
+        self.closed: list[str] = []
+
+    def has_peer(self, peer_id: str) -> bool:
+        return peer_id in self.up
+
+    def buffered(self, peer_id: str) -> int:
+        return 0
+
+    async def send_framed(self, peer_id: str, frame: bytes) -> None:
+        self.sent.append(peer_id)
+
+    async def disconnect(self, peer_id: str) -> None:
+        self.up.discard(peer_id)
+        self.closed.append(peer_id)
+
+
+async def test_stuck_lane_is_replaced_without_resending_the_window(
+    backend: MessagingBackend, tmp_path: Path
+) -> None:
+    """The chunk the receiver waits for sits on a stuck Tor circuit: only that
+    circuit's chunks go out again (on the others), and it is dropped."""
+    backend.identities["tcp"] = backend.identity_store.load_or_create("me", "tcp")
+    hash_id, size = "b" * 32, 6 * 64 * 1024
+    src = tmp_path / "out.bin"
+    src.write_bytes(os.urandom(size))
+    transfer = backend._new_outgoing(hash_id, src, "tcp", None)
+    keys = SessionKeys(send_key=b"\x01" * 32, recv_key=b"\x02" * 32, salt=b"")
+    link = PeerLink(hash_id=hash_id, transport_peer_id="main", transport="tcp",
+                    address="tor", public_key=b"", handshake_complete=True, crypto=CryptoBox(keys))
+    fake = FakeLanes(["lane-a", "lane-b", "lane-c"])
+    backend.tcp_transport = fake  # type: ignore[assignment]
+    backend._tor_lanes[hash_id] = ["lane-a", "lane-b", "lane-c"]
+    for lane in fake.up:
+        backend._lane_owner[lane] = hash_id
+    n = 64 * 1024
+    out = tr._Outgoing(acked=n, next=size, hashed=size)
+    out.lane_of = {i * n: (["lane-a", "lane-b", "lane-c"][i % 3], n) for i in range(6)}
+    out.lane_of[n] = ("lane-b", n)  # the one the receiver waits for
+    out.lane_of[4 * n] = ("lane-b", n)
+    with open(src, "rb") as fh:
+        await backend._repair_lanes(hash_id, link, fh, out, transfer)
+    await asyncio.sleep(0)
+    assert backend._tor_lanes[hash_id] == ["lane-a", "lane-c"]
+    assert "lane-b" not in backend._lane_owner and fake.closed == ["lane-b"]
+    assert len(fake.sent) == 2 and "lane-b" not in fake.sent  # its 2 chunks, nothing else
+    assert {lane for lane, _ in out.lane_of.values()} == {"lane-a", "lane-c"}
+    assert not out.rewind and out.next == size
+
+
+def test_refused_lanes_cap_how_many_are_dialed(backend: MessagingBackend) -> None:
+    """An older contact takes fewer lanes: lanes it closes right away aren't redialed."""
+    hash_id = "b" * 32
+    backend._tor_lanes[hash_id] = ["l1", "l2", "l3"]
+    for lane in ("l1", "l2", "l3"):
+        backend._lane_owner[lane] = hash_id
+    backend._lane_opened["l1"] = tr.time.monotonic() - 600  # worked for a long time
+    backend._lane_closed("l1")
+    assert hash_id not in backend._lane_cap
+    backend._lane_opened["l3"] = tr.time.monotonic()  # refused as soon as it opened
+    backend._lane_closed("l3")
+    assert backend._lane_cap[hash_id][0] == 1

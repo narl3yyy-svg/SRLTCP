@@ -3131,7 +3131,9 @@
     const speed = live.speed_mbps;
     const stateLabel = live.state || "transferring";
     const filename = live.filename || m.text || "file";
-    const speedStr = speed ? ` · ${Number(speed).toFixed(2)} MB/s` : "";
+    const circuits = stateLabel === "transferring" ? Number(live.tor_circuits || 0) : 0;
+    const torStr = circuits ? ` · Tor ×${circuits}` : "";
+    const speedStr = (speed ? ` · ${Number(speed).toFixed(2)} MB/s` : "") + torStr;
     const fileUrl = tid ? `/api/transfers/${encodeURIComponent(tid)}/file` : "";
     const downloadUrl = fileUrl ? `${fileUrl}?download=1` : "";
     const cancelled = stateLabel === "cancelled";
