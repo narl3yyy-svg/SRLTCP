@@ -40,6 +40,7 @@ import asyncio
 import bisect
 import contextlib
 import hashlib
+import heapq
 import hmac
 import ipaddress
 import os
@@ -72,6 +73,7 @@ MAX_RX_DATAGRAM = 2048
 
 # Frames inside a packet (after decryption).
 F_PAD, F_STREAM, F_ACK, F_DGRAM, F_PING, F_CLOSE = 0, 1, 2, 3, 4, 5
+F_PATH_CHALLENGE, F_PATH_RESPONSE = 6, 7  # + 8-byte token: proves a new address answers
 STREAM_HDR = struct.Struct(">BQH")  # type, offset, length
 ACK_HDR = struct.Struct(">BQQIB")  # type, stream received up to, max data, ack delay µs, ranges
 ACK_RANGE = struct.Struct(">QQ")  # highest, lowest packet number of a range
@@ -90,6 +92,8 @@ BACKOFF = 0.7
 RECV_WINDOW = 24 * 1024 * 1024  # bytes a receiver buffers ahead of the app
 SEND_HIGH = 2 * 1024 * 1024  # unsent bytes before a writer waits (like a TCP buffer)
 SEND_MAX = 48 * 1024 * 1024  # unsent + unacknowledged, hard limit
+SKIP_MIN, SKIP_SPREAD = 1000, 2000  # a skipped packet number every 1000-3000
+MAX_OOO_PIECES = 32768  # out-of-order pieces held (a full window of normal packets fits)
 REPLAY_SPAN = 1 << 16  # packets older than this behind the newest are dropped
 IDLE_TIMEOUT = 30.0
 KEEPALIVE = 10.0  # carrier NATs forget UDP mappings after ~30 s
@@ -188,6 +192,13 @@ class UdpConnection:
         self.peer = TransportPeer(peer_id=str(uuid.uuid4()), address="udp", transport="tcp")
         self.writer = None  # (TCP connections have one; nothing uses it for UDP)
         self.remote: tuple[str, int] | None = None
+        self.expected_hash: str | None = None  # the contact this connection is for
+        self._challenges: dict[tuple[str, int], tuple[bytes, float]] = {}
+        self._rx_addr: tuple[str, int] | None = None
+        # Optimistic-ack check: we skip a packet number now and then; a peer
+        # acknowledging one claims data it never got (to make us send faster).
+        self._skipped: set[int] = set()
+        self._next_skip = SKIP_MIN + secrets.randbelow(SKIP_SPREAD)
         self._remote_rx = 0.0
         self.punch: _PunchState | None = None
         self.opened = asyncio.Event()
@@ -239,6 +250,7 @@ class UdpConnection:
         self._ack_due = 0.0
         self._rcum = 0  # stream bytes received in order
         self._ooo: dict[int, bytes] = {}
+        self._ooo_keys: list[int] = []  # heap of the offsets in _ooo (may hold stale ones)
         self._ooo_bytes = 0
         self._app = bytearray()  # in order, not yet handed to the app
         self._app_event = asyncio.Event()
@@ -284,10 +296,7 @@ class UdpConnection:
 
     def send_datagram(self, payload: bytes) -> bool:
         """Unreliable, unordered (call media). False if it doesn't fit."""
-        if (
-            self._closed
-            or len(payload) > self._max_datagram - HEADER.size - TAG - DGRAM_HDR.size
-        ):
+        if self._closed or len(payload) > self._max_datagram - HEADER.size - TAG - DGRAM_HDR.size:
             return False
         if len(self._dgrams) < 256:
             self._dgrams.append(payload)
@@ -308,11 +317,11 @@ class UdpConnection:
         seg_off = off - self._seg_at[i]
         seg = self._segs[i]
         if seg_off + ln <= len(seg):
-            return seg[seg_off:seg_off + ln]
+            return seg[seg_off : seg_off + ln]
         parts = []
         while ln > 0:
             seg = self._segs[i]
-            piece = seg[seg_off:seg_off + ln]
+            piece = seg[seg_off : seg_off + ln]
             parts.append(piece)
             ln -= len(piece)
             i += 1
@@ -389,12 +398,16 @@ class UdpConnection:
         self._last_rx = now
         self._record_pn(pn, now)
         self.stats["received"] += 1
-        if self.remote is None or addr == self.remote:
+        if self.remote is None:
+            self.remote = addr  # the punch: first authenticated packet fixes the path
+        if addr == self.remote:
             self._remote_rx = now
-        if addr != self.remote and (self.remote is None or now - self._remote_rx > MIGRATE_AFTER):
-            if self.remote is not None:
-                log.info("UDP path to %s moved to %s", self.peer.peer_id[:8], addr[0])
-            self.remote, self._remote_rx = addr, now
+        elif now - self._remote_rx > MIGRATE_AFTER:
+            # Their address changed (new network)? Move only once the new
+            # address answers a challenge: a packet "from" another address
+            # can't redirect our traffic there.
+            self._challenge(addr, now)
+        self._rx_addr = addr
         if not self.opened.is_set():
             self.opened.set()
             if self.punch and not self.punch.done.done():
@@ -408,6 +421,18 @@ class UdpConnection:
             elif not self._ack_due:
                 self._ack_due = now + MAX_ACK_DELAY
         self._schedule_pump()
+
+    def _challenge(self, addr: tuple[str, int], now: float) -> None:
+        sent = self._challenges.get(addr)
+        if sent and now - sent[1] < 0.5:
+            return
+        if len(self._challenges) >= 8:
+            self._challenges.clear()
+        token = secrets.token_bytes(8)
+        self._challenges[addr] = (token, now)
+        self._send_packet(
+            bytes([F_PATH_CHALLENGE]) + token, eliciting=False, with_ack=False, to=addr
+        )
 
     def _seen(self, pn: int) -> bool:
         for hi, lo in self._rx_ranges:
@@ -480,6 +505,28 @@ class UdpConnection:
                 elif kind == F_PING:
                     i += 1
                     eliciting = True
+                elif kind in (F_PATH_CHALLENGE, F_PATH_RESPONSE):
+                    token = plain[i + 1 : i + 9]
+                    i += 9
+                    if len(token) != 8 or self._rx_addr is None:
+                        return eliciting
+                    if kind == F_PATH_CHALLENGE:  # answer to wherever it came from
+                        self._send_packet(
+                            bytes([F_PATH_RESPONSE]) + token,
+                            eliciting=False,
+                            with_ack=False,
+                            to=self._rx_addr,
+                        )
+                    else:
+                        sent = self._challenges.get(self._rx_addr)
+                        if sent and hmac.compare_digest(sent[0], token):
+                            log.info(
+                                "UDP path to %s moved to %s",
+                                self.peer.peer_id[:8],
+                                self._rx_addr[0],
+                            )
+                            self.remote, self._remote_rx = self._rx_addr, now
+                            self._challenges.clear()
                 elif kind == F_CLOSE:
                     self._abort("closed by the contact")
                     return False
@@ -497,9 +544,17 @@ class UdpConnection:
         if end > self._max_sent:
             return  # beyond the window we offered: drop (a well-behaved sender never does this)
         if off > self._rcum:
-            if off not in self._ooo:
+            # Early data waits for the gap. Bounded in bytes and in pieces, so
+            # not even the contact can make us hold more than the window (or
+            # millions of tiny overlapping pieces).
+            if (
+                off not in self._ooo
+                and self._ooo_bytes + len(data) <= RECV_WINDOW
+                and len(self._ooo) < MAX_OOO_PIECES
+            ):
                 self._ooo[off] = data
                 self._ooo_bytes += len(data)
+                heapq.heappush(self._ooo_keys, off)
             return
         if off < self._rcum:
             data = data[self._rcum - off :]
@@ -512,15 +567,25 @@ class UdpConnection:
                 self._app += block
                 self._rcum += len(block)
                 continue
-            behind = [k for k in self._ooo if k < self._rcum]
-            if not behind:
-                break
-            for k in behind:
-                block = self._ooo.pop(k)
+            # Pieces that start behind us now: keep only their new part.
+            # (The heap finds them without scanning every piece.)
+            moved = False
+            keys = self._ooo_keys
+            while keys and keys[0] < self._rcum:
+                k = heapq.heappop(keys)
+                block = self._ooo.pop(k, None)
+                if block is None:
+                    continue  # delivered already
                 self._ooo_bytes -= len(block)
                 if k + len(block) > self._rcum and self._rcum not in self._ooo:
                     self._ooo[self._rcum] = block[self._rcum - k :]
                     self._ooo_bytes += k + len(block) - self._rcum
+                    heapq.heappush(keys, self._rcum)
+                    moved = True
+            if not moved:
+                break
+        if not self._ooo:
+            self._ooo_keys.clear()
         self._app_event.set()
 
     def _on_dgram(self, data: bytes) -> None:
@@ -566,6 +631,9 @@ class UdpConnection:
         lowest_out = next(iter(self._sent), None)
         for hi, lo in ranges:
             hi = min(hi, self._pn - 1)  # never trust an ack for a packet we didn't send
+            if self._skipped and any(lo <= s <= hi for s in self._skipped):
+                self._abort("acknowledged packets it never received")
+                return
             if hi < lo or lowest_out is None:
                 continue
             if hi > self._largest_acked:
@@ -612,6 +680,9 @@ class UdpConnection:
                 self._cwnd = min(
                     MAX_WINDOW, self._cwnd + 2 * self._max_datagram * acked_bytes / self._cwnd
                 )
+        if self._skipped and min(self._skipped) < self._largest_acked - 4096:
+            # Long acknowledged around: they had their chance to lie about it.
+            self._skipped = {s for s in self._skipped if s >= self._largest_acked - 4096}
         self._detect_loss(now)
         self._maybe_writable()
 
@@ -823,14 +894,19 @@ class UdpConnection:
         ranges: list[tuple[int, int]] | None = None,
         with_ack: bool = True,
         pad_to: int = 0,
+        to: tuple[str, int] | None = None,
     ) -> None:
-        if self.remote is None and self.punch is None:
+        if self.remote is None and self.punch is None and to is None:
             return
         if with_ack and self._rx_ranges:
             ack = self._ack_frame()
             payload = ack + payload
         elif not payload:
             return
+        if self._pn >= self._next_skip:
+            self._skipped.add(self._pn)  # never sent: must never be acknowledged
+            self._pn += 1
+            self._next_skip = self._pn + SKIP_MIN + secrets.randbelow(SKIP_SPREAD)
         pn = self._pn
         self._pn += 1
         header = HEADER.pack(MAGIC, VERSION, self.peer_conn_id, pn)
@@ -838,7 +914,12 @@ class UdpConnection:
             payload += bytes(max(0, pad_to - HEADER.size - TAG - len(payload)))
         packet = header + self._seal.encrypt(_nonce(pn), payload, header)
         now = time.monotonic()
-        targets = [self.remote] if self.remote else (self.punch.candidates if self.punch else [])
+        if to is not None:
+            targets = [to]
+        elif self.remote:
+            targets = [self.remote]
+        else:
+            targets = self.punch.candidates if self.punch else []
         for addr in targets:
             self.endpoint.sendto(packet, addr)
         self.stats["sent"] += 1
@@ -1009,7 +1090,9 @@ class UdpEndpoint:
         self._conns[my_id] = conn
         return conn
 
-    def prime(self, candidates: list[tuple[str, int]]) -> None:
+    def prime(
+        self, candidates: list[tuple[str, int]], hops: tuple[int, ...] = PRIME_HOPS
+    ) -> None:
         """Open our NAT towards each candidate without reaching theirs."""
         for host, port in candidates:
             family = socket.AF_INET6 if ":" in host else socket.AF_INET
@@ -1023,8 +1106,8 @@ class UdpEndpoint:
                 else (socket.IPPROTO_IP, socket.IP_TTL)
             )
             try:
-                for hops in PRIME_HOPS:
-                    sock.setsockopt(level, opt, hops)
+                for limit in hops:
+                    sock.setsockopt(level, opt, limit)
                     transport.sendto(b"\0", (host, port))  # dropped by anyone it reaches
             except OSError:
                 pass
@@ -1039,6 +1122,7 @@ class UdpEndpoint:
         window: float,
         *,
         delay: float = 0.0,
+        hops: tuple[int, ...] = PRIME_HOPS,
     ) -> bool:
         """Probe every candidate until one answers (authenticated) or the
         window closes. ``delay``: the answering side waits that long after
@@ -1051,7 +1135,7 @@ class UdpEndpoint:
         if not usable:
             conn._shutdown()
             return False
-        self.prime(usable)
+        self.prime(usable, hops)
         if delay:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(conn.opened.wait(), delay)

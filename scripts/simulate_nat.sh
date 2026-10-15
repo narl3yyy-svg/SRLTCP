@@ -48,7 +48,8 @@ PYEOF
 start_node() {  # start_node NS NAME
   mkdir -p "$W/data-$1"
   [ -f "$W/data-$1/settings.json" ] ||  # keep settings across restarts
-    echo '{"setup_complete": true, "auto_announce": false, "version": "0.6.0", "display_name": "'"$2"'"}' > "$W/data-$1/settings.json"
+    echo '{"setup_complete": true, "auto_announce": false, "version": "0.6.0", "display_name": "'"$2"'",
+           "stun_servers": "198.51.100.1:3478"}' > "$W/data-$1/settings.json"
   (cd "$ROOT" && SRLTCP_DATA_DIR="$W/data-$1" ip netns exec "$1" "$PY" -m srltcp web --name "$2" \
      >> "$W/$1.log" 2>&1 < /dev/null &)
   wait_for 30 test -s "$W/data-$1/web_token" && wait_for 30 api "$1" GET /api/version || fail "$2 did not start"
@@ -98,6 +99,7 @@ ip link add meet netns ha type veth peer name meet netns hb
 ip -n ha addr add 10.9.9.1/24 dev meet; ip -n ha link set meet up
 ip -n hb addr add 10.9.9.2/24 dev meet; ip -n hb link set meet up
 
+(cd "$ROOT" && ip netns exec inet "$PY" scripts/stun_server.py --host 198.51.100.1 > "$W/stun.log" 2>&1 < /dev/null &)
 (cd "$ROOT" && ip netns exec inet "$PY" -m srltcp relay --port 7827 --public-host 198.51.100.1 \
    --data-dir "$W/relay" > "$W/relay.log" 2>&1 < /dev/null &)
 wait_for 20 grep -q "srltcp-relay://" "$W/relay.log" || fail "relay did not start"

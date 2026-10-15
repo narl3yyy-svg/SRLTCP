@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ipaddress
+import re
 import secrets
 import time
 from typing import TYPE_CHECKING, Any
@@ -52,10 +53,11 @@ log = get_logger(__name__)
 
 PUNCH_WINDOW = 8.0  # seconds both sides keep dialing
 UDP_PUNCH_WINDOW = 6.0  # seconds both sides keep probing over UDP
+UDP_RETRY_SOON = 10.0  # after a failed UDP round with a lower priming hop limit left
 STUN_FRESH = 20.0  # re-ask STUN before a round if the answer is older (carrier NATs forget)
 PUNCH_ATTEMPT_TIMEOUT = 1.5
 PUNCH_FOLLOWER_DELAY = 1.0  # the answering side starts dialing a moment later
-PUNCH_ANSWER_EVERY = 30.0  # a contact can start at most one round this often
+PUNCH_ANSWER_EVERY = 8.0  # a contact can start at most one round this often (each is small)
 PUNCH_RETRY_EVERY = 120.0  # while on the relay
 PUNCH_BACKOFF = (30.0, 60.0, 120.0, 300.0)  # after 1, 2, 3, 4+ failed rounds
 MAX_CANDIDATES = 6
@@ -81,7 +83,10 @@ _NOT_PUNCHABLE = tuple(
     for n in (
         "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",  # home/office LANs
         "100.64.0.0/10",  # carrier NAT space (and Tailscale-style VPNs)
-        "0.0.0.0/8", "fc00::/7", "::/8",
+        "0.0.0.0/8", "192.0.0.0/24", "198.18.0.0/15",  # special use, benchmarking
+        "fc00::/7", "fec0::/10", "::/8",  # unique/site local
+        "2002::/16", "2001::/32",  # 6to4 and Teredo: can wrap a LAN IPv4 address
+        "64:ff9b::/96", "64:ff9b:1::/48",  # NAT64: same
     )
 )
 
@@ -96,6 +101,19 @@ def punchable_candidate(host: str, port: object) -> bool:
     ip = ipaddress.ip_address(host)
     if ip.version == 6 and ip.ipv4_mapped:
         return False
+    if any(ip in net for net in _NOT_PUNCHABLE if net.version == ip.version):
+        return False
+    from srltcp.utils.network import same_network
+
+    # Not this device or anything on our own LAN/VPN (incl. our IPv6 prefix).
+    return not same_network(host)
+
+
+def _public_address(host: str, port: int) -> bool:
+    """Our own STUN-reported address is worth sharing (not LAN/carrier space)."""
+    if not acceptable_candidate(host, port):
+        return False
+    ip = ipaddress.ip_address(host)
     return not any(ip in net for net in _NOT_PUNCHABLE if net.version == ip.version)
 
 
@@ -112,14 +130,14 @@ def _clean_candidates(raw: object) -> list[tuple[str, int]]:
     return out[:MAX_CANDIDATES]
 
 
+_HEX = re.compile(r"[0-9a-f]+")
+
+
 def _hex(value: object, size: int) -> bytes | None:
     """A hex field of exactly ``size`` bytes from a contact's message, else None."""
-    if not isinstance(value, str) or len(value) != 2 * size:
+    if not isinstance(value, str) or len(value) != 2 * size or not _HEX.fullmatch(value):
         return None
-    try:
-        return bytes.fromhex(value)
-    except ValueError:
-        return None
+    return bytes.fromhex(value)
 
 
 def _same_family(
@@ -145,6 +163,10 @@ class PunchMixin:
         self.udp: UdpEndpoint | None = None
         self._peer_udp: dict[str, list[tuple[str, int]]] = {}
         self._udp_offers: dict[str, tuple[bytes, bytes, float]] = {}  # our secret, id, when
+        self._prime_max: dict[str, int] = {}  # highest priming hop limit per contact
+
+    def _prime_hops(self: MessagingBackend, hash_id: str) -> tuple[int, ...]:
+        return tuple(range(2, self._prime_max.get(hash_id, 4) + 1))
 
     # ── UDP (the fast path between networks, see transports/udp.py) ──
 
@@ -198,15 +220,17 @@ class PunchMixin:
             return []
         import socket
 
+        from srltcp.utils.network import global_ipv6_addresses
+
         out: list[tuple[str, int]] = []
-        for family in (socket.AF_INET6, socket.AF_INET):
-            mapped = udp.mapped.get(family)
-            if mapped and punchable_candidate(*mapped) and mapped not in out:
-                out.append(mapped)
+        mapped4 = udp.mapped.get(socket.AF_INET)
+        if mapped4 and _public_address(*mapped4):
+            out.append(mapped4)
+        # IPv6 has no NAT: our own global addresses, never one built from the
+        # hardware (MAC) address — global_ipv6_addresses() leaves those out
+        # (so a STUN answer naming one isn't passed on either).
         v6_port = udp.ports.get(socket.AF_INET6)
         if v6_port:
-            from srltcp.utils.network import global_ipv6_addresses
-
             for ip in global_ipv6_addresses():
                 if (ip, v6_port) not in out:
                     out.append((ip, v6_port))
@@ -415,7 +439,9 @@ class PunchMixin:
         conn = self.udp.new_connection(their_id, send_key=f2l, recv_key=l2f, my_id=my_id)
         if conn is None:
             return None, [], {}
-        self.udp.prime(targets)  # before answering: the leader probes as soon as it hears
+        conn.expected_hash = hash_id
+        self.udp.prime(targets, self._prime_hops(hash_id))  # before answering: the leader
+        # probes as soon as it hears
         return conn, targets, {"w": [list(c) for c in mine], "k": secret.hex(), "i": my_id.hex()}
 
     def _udp_lead(
@@ -433,7 +459,10 @@ class PunchMixin:
             return None, []
         l2f, f2l = derive_keys(combine_secrets(secret, their_key), self._me_hash(), hash_id)
         conn = self.udp.new_connection(their_id, send_key=l2f, recv_key=f2l, my_id=my_id)
-        return (conn, targets) if conn else (None, [])
+        if conn is None:
+            return None, []
+        conn.expected_hash = hash_id
+        return conn, targets
 
     async def _punch(
         self: MessagingBackend,
@@ -450,6 +479,7 @@ class PunchMixin:
                 udp_conn._shutdown()
             return
         self._punching.add(hash_id)
+        retry_soon = False
         try:
             peer_id: str | None = None
             if udp_conn:
@@ -457,15 +487,30 @@ class PunchMixin:
                 if self.udp and udp_targets and await self.udp.punch(
                     udp_conn, udp_targets, UDP_PUNCH_WINDOW,
                     delay=0.0 if leader else PUNCH_FOLLOWER_DELAY,
+                    hops=self._prime_hops(hash_id),
                 ):
                     peer_id = await self.tcp_transport.adopt_udp(udp_conn)
                     log.info("Direct UDP connection to %s via %s", hash_id[:8], udp_conn.address)
                 else:
                     udp_conn._shutdown()
+                    # Maybe our priming packets reached their router (a short
+                    # path, e.g. the same ISP): try again soon, lower hop limit.
+                    current = self._prime_max.get(hash_id, 4)
+                    if current > 2:
+                        self._prime_max[hash_id] = current - 1
+                        retry_soon = True
             if not peer_id and targets:
                 peer_id = await self._race_dials(
                     targets, port, delay=0.0 if leader else PUNCH_FOLLOWER_DELAY
                 )
+            if not peer_id and retry_soon:
+                log.info("No direct UDP path to %s yet — trying again in %d s",
+                         hash_id[:8], int(UDP_RETRY_SOON))
+                self._punch_next[hash_id] = time.monotonic() + UDP_RETRY_SOON - 1
+                asyncio.get_running_loop().call_later(
+                    UDP_RETRY_SOON, lambda: self.request_direct_upgrade(hash_id, punch=True)
+                )
+                return
             if not peer_id:
                 fails = self._punch_failures.get(hash_id, 0)
                 self._punch_failures[hash_id] = fails + 1

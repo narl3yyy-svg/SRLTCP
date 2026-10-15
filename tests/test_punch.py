@@ -337,6 +337,7 @@ async def test_contacts_on_tor_move_to_direct_udp(tmp_path: Path, monkeypatch: A
     import srltcp.core.messaging.punch as punch_mod
 
     monkeypatch.setattr(punch_mod, "punchable_candidate", lambda h, p: True)  # loopback here
+    monkeypatch.setattr(punch_mod, "_public_address", lambda h, p: True)
     a, b = make_node(tmp_path, "alice"), make_node(tmp_path, "bob")
     await a.start()
     await b.start()
@@ -386,6 +387,56 @@ async def test_contacts_on_tor_move_to_direct_udp(tmp_path: Path, monkeypatch: A
                             lambda h, body: got.append((h, body)))
         await leader._send_call_media(fh, 5000, 6000, b"rtp")
         assert await wait_for(lambda: got == [(lh, struct.pack(">HH", 5000, 6000) + b"rtp")])
+    finally:
+        await a.stop()
+        await b.stop()
+
+
+def test_contacts_cannot_aim_our_probes_inside_our_networks(monkeypatch: Any) -> None:
+    """6to4/Teredo/NAT64 (which can wrap a LAN address), site-local and
+    benchmark ranges, and anything on our own LAN/IPv6 prefix are refused."""
+    from srltcp.core.messaging import punch as punch_mod
+    from srltcp.utils import network
+
+    monkeypatch.setattr(network, "global_ipv6_addresses", lambda: ["2a01:4f8:1:2::abcd"])
+    for host in ("2002:c0a8:101::1", "2001:0:53aa:64c::1", "fec0::1", "64:ff9b::c0a8:101",
+                 "198.18.0.5", "192.0.0.8", "2a01:4f8:1:2::99"):
+        assert not punch_mod.punchable_candidate(host, 7828), host
+    assert punch_mod.punchable_candidate("2a01:4f8:9::1", 7828)
+    assert punch_mod._hex("aa" + " " * 62, 32) is None and punch_mod._hex(" " * 16, 8) is None
+    assert punch_mod._hex("AB" * 8, 8) is None and punch_mod._hex("ab" * 8, 8) == b"\xab" * 8
+
+
+async def test_udp_connection_only_takes_the_contact_it_was_made_for(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Hardening from review: a punched UDP connection is pinned to one
+    contact; a handshake from anyone else on it is refused."""
+    a, b = make_node(tmp_path, "alice"), make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    try:
+        trust(a, b)
+        trust(b, a)
+        assert b.tcp_transport is not None
+        conn = SimpleNamespace(expected_hash="c" * 32)
+        b.tcp_transport._connections["udp-peer"] = conn  # type: ignore[assignment]
+        assert b.tcp_transport.expected_peer("udp-peer") == "c" * 32
+        rejected: list[str] = []
+        monkeypatch.setattr(b, "_reject_connection", AsyncMock(side_effect=rejected.append))
+        from srltcp.core.protocol.crypto import KeyExchange
+        from srltcp.core.protocol.messages import MessageType
+
+        ident = a.identities["tcp"]
+        kx = KeyExchange(ident.private_key, ident.pq)
+        kx.start_kem()
+        packet = a._identity_hello(MessageType.HANDSHAKE, kx, "tcp", b.identities["tcp"].hash_id)
+        from srltcp.core.protocol.messages import parse_header
+
+        body = parse_header(packet)[-1]
+        await b._handle_handshake("udp-peer", body)
+        assert rejected == ["udp-peer"] and not b.get_link(a.identities["tcp"].hash_id)
+        b.tcp_transport._connections.pop("udp-peer", None)
     finally:
         await a.stop()
         await b.stop()

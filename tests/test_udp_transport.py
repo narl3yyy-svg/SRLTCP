@@ -137,7 +137,7 @@ async def test_call_media_goes_as_datagrams() -> None:
     p = await make_pair()
     media: list[bytes] = []
     p.cb.set_datagram_handler(lambda _peer, data: media.append(data))
-    for i in range(32):
+    for _ in range(32):
         await p.ca.send_framed(pack_frame(os.urandom(1 << 20)))
     assert p.ca.send_datagram(b"rtp-1")
     assert not p.ca.send_datagram(b"x" * 1500)  # too big for one packet: use the stream
@@ -183,7 +183,8 @@ async def test_attacker_cannot_inject_replay_or_reset() -> None:
     # 2. Forge: right connection id, made-up content and a CLOSE frame.
     conn_id = captured[0][3:11]
     for pn in (10_000, 10_001):
-        forged = udp.HEADER.pack(udp.MAGIC, udp.VERSION, conn_id, pn) + bytes([udp.F_CLOSE]) + bytes(16)
+        forged = udp.HEADER.pack(udp.MAGIC, udp.VERSION, conn_id, pn)
+        forged += bytes([udp.F_CLOSE]) + bytes(16)
         evil.sendto(forged, target)
     # 3. Flip a bit in a real packet.
     tampered = bytearray(captured[-1])
@@ -306,3 +307,57 @@ async def test_extreme_frames_from_the_contact_are_harmless() -> None:
     await p.cb.send(b"and back")
     assert await until(lambda: b"and back" in p.got_a)
     await close(p)
+
+
+async def test_contact_cannot_fill_our_memory_or_stall_us() -> None:
+    """Review finding: tiny overlapping early pieces used to pile up without
+    limit (memory) and every in-order packet rescanned them all (CPU)."""
+    p = await make_pair()
+    cb = p.cb
+    gap_start = cb._rcum
+    for k in range(udp.MAX_OOO_PIECES + 5000):
+        cb._on_stream(gap_start + 1 + k, b"x" * 1100)  # never filling byte gap_start
+    assert len(cb._ooo) <= udp.MAX_OOO_PIECES and cb._ooo_bytes <= udp.RECV_WINDOW
+    start = time.monotonic()
+    for _ in range(200):  # in-order delivery stays cheap with the buffer full
+        cb._on_stream(cb._rcum, b"")
+    assert time.monotonic() - start < 0.2
+    await close(p)
+
+
+async def test_spoofed_address_cannot_redirect_the_connection() -> None:
+    """Review finding: after a quiet second, one authenticated packet from a
+    new address moved the connection there; now the new address must answer
+    a challenge first."""
+    p = await make_pair()
+    real_remote = p.cb.remote
+    p.cb._remote_rx -= udp.MIGRATE_AFTER + 1  # the current path went quiet
+    victim = UdpEndpoint(0, stun_servers=())
+    await victim.start()
+    got: list[bytes] = []
+    victim._received = lambda data, addr: got.append(data)  # type: ignore[method-assign]
+    victim_addr = ("127.0.0.1", victim.ports[socket.AF_INET])
+    # The contact's packet arrives "from" the victim's address.
+    hdr = udp.HEADER.pack(udp.MAGIC, udp.VERSION, p.cb.my_id, 999_999)
+    pkt = hdr + p.ca._seal.encrypt(udp._nonce(999_999), bytes([udp.F_PING]), hdr)
+    p.cb.on_datagram(hdr, 999_999, pkt[len(hdr):], victim_addr)
+    await asyncio.sleep(0.2)
+    assert p.cb.remote == real_remote  # not moved: the victim never answered
+    assert len(got) <= 2  # at most a tiny challenge (no data flood)
+    victim.stop()
+    await close(p)
+
+
+async def test_optimistic_acks_end_the_connection() -> None:
+    """A peer acknowledging packets it never received (to make us flood a
+    path) is caught by the packet numbers we skip on purpose."""
+    p = await make_pair()
+    for _ in range(udp.SKIP_MIN + udp.SKIP_SPREAD + 50):
+        p.ca._send_packet(bytes([udp.F_PING]), eliciting=True)
+    assert p.ca._skipped
+    s = next(iter(p.ca._skipped))
+    p.ca._on_ack(0, 0, 0.0, [(s + 1, s - 1)], time.monotonic())
+    assert p.ca._closed
+    await p.cb.close()
+    p.a.stop()
+    p.b.stop()

@@ -787,6 +787,14 @@ class ConnectMixin:
             log.info("Refused a Tor connection from a non-contact (%s)", remote_hash[:8])
             await self._reject_connection(peer_id)
             return
+        expected = self.tcp_transport.expected_peer(peer_id) if self.tcp_transport else None
+        if expected and expected != remote_hash:
+            # A direct UDP connection is set up with one contact (keys from our
+            # session with them): nobody else may open a session on it.
+            log.warning("Handshake from %s on a connection made for %s — refused",
+                        remote_hash[:8], expected[:8])
+            await self._reject_connection(peer_id)
+            return
 
         existing = self.get_link(remote_hash)
         transport = existing.transport if existing else self._infer_transport(peer_id)

@@ -88,6 +88,7 @@ REJECT_REPEAT = 2.0  # answer stray data for a cancelled transfer at most this o
 LINK_WAIT = 10.0  # a sender waits this long for a dropped session before pausing
 JOURNAL_DELAY = 1.0  # batch journal writes (state changes come in bursts)
 MAX_JOURNAL = 500
+MAX_PENDING_INCOMING = 256  # unfinished incoming files per contact (a big photo batch fits)
 MiB = 1024 * 1024
 
 # Already-compressed formats: compressing them only burns CPU (and battery).
@@ -686,6 +687,16 @@ class TransferMixin:
                     hash_id, MessageType.FILE_ACCEPT,
                     {"transfer_id": transfer_id, "offset": rx.expected if rx else 0},
                 )
+            return
+        pending = sum(
+            1 for t in self._transfers.values()
+            if t.sender_hash == hash_id and t.state not in TERMINAL and not self._is_outgoing(t)
+        )
+        if pending >= MAX_PENDING_INCOMING:
+            # Unfinished files from one contact are capped: a flood of offers
+            # can't fill memory, the disk's file table or the chat.
+            log.warning("Too many unfinished files from %s — offer refused", hash_id[:8])
+            await self._send_reject(hash_id, transfer_id, "busy")
             return
         try:
             free = shutil.disk_usage(self._transfer_dir).free

@@ -11,7 +11,7 @@ from srltcp.core.messaging.constants import DISCOVERY_PORT
 from srltcp.core.protocol.messages import MessageType, build_header
 from srltcp.core.protocol.signed import sign_payload
 from srltcp.utils.logging import get_logger
-from srltcp.utils.network import in_vpn_subnet, primary_ipv4, sweep_targets
+from srltcp.utils.network import in_vpn_subnet, on_our_network, primary_ipv4, sweep_targets
 
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
@@ -128,6 +128,12 @@ class AnnounceMixin:
         if not self.tcp_transport:
             raise AnnounceError("tcp", "TCP transport is not enabled")
         host = await resolve_peer_address(host)
+        if not on_our_network(host):
+            raise AnnounceError(
+                "tcp",
+                "Find by IP only reaches devices on your own network (the same Wi-Fi/LAN or "
+                "your VPN). To add someone elsewhere, use a pairing code or link.",
+            )
         self._last_manual_announce = time.monotonic()
         payload = self.build_announce_payload("tcp")
         for _ in range(ANNOUNCE_BURSTS):
@@ -291,6 +297,11 @@ class AnnounceMixin:
     async def _handle_discovered(
         self: MessagingBackend, address: str, transport: str, payload: bytes
     ) -> None:
+        if transport == "tcp" and address != "relay":
+            src = address.rsplit(":", 1)[0] if ":" in address else address
+            if not on_our_network(src):
+                log.debug("Ignoring an announce from outside our networks (%s)", src)
+                return  # discovery stays on our own Wi-Fi/LAN and VPN
         own_hashes = {i.hash_id for i in self.identities.values()}
         peer, is_new = self.discovery.upsert_from_announce(address, transport, payload)
         if not peer or peer.hash_id in own_hashes:

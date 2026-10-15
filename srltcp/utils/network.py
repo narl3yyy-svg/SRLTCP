@@ -11,11 +11,12 @@ from typing import Any
 
 def broadcast_targets(prefix_len: int | None = None) -> list[str]:
     """Return UDP broadcast addresses for LAN discovery."""
-    targets: set[str] = {"255.255.255.255"}
+    targets: set[str] = set()
     for iface in list_interfaces():
         ip = iface.get("ip", "")
-        if not ip or ip.startswith("127."):
-            continue
+        if not ip or ip.startswith("127.") or is_cellular_interface(iface):
+            continue  # never on mobile data: that's the carrier's network
+        targets.add("255.255.255.255")
         plen = iface.get("prefix_len", prefix_len if prefix_len is not None else 24)
         try:
             net = ipaddress.ip_network(f"{ip}/{plen}", strict=False)
@@ -45,6 +46,72 @@ def primary_ipv4() -> str:
 
 VPN_IFACE_PREFIXES = ("tun", "wg", "ppp", "utun", "tailscale", "zt", "ipsec", "nordlynx")
 MAX_SWEEP_HOSTS = 1022  # never unicast-sweep more than a /22
+
+
+# Mobile-data interfaces (Android: rmnet/ccmni/…; Linux modems: wwan): the
+# carrier's network, not yours. Discovery never goes out on them.
+CELLULAR_IFACE_PREFIXES = ("rmnet", "rev_rmnet", "ccmni", "pdp", "wwan", "clat", "v4-rmnet",
+                           "seth_lte", "rmnet_data")
+
+
+def is_cellular_interface(iface: dict[str, Any]) -> bool:
+    return str(iface.get("interface", "")).lower().startswith(CELLULAR_IFACE_PREFIXES)
+
+
+def same_network(addr: str, *, fresh: bool = False) -> bool:
+    """True when ``addr`` is on one of *our own* networks: this device, the
+    Wi-Fi/LAN we're on, or our VPN — never a mobile carrier's network or the
+    wider internet. Discovery (announces, Find by IP, contact requests) is
+    limited to these, so nobody on another network can find this device."""
+    host = addr.strip("[]").split("%", 1)[0]
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if ip.is_loopback:
+        return True
+    if ip.version == 6:
+        if ip.is_link_local:
+            return True  # (only reachable on the same link)
+        mapped = ip.ipv4_mapped
+        if mapped is None:
+            # Same /64 as one of our global addresses = same LAN segment.
+            net = ipaddress.ip_network(f"{ip}/64", strict=False)
+            return any(ipaddress.ip_address(own) in net for own in global_ipv6_addresses())
+        ip = mapped
+    for iface in list_interfaces(fresh=fresh):
+        if is_cellular_interface(iface):
+            continue
+        own = str(iface.get("ip", ""))
+        if not own or own.startswith("127."):
+            continue
+        plen = int(iface.get("prefix_len", 24) or 24)
+        if is_vpn_interface(iface) and (plen >= 31 or plen < 16):
+            plen = 24  # tunnels with a /32 address: the surrounding /24 is the VPN
+        try:
+            if ip in ipaddress.ip_network(f"{own}/{plen}", strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+_FRESH_CHECK = {"at": 0.0}
+
+
+def on_our_network(addr: str) -> bool:
+    """``same_network``, and if that says no, once more with the interfaces
+    read again (a Wi-Fi or VPN that came up a moment ago) — at most once a
+    second, so a flood from elsewhere can't make us re-read them constantly."""
+    import time
+
+    if same_network(addr):
+        return True
+    now = time.monotonic()
+    if now - _FRESH_CHECK["at"] < 1.0:
+        return False
+    _FRESH_CHECK["at"] = now
+    return same_network(addr, fresh=True)
 
 
 def is_vpn_interface(iface: dict[str, Any]) -> bool:
@@ -147,12 +214,12 @@ _IFACE_CACHE: dict[str, Any] = {"at": 0.0, "value": []}
 _IFACE_TTL = 5.0
 
 
-def list_interfaces() -> list[dict[str, Any]]:
+def list_interfaces(*, fresh: bool = False) -> list[dict[str, Any]]:
     """Interfaces, cached briefly (consulted on every incoming announce)."""
     import time
 
     now = time.monotonic()
-    if _IFACE_CACHE["value"] and now - _IFACE_CACHE["at"] < _IFACE_TTL:
+    if not fresh and _IFACE_CACHE["value"] and now - _IFACE_CACHE["at"] < _IFACE_TTL:
         return [dict(i) for i in _IFACE_CACHE["value"]]
     value = _list_interfaces_uncached()
     _IFACE_CACHE["at"] = now

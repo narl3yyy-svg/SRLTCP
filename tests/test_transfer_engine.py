@@ -396,3 +396,14 @@ def test_refused_lanes_cap_how_many_are_dialed(backend: MessagingBackend) -> Non
     backend._lane_opened["l3"] = tr.time.monotonic()  # refused as soon as it opened
     backend._lane_closed("l3")
     assert backend._lane_cap[hash_id][0] == 1
+
+
+async def test_offer_flood_from_a_contact_is_capped(pair: Any) -> None:  # type: ignore[no-untyped-def]
+    """A contact can't pile up unlimited unfinished files (memory, disk inodes, chat)."""
+    a, b, *_ = pair
+    ah = a.identities["tcp"].hash_id
+    for i in range(tr.MAX_PENDING_INCOMING + 20):
+        await b._handle_file_offer(ah, encode_payload(
+            {"transfer_id": f"{i:016x}", "filename": f"f{i}", "size": 0}))
+    pending = [t for t in b._transfers.values() if t.sender_hash == ah]
+    assert len(pending) == tr.MAX_PENDING_INCOMING

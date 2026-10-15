@@ -333,6 +333,10 @@ class TCPTransport(Transport):
         for handler in self._datagram_handlers:
             handler(peer, payload)
 
+    def expected_peer(self, peer_id: str) -> str | None:
+        """The contact a punched UDP connection was made for (None: any)."""
+        return getattr(self._connections.get(peer_id), "expected_hash", None)
+
     def send_datagram(self, peer_id: str, payload: bytes) -> bool:
         """Unreliable delivery where the connection supports it (UDP: call
         media, where late is worse than lost). False: use send()."""

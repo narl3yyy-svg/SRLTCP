@@ -570,6 +570,20 @@ class MessagingBackend(
     async def _raise_contact_request(self, link: PeerLink) -> None:
         """Ask the user whether to add a verified peer who has added us."""
         hash_id = link.hash_id
+        if not self._on_our_network(link):
+            # Nobody outside our own networks can find us or knock: requests
+            # only from the same Wi-Fi/LAN or VPN (pairing codes and links,
+            # which carry a one-time token, work from anywhere).
+            log.info("Contact request from %s ignored: not on our network", hash_id[:8])
+            return
+        recent = [t for t in self.__dict__.get("_request_times", []) if time.monotonic() - t < 600]
+        if len(recent) >= 10 and hash_id not in self._contact_requests:
+            # A stream of new identities on the LAN: no more than 10 new
+            # requests (and notifications) per 10 minutes.
+            self.__dict__["_request_times"] = recent
+            return
+        recent.append(time.monotonic())
+        self.__dict__["_request_times"] = recent
         now = time.monotonic()
         if now - self._contact_requests.get(hash_id, 0.0) < 30.0:
             return
@@ -675,6 +689,16 @@ class MessagingBackend(
         if link and link.handshake_complete and self.is_trusted(hash_id):
             await self._send_receipt(link, "", "accepted")
             await self.send_rendezvous(hash_id)
+
+    def _on_our_network(self, link: PeerLink) -> bool:
+        if link.transport != "tcp" or not self.tcp_transport:
+            return link.transport == "serial"  # a cable is as local as it gets
+        if self.tcp_transport.is_tor(link.transport_peer_id) or link.address.startswith("udp:"):
+            return False
+        from srltcp.utils.network import on_our_network
+
+        host = link.address.rsplit(":", 1)[0] if ":" in link.address else link.address
+        return on_our_network(host)
 
     def decline_contact_request(self, hash_id: str) -> None:
         """Dismiss a contact request until the app restarts."""
