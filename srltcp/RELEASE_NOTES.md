@@ -1,5 +1,17 @@
 # SRLTCP Release Notes
 
+## v0.10.3 (2026-10-15)
+
+### QR scanner that focuses
+- **The camera keeps focusing** while you scan, instead of refocusing only
+  every couple of seconds.
+- **Tap to focus** on the code.
+- **Starts zoomed in (about 2×)**, so you can hold the phone farther back:
+  phone cameras can't focus closer than about 10 cm. Pinch or use the slider
+  to zoom, and the **Light** button turns on the flashlight in the dark.
+- Reads codes shown on a dark (dark-mode) screen too, and tries harder on
+  blurry or small codes.
+
 ## v0.10.2 (2026-10-15)
 
 ### Tor files no longer freeze for 40 seconds

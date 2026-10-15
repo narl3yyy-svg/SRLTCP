@@ -6,6 +6,7 @@ import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.webkit.PermissionRequest
 import org.json.JSONObject
+import com.google.zxing.client.android.Intents
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import android.content.Intent
@@ -581,6 +582,9 @@ class MainActivity : AppCompatActivity() {
             .setPrompt("Scan the SRLTCP code on the other device")
             .setBeepEnabled(false)
             .setOrientationLocked(false)
+            .setCaptureActivity(QrScanActivity::class.java)
+            .addExtra(Intents.Scan.SCAN_TYPE, Intents.Scan.MIXED_SCAN) // light or dark codes
+            .addExtra("TRY_HARDER", true)
         try {
             qrScanLauncher.launch(options)
         } catch (e: Exception) {
