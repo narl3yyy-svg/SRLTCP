@@ -16,6 +16,12 @@
 - **See the circuits:** a file moving over Tor shows "Tor ×N" (how many
   circuits carry it) next to its speed.
 
+### Fixed
+- The first 0.10.2 download still contained the 0.10.1 app (it showed
+  v0.10.1 at the bottom of the screen and had none of the fixes above).
+  Install the new download over it; your chats are kept. The build now
+  always includes the current app code and stops if the versions don't match.
+
 ## v0.10.1 (2026-10-15)
 
 ### Faster files when you start on Tor
