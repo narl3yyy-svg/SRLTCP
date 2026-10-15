@@ -1,5 +1,13 @@
 # SRLTCP Release Notes
 
+## v0.10.9 (2026-10-15)
+
+### New logo
+- **"Cipher rings":** neon green rings like a cipher wheel around a core, on
+  black. Used for the app icon (it fills round, squircle and rounded-square
+  shapes), the themed icon on Android 13+, the status-bar and notification
+  icon, and the browser tab on a PC.
+
 ## v0.10.8 (2026-10-15)
 
 ### Fixes
