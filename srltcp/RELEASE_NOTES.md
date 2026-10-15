@@ -1,5 +1,11 @@
 # SRLTCP Release Notes
 
+## v0.10.8 (2026-10-15)
+
+### Fixes
+- **App icon centered.** The logo sat a little to the right and up; it's now
+  in the middle of the icon (also the themed and notification icons).
+
 ## v0.10.7 (2026-10-15)
 
 ### Fixes
