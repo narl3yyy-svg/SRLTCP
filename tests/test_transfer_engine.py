@@ -1,4 +1,4 @@
-"""Windowed transfers: ordering, verification, cancel both ways, recovery, Tor lanes."""
+"""Windowed transfers: ordering, verification, cancel both ways, recovery."""
 
 from __future__ import annotations
 
@@ -6,24 +6,19 @@ import asyncio
 import hashlib
 import os
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
 import srltcp.core.messaging.transfer as tr
 from srltcp.core.messaging.backend import MessagingBackend, NodeConfig
-from srltcp.core.messaging.links import PeerLink
 from srltcp.core.messaging.models import FileTransfer, TransferState
-from srltcp.core.protocol.crypto import CryptoBox, SessionKeys
 from srltcp.core.protocol.messages import (
-    Flags,
     MessageType,
-    build_header,
     encode_payload,
-    header_aad,
     pack_file_chunk,
 )
-from srltcp.transports.base import TransportPeer
 from tests.test_e2e_nodes import make_node, trust, wait_for
 
 SENDER = "f" * 32
@@ -229,65 +224,6 @@ async def test_reoffer_of_cancelled_transfer_is_refused(  # type: ignore[no-unty
     assert await wait_for(lambda: a._transfers[tid].state == "cancelled", timeout=5)
 
 
-def test_lane_join_accepts_session_key_only(backend: MessagingBackend) -> None:
-    keys_a = SessionKeys(send_key=b"\x01" * 32, recv_key=b"\x02" * 32, salt=b"")
-    keys_b = SessionKeys(send_key=b"\x02" * 32, recv_key=b"\x01" * 32, salt=b"")
-    sender, receiver = CryptoBox(keys_a), CryptoBox(keys_b)
-    assert sender.lane_hint(outgoing=True) == receiver.lane_hint(outgoing=False)
-    assert sender.lane_hint(outgoing=True) != sender.lane_hint(outgoing=False)
-
-    hash_id = "c" * 32
-    from srltcp.core.trusted import TrustedPeer
-
-    backend.trusted.add(TrustedPeer(hash_id=hash_id, name="peer"))
-    link = PeerLink(hash_id=hash_id, transport_peer_id="main", transport="tcp",
-                    address="tor", public_key=b"", handshake_complete=True, crypto=receiver)
-    backend.register_link(link)
-
-    class FakeTcp:
-        tuned: list[str] = []
-
-        def is_tor(self, peer_id: str) -> bool:
-            return True
-
-        def tune_for_lane(self, peer_id: str, high: int) -> None:
-            self.tuned.append(peer_id)
-
-        async def disconnect(self, peer_id: str) -> None:
-            pass
-
-    backend.tcp_transport = FakeTcp()  # type: ignore[assignment]
-    flags = Flags.ENCRYPTED | Flags.E2EE
-
-    def join(box: CryptoBox) -> bytes:
-        sealed = box.encrypt(b"srltcp-lane", header_aad(MessageType.LANE_JOIN, flags))
-        return sender.lane_hint(outgoing=True) + sealed
-
-    async def run() -> None:
-        forged = CryptoBox(SessionKeys(send_key=b"\x09" * 32, recv_key=b"\x09" * 32, salt=b""))
-        await backend._handle_lane_join(TransportPeer("lane-x", "tor", "tcp"), flags, join(forged))
-        assert backend.lane_owner("lane-x") is None
-        await backend._handle_lane_join(TransportPeer("lane-1", "tor", "tcp"), flags, join(sender))
-        assert backend.lane_owner("lane-1") == hash_id
-        # File chunks on the lane are routed to the session.
-        chunk = pack_file_chunk(TID, 0, b"data")
-        sealed = sender.encrypt(chunk, header_aad(MessageType.FILE_CHUNK, flags))
-        backend._handle_file_chunk = AsyncMock()  # type: ignore[method-assign]
-        await backend._on_transport_frame(
-            TransportPeer("lane-1", "tor", "tcp"),
-            build_header(MessageType.FILE_CHUNK, flags=flags, body=sealed),
-        )
-        backend._handle_file_chunk.assert_awaited_once()
-        # Anything else on a lane is ignored.
-        text = sender.encrypt(b"{}", header_aad(MessageType.TEXT, flags))
-        backend._handle_text = AsyncMock()  # type: ignore[method-assign]
-        await backend._on_transport_frame(
-            TransportPeer("lane-1", "tor", "tcp"),
-            build_header(MessageType.TEXT, flags=flags, body=text),
-        )
-        backend._handle_text.assert_not_called()
-
-    asyncio.run(run())
 
 
 async def test_early_chunks_cannot_exhaust_memory(
@@ -319,83 +255,12 @@ async def test_ack_from_another_contact_is_ignored(
     assert backend._out[transfer.id].result is None
 
 
-async def test_lane_join_refused_off_tor(backend: MessagingBackend) -> None:
-    class FakeTcp:
-        def is_tor(self, peer_id: str) -> bool:
-            return False
-
-    backend.tcp_transport = FakeTcp()  # type: ignore[assignment]
-    await backend._handle_lane_join(TransportPeer("lan-x", "10.0.0.2:1", "tcp"), 0, b"\0" * 64)
-    assert backend.lane_owner("lan-x") is None
 
 
-class FakeLanes:
-    """Just enough of the TCP transport for lane bookkeeping."""
-
-    def __init__(self, lanes: list[str]) -> None:
-        self.up = set(lanes)
-        self.sent: list[str] = []
-        self.closed: list[str] = []
-
-    def has_peer(self, peer_id: str) -> bool:
-        return peer_id in self.up
-
-    def buffered(self, peer_id: str) -> int:
-        return 0
-
-    async def send_framed(self, peer_id: str, frame: bytes) -> None:
-        self.sent.append(peer_id)
-
-    async def disconnect(self, peer_id: str) -> None:
-        self.up.discard(peer_id)
-        self.closed.append(peer_id)
 
 
-async def test_stuck_lane_is_replaced_without_resending_the_window(
-    backend: MessagingBackend, tmp_path: Path
-) -> None:
-    """The chunk the receiver waits for sits on a stuck Tor circuit: only that
-    circuit's chunks go out again (on the others), and it is dropped."""
-    backend.identities["tcp"] = backend.identity_store.load_or_create("me", "tcp")
-    hash_id, size = "b" * 32, 6 * 64 * 1024
-    src = tmp_path / "out.bin"
-    src.write_bytes(os.urandom(size))
-    transfer = backend._new_outgoing(hash_id, src, "tcp", None)
-    keys = SessionKeys(send_key=b"\x01" * 32, recv_key=b"\x02" * 32, salt=b"")
-    link = PeerLink(hash_id=hash_id, transport_peer_id="main", transport="tcp",
-                    address="tor", public_key=b"", handshake_complete=True, crypto=CryptoBox(keys))
-    fake = FakeLanes(["lane-a", "lane-b", "lane-c"])
-    backend.tcp_transport = fake  # type: ignore[assignment]
-    backend._tor_lanes[hash_id] = ["lane-a", "lane-b", "lane-c"]
-    for lane in fake.up:
-        backend._lane_owner[lane] = hash_id
-    n = 64 * 1024
-    out = tr._Outgoing(acked=n, next=size, hashed=size)
-    out.lane_of = {i * n: (["lane-a", "lane-b", "lane-c"][i % 3], n) for i in range(6)}
-    out.lane_of[n] = ("lane-b", n)  # the one the receiver waits for
-    out.lane_of[4 * n] = ("lane-b", n)
-    with open(src, "rb") as fh:
-        await backend._repair_lanes(hash_id, link, fh, out, transfer)
-    await asyncio.sleep(0)
-    assert backend._tor_lanes[hash_id] == ["lane-a", "lane-c"]
-    assert "lane-b" not in backend._lane_owner and fake.closed == ["lane-b"]
-    assert len(fake.sent) == 2 and "lane-b" not in fake.sent  # its 2 chunks, nothing else
-    assert {lane for lane, _ in out.lane_of.values()} == {"lane-a", "lane-c"}
-    assert not out.rewind and out.next == size
 
 
-def test_refused_lanes_cap_how_many_are_dialed(backend: MessagingBackend) -> None:
-    """An older contact takes fewer lanes: lanes it closes right away aren't redialed."""
-    hash_id = "b" * 32
-    backend._tor_lanes[hash_id] = ["l1", "l2", "l3"]
-    for lane in ("l1", "l2", "l3"):
-        backend._lane_owner[lane] = hash_id
-    backend._lane_opened["l1"] = tr.time.monotonic() - 600  # worked for a long time
-    backend._lane_closed("l1")
-    assert hash_id not in backend._lane_cap
-    backend._lane_opened["l3"] = tr.time.monotonic()  # refused as soon as it opened
-    backend._lane_closed("l3")
-    assert backend._lane_cap[hash_id][0] == 1
 
 
 async def test_offer_flood_from_a_contact_is_capped(pair: Any) -> None:  # type: ignore[no-untyped-def]

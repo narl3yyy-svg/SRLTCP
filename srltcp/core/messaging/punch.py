@@ -59,7 +59,7 @@ PUNCH_ATTEMPT_TIMEOUT = 1.5
 PUNCH_FOLLOWER_DELAY = 1.0  # the answering side starts dialing a moment later
 PUNCH_ANSWER_EVERY = 8.0  # a contact can start at most one round this often (each is small)
 PUNCH_RETRY_EVERY = 120.0  # while on the relay
-PUNCH_BACKOFF = (30.0, 60.0, 120.0, 300.0)  # after 1, 2, 3, 4+ failed rounds
+PUNCH_BACKOFF = (15.0, 30.0, 60.0, 120.0)  # after 1, 2, 3, 4+ failed rounds
 MAX_CANDIDATES = 6
 
 
@@ -164,6 +164,7 @@ class PunchMixin:
         self._peer_udp: dict[str, list[tuple[str, int]]] = {}
         self._udp_offers: dict[str, tuple[bytes, bytes, float]] = {}  # our secret, id, when
         self._prime_max: dict[str, int] = {}  # highest priming hop limit per contact
+        self._punch_asked: dict[str, float] = {}
 
     def _prime_hops(self: MessagingBackend, hash_id: str) -> tuple[int, ...]:
         return tuple(range(2, self._prime_max.get(hash_id, 4) + 1))
@@ -360,6 +361,18 @@ class PunchMixin:
             udp_fields = {"w": [list(c) for c in mine_udp], "k": secret.hex(), "i": my_id.hex()}
         await self._send_punch(hash_id, "o", mine, udp_fields)
 
+    def ask_for_punch(self: MessagingBackend, hash_id: str) -> None:
+        """We have something waiting for the direct path but the contact
+        leads punching (lower identity hash): ask it to start a round now
+        (at most every few seconds)."""
+        now = time.monotonic()
+        if now - self._punch_asked.get(hash_id, -PUNCH_ANSWER_EVERY) < PUNCH_ANSWER_EVERY:
+            return
+        self._punch_asked[hash_id] = now
+        task = asyncio.ensure_future(self._send_punch(hash_id, "r", []))
+        self.__dict__.setdefault("_udp_tasks", set()).add(task)
+        task.add_done_callback(self.__dict__["_udp_tasks"].discard)
+
     async def _send_punch(
         self: MessagingBackend,
         hash_id: str,
@@ -384,6 +397,10 @@ class PunchMixin:
         link = self.get_link(hash_id)
         if not link or (link.transport != "relay" and not self._link_on_tor(link)):
             return  # already direct (or no session): nothing to punch
+        if phase == "r":
+            if self._me_hash() < hash_id:  # we lead: start a round (rate-limited there)
+                self.request_direct_upgrade(hash_id, punch=True)
+            return
         if phase == "o":
             if self._me_hash() < hash_id:
                 return  # offers come from the lower hash only
@@ -636,7 +653,7 @@ class PunchMixin:
             "their_ipv6": any(":" in h for h, _p in theirs),
             "my_public": bool(mine), "their_public": bool(theirs),
             "symmetric_nat": symmetric, "direct_tries_failed": failed,
-            "tor_circuits": self.tor_circuits(hash_id), "reason": reason, "tips": tips,
+            "reason": reason, "tips": tips,
         }
 
     async def diagnose_contact(

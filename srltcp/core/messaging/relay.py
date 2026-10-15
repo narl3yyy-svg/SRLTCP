@@ -714,7 +714,10 @@ class RelayMixin:
             # One side drives upgrades so both don't race each other.
             if self._me_hash() > hash_id or hash_id in self._upgrades:
                 continue
-            every = UPGRADE_EVERY_BUSY if self.has_active_transfer_for(hash_id) else UPGRADE_EVERY
+            # Over Tor nothing but the setup goes, so what's waiting needs the
+            # direct path: keep at it as often as during a transfer.
+            busy = on_tor or self.has_active_transfer_for(hash_id)
+            every = UPGRADE_EVERY_BUSY if busy else UPGRADE_EVERY
             if now - self._upgrade_attempts.get(hash_id, 0.0) < every:
                 continue
             # A running file transfer does not hold us back: it resends from
@@ -735,6 +738,10 @@ class RelayMixin:
         if not link or not link.handshake_complete or not self.tcp_transport:
             return
         if link.transport != "relay" and not self._link_on_tor(link):
+            return
+        if self._me_hash() > hash_id and punch:
+            # The other side leads hole punching: ask it to start a round now.
+            self.ask_for_punch(hash_id)
             return
         if self._me_hash() > hash_id or hash_id in self._upgrades or self._call_active():
             return

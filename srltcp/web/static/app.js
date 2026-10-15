@@ -561,7 +561,10 @@
             if (sendBtn) sendBtn.disabled = false;
           }
           // Connection changes show only in that contact's open chat.
-          if (chatIsOpen(data.hash_id) && (state.chatNotices?.[data.hash_id] || []).length) {
+          if (chatIsOpen(data.hash_id) && isTorAddress(data.address)) {
+            // Tor is only the doorbell: nothing is sent over it.
+            addChatNotice(data.hash_id, "Found them over Tor — connecting directly. Messages and files wait until the direct connection is up.", "up");
+          } else if (chatIsOpen(data.hash_id) && (state.chatNotices?.[data.hash_id] || []).length) {
             addChatNotice(data.hash_id, `Connected again ${pathLabel(data.transport, data.address)}`, "up");
           }
           logActivity(`Link up: ${data.name || data.hash_id?.slice(0, 8)}`);
@@ -1835,13 +1838,13 @@
     }
     const transport = activeLinkTransport(hashId);
     const onTor = transport === "tcp" && isTorAddress(activeLinkForPeer(hashId)?.address);
-    const label = transport === "serial" ? "SERIAL" : transport === "relay" ? "RELAY" : onTor ? "TOR" : "DIRECT";
+    const label = transport === "serial" ? "SERIAL" : transport === "relay" ? "RELAY" : onTor ? "CONNECTING" : "DIRECT";
     badge.textContent = label;
     badge.title = transport === "relay"
       ? "Through your internet relay (it can't read anything). Switches to direct when possible."
-      : onTor ? "Over Tor: works on any network; neither of you sees the other's IP address. Switches to direct when possible."
+      : onTor ? "Found over Tor, setting up a direct connection. Tor is only used to find each other: messages, files and calls wait for the direct connection."
       : transport === "serial" ? "Serial / radio link" : "Direct connection, no server in between";
-    badge.className = `transport-badge header-badge ${transport}`;
+    badge.className = `transport-badge header-badge ${onTor ? "connecting" : transport}`;
     badge.removeAttribute("aria-hidden");
   }
 
@@ -3132,9 +3135,7 @@
     const speed = live.speed_mbps;
     const stateLabel = live.state || "transferring";
     const filename = live.filename || m.text || "file";
-    const circuits = stateLabel === "transferring" ? Number(live.tor_circuits || 0) : 0;
-    const torStr = circuits ? ` · Tor ×${circuits}` : "";
-    const speedStr = (speed ? ` · ${Number(speed).toFixed(2)} MB/s` : "") + torStr;
+    const speedStr = speed ? ` · ${Number(speed).toFixed(2)} MB/s` : "";
     const fileUrl = tid ? `/api/transfers/${encodeURIComponent(tid)}/file` : "";
     const downloadUrl = fileUrl ? `${fileUrl}?download=1` : "";
     const cancelled = stateLabel === "cancelled";
@@ -4862,7 +4863,7 @@
     return `<p><strong>Speed:</strong> ${escapeHtml(sp.reason || "")}</p>` +
       `<p class="muted">Public address here: ${yn(sp.my_public)} · on their side: ${yn(sp.their_public)}` +
       ` · IPv6 here: ${yn(sp.my_ipv6)}` + (sp.symmetric_nat ? " · symmetric NAT here" : "") +
-      (sp.tor_circuits ? ` · Tor circuits: ${sp.tor_circuits}` : "") + `</p>` +
+      `</p>` +
       (tips ? `<ul>${tips}</ul>` : "");
   }
   document.querySelectorAll(".share-tab").forEach((b) => {

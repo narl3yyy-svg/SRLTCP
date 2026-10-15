@@ -5,8 +5,10 @@
         .venv/bin/python scripts/simulate_tor.py
 
 Checks: onion addresses are exchanged inside the encrypted session; with the
-direct path gone, a message and a file are delivered over Tor; a stranger who knows the
-onion address is refused; turning Tor off removes the address from contacts.
+direct path gone the contacts find each other over Tor, but Tor is only the
+doorbell: a message and a file wait for a direct connection instead of going
+over it; a stranger who knows the onion address is refused; turning Tor off
+removes the address from contacts.
 """
 
 from __future__ import annotations
@@ -143,69 +145,23 @@ async def main() -> int:
         ok = await wait_for(lambda: bool(a.get_link(bh) and a.get_link(bh).handshake_complete), 120)
         check("contacts reconnect over Tor by themselves after the direct path is gone", ok,
               f"{time.monotonic() - start:.0f}s")
-        start = time.monotonic()
-        await a.send_message(bh, "hello over tor")
-        ok = await wait_for(lambda: "hello over tor" in texts(b), 120)
-        link = a.get_link(bh)
-        check("message delivered over Tor with no direct path", ok,
-              f"{time.monotonic() - start:.1f}s via {link.address if link else '-'}")
-        await b.send_message(ah, "reply over tor")
-        ok = await wait_for(lambda: "reply over tor" in texts(a), 60)
-        check("reply delivered back over the same Tor session", ok)
+        # Tor is only the doorbell: a message and a file wait, nothing of them
+        # crosses Tor (here there's no direct path, so they keep waiting).
+        await a.send_message(bh, "waits for direct")
         src = base / "photo.jpg"
-        src.write_bytes(os.urandom(8_000_000))
-        start = time.monotonic()
+        src.write_bytes(os.urandom(2_000_000))
         sent = await a.send_file(bh, src)
         tid = sent["id"] if sent else ""
-        lanes_seen = 0
-        shown = {"a": 0, "b": 0}  # what each side's file bubble says (Tor ×N)
-
-        def done() -> bool:
-            nonlocal lanes_seen
-            lanes_seen = max(lanes_seen, len(a._tor_lanes.get(bh, [])))
-            shown["a"] = max(shown["a"], a.tor_circuits(bh))
-            shown["b"] = max(shown["b"], b.tor_circuits(ah))
-            return tid in b._transfers and b._transfers[tid].state == "complete"
-
-        ok = await wait_for(done, 180)
-        took = time.monotonic() - start
-        check("8 MB file delivered over Tor", ok and b._incoming_paths[tid].read_bytes()
-              == src.read_bytes(), f"{took:.1f}s, {8 / took:.2f} MB/s")
-        check("file data spread over parallel Tor circuits (lanes)", lanes_seen >= 2,
-              f"{lanes_seen} lanes")
-        check("both sides show how many Tor circuits carry the file",
-              shown["a"] == shown["b"] == lanes_seen + 1, f"sender {shown['a']}, "
-              f"receiver {shown['b']}")
-        ok = await wait_for(lambda: a._transfers[tid].state == "complete", 20)
-        check("sender sees the file verified by the receiver", ok)
-        # The sender doesn't know the receiver's onion address (the receiver
-        # reached it over Tor first): the receiver opens the lanes instead.
-        a._close_lanes(bh)
-        b._close_lanes(ah)
-        a.trusted.update(bh, onion="")
-        a._lane_tried.clear()
-        await asyncio.sleep(1)
-        src2 = base / "video.mp4"
-        src2.write_bytes(os.urandom(8_000_000))
-        start = time.monotonic()
-        sent = await a.send_file(bh, src2)
-        tid2 = sent["id"] if sent else ""
-        theirs = 0
-
-        def done2() -> bool:
-            nonlocal theirs
-            theirs = max(theirs, len(b._tor_lanes.get(ah, [])))
-            return tid2 in b._transfers and b._transfers[tid2].state == "complete"
-
-        ok = await wait_for(done2, 180)
-        took = time.monotonic() - start
-        check("sender without the receiver's onion: the receiver opens the lanes",
-              ok and theirs >= 2 and b._incoming_paths[tid2].read_bytes() == src2.read_bytes(),
-              f"{theirs} lanes from the receiver, {took:.1f}s, {8 / took:.2f} MB/s")
-        await b.send_message(ah, "chat after a file over tor")
-        ok = await wait_for(lambda: "chat after a file over tor" in texts(a), 30)
-        check("chat still flows on the main circuit", ok)
-
+        await asyncio.sleep(20)
+        status = next((m["status"] for m in a.get_messages() if m["text"] == "waits for direct"), "")
+        check("message waits instead of going over Tor",
+              status == "pending" and "waits for direct" not in texts(b), f"status {status}")
+        check("file waits instead of going over Tor",
+              tid not in b._transfers and a._transfers[tid].state == "paused",
+              a._transfers[tid].state if tid in a._transfers else "-")
+        link = a.get_link(bh)
+        check("the Tor session stays up for setting up a direct path",
+              bool(link and link.handshake_complete and a._link_on_tor(link)))
         # A stranger who somehow knows Alice's onion address gets nothing.
         m.trusted.add(TrustedPeer(hash_id=ah, name="alice", public_key=a.identities[
             "tcp"].public_bytes().hex(), onion=a._tor_onion))

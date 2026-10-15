@@ -1723,6 +1723,7 @@ html, body { touch-action: pan-x pan-y; }
 .relay-status { white-space: pre-line; font-size: 0.8rem; color: var(--text-muted, #8b93a8); margin: 0.25rem 0 0.5rem; overflow-wrap: anywhere; }
 .relay-status.ok { color: var(--success, #3ecf8e); }
 .transport-badge.relay { background: rgba(176, 132, 255, 0.15); color: #b084ff; }
+.transport-badge.connecting { background: rgba(240, 180, 60, 0.15); color: #f0b43c; }
 
 /* ── Share window ── */
 .share-tabs { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0.25rem 0 0.9rem; }

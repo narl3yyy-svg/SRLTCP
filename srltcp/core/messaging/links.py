@@ -60,6 +60,16 @@ class PeerLinkMixin:
     def get_link(self: MessagingBackend, hash_id: str) -> PeerLink | None:
         return self._links.get(hash_id)
 
+    def data_link(self: MessagingBackend, hash_id: str) -> PeerLink | None:
+        """The contact's session if it may carry data. Tor is only the
+        doorbell (contacts find each other and set up a direct connection
+        over it): a session over Tor returns None, and messages, files and
+        calls wait for the direct connection."""
+        link = self._links.get(hash_id)
+        if not link or not link.handshake_complete or self._link_on_tor(link):
+            return None
+        return link
+
     def get_link_by_peer_id(self: MessagingBackend, peer_id: str) -> PeerLink | None:
         hash_id = self._peer_id_to_hash.get(peer_id)
         if hash_id:

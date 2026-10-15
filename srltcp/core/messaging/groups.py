@@ -366,8 +366,8 @@ class GroupMixin:
         *,
         queue_kind: str = "",
     ) -> bool:
-        link = self.get_link(hash_id)
-        if not link or not link.handshake_complete or not self._is_link_reachable(link):
+        link = self.data_link(hash_id)
+        if not link or not self._is_link_reachable(link):
             if queue_kind:
                 self._queue_group_control(hash_id, queue_kind, payload)
             if self.is_trusted(hash_id):

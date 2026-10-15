@@ -14,11 +14,11 @@ Protocol (every message travels inside the session)::
 - Window: the sender keeps at most one path's window of unconfirmed bytes in
   flight. That keeps a fast link busy, bounds the receiver's memory and makes
   the sender's progress bar show what has really arrived.
-- Recovery: no confirmation for a while, a path switch (Tor/relay -> LAN) or
-  a lost Tor lane makes the sender go back to the last confirmed byte; the
+- Recovery: no confirmation for a while or a path switch (relay -> direct)
+  makes the sender go back to the last confirmed byte; the
   receiver drops what it already has. A transfer survives link drops and
   path changes without corrupting the file.
-- Order: chunks may arrive out of order (parallel Tor circuits). The receiver
+- Order: chunks may arrive out of order (after a path switch). The receiver
   holds early ones in memory (bounded) and writes strictly sequentially
   through one file handle, so the file never has holes, and both sides hash
   while streaming: no extra pass over the file before or after.
@@ -123,8 +123,6 @@ class _Outgoing:
     progress_at: float = field(default_factory=time.monotonic)
     stalls: int = 0
     rewind: bool = False
-    lane_of: dict[int, tuple[str, int]] = field(default_factory=dict)  # offset -> (lane, length)
-    repair_at: float = 0.0
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     compress: bool = True
     skip: int = 0  # chunks to send uncompressed before trying again
@@ -436,8 +434,6 @@ class TransferMixin:
             )
         if link.transport == "relay":
             return PathParams(C.RELAY_CHUNK_SIZE, C.RELAY_WINDOW, C.TRANSFER_STALL_SLOW, 3)
-        if self._link_on_tor(link):
-            return PathParams(C.TOR_CHUNK_SIZE, C.TOR_WINDOW, C.TRANSFER_STALL_SLOW, 3)
         return PathParams(C.CHUNK_SIZE, C.CHUNK_WINDOW, C.TRANSFER_STALL, 1)
 
     # ── Progress ──
@@ -478,9 +474,6 @@ class TransferMixin:
                 self._transfers.pop(transfer.id, None)
             return
         payload = transfer.to_dict()
-        if transfer.state == TransferState.TRANSFERRING:
-            # Shown in the bubble: how many Tor circuits carry it (0 = not Tor).
-            payload["tor_circuits"] = self.tor_circuits(self._peer_hash_for_transfer(transfer))
         if self._on_transfer_progress:
             await self._on_transfer_progress(payload)
         await self._update_file_message(payload, notify=terminal or force)
@@ -595,8 +588,6 @@ class TransferMixin:
             offer["ttl"] = int(transfer.metadata["ttl"])
         if transfer.metadata.get("sync"):
             offer["sync"] = transfer.metadata["sync"]
-        if self.lanes_wanted(link.hash_id):
-            offer["lr"] = 1  # please open the extra Tor circuits (we can't)
         packet = self._seal(link, MessageType.FILE_OFFER, encode_payload(offer))
         await self._send_raw(link.transport_peer_id, link.transport, packet)
 
@@ -745,10 +736,6 @@ class TransferMixin:
         await self._send_control(
             hash_id, MessageType.FILE_ACCEPT, {"transfer_id": transfer_id, "offset": 0}
         )
-        if self._link_on_tor(link):
-            self.request_direct_upgrade(hash_id, punch=True)  # a file over Tor: try direct now
-            if data.get("lr"):
-                self.request_lanes(hash_id)
         if sync_meta is not None:
             return  # no chat bubble for sync files
         if self._on_file_offer:
@@ -947,9 +934,6 @@ class TransferMixin:
         for tid, other in list(self._in.items()):
             if other is rx:
                 self._in.pop(tid, None)
-                done = self._transfers.get(tid)
-                if done:
-                    self._lanes_maybe_idle(done.sender_hash)  # lanes we opened for it
 
     async def _handle_file_complete(self: MessagingBackend, hash_id: str, body: bytes) -> None:
         data = decode_payload(body)
@@ -1048,8 +1032,6 @@ class TransferMixin:
             out.progress_at = time.monotonic()
             out.stalls = 0
             transfer.offset = offset
-            if out.lane_of:
-                out.lane_of = {k: v for k, v in out.lane_of.items() if k + v[1] > offset}
         out.next = max(out.next, out.acked)
         if "ok" in data and offset >= transfer.size:
             out.result = bool(data.get("ok"))
@@ -1090,55 +1072,11 @@ class TransferMixin:
         while time.monotonic() < deadline:
             if transfer.state == TransferState.CANCELLED:
                 return None
-            link = self.get_link(hash_id)
-            if link and link.handshake_complete:
+            link = self.data_link(hash_id)  # (never over Tor: it only rings the bell)
+            if link:
                 return link
             await asyncio.sleep(0.25)
         return None
-
-    async def _repair_lanes(
-        self: MessagingBackend,
-        hash_id: str,
-        link: PeerLink,
-        fh: BinaryIO,
-        out: _Outgoing,
-        transfer: FileTransfer,
-    ) -> None:
-        """The receiver has waited a while for the chunk at ``out.acked``: the
-        Tor circuit carrying it is stuck. Send what that circuit holds on the
-        other circuits and replace it; the rest of the window stays where it is."""
-        transport = self.tcp_transport
-        if not transport:
-            return
-        stuck = next(
-            (lane for off, (lane, n) in out.lane_of.items() if off <= out.acked < off + n), None
-        )
-        if stuck:
-            self._drop_lane(hash_id, stuck)
-            redo = sorted((off, n) for off, (lane, n) in out.lane_of.items() if lane == stuck)
-        else:  # it went on the main circuit, or its record is gone: just that chunk
-            redo = [(out.acked, min(C.TOR_CHUNK_SIZE, transfer.size - out.acked))]
-        lanes = [p for p in self._tor_lanes.get(hash_id, []) if transport.has_peer(p)]
-        log.info("Transfer %s waits at %d — resending %d chunk(s) from a stuck Tor circuit",
-                 transfer.id, out.acked, len(redo))
-        for off, n in redo:
-            if off + n <= out.acked or off >= out.next:
-                continue
-            target = min(lanes, key=transport.buffered) if lanes else link.transport_peer_id
-            nonce, aes = link.crypto.reserve()
-            frame, sent = await asyncio.to_thread(
-                self._prep_chunk, fh, out, transfer, off, n, 0, nonce, aes, True
-            )
-            try:
-                await transport.send_framed(target, frame)
-            except (KeyError, OSError, ConnectionError) as exc:
-                log.debug("Chunk resend to %s failed: %s", hash_id[:8], exc)
-                out.rewind = True
-                return
-            if lanes:
-                out.lane_of[off] = (target, sent)
-            else:
-                out.lane_of.pop(off, None)
 
     def _prep_chunk(
         self: MessagingBackend,
@@ -1200,8 +1138,8 @@ class TransferMixin:
                     return
                 if out.result is not None:
                     break
-                link = self.get_link(hash_id)
-                if not link or not link.handshake_complete:
+                link = self.data_link(hash_id)
+                if not link:
                     link = await self._await_link(hash_id, transfer)
                     if link is None:
                         if transfer.state != TransferState.CANCELLED:
@@ -1217,15 +1155,12 @@ class TransferMixin:
                     if path_key is not None:
                         out.next = out.acked  # new path or keys: in-flight data is gone
                         out.complete_sent = False
-                        out.lane_of.clear()
                     path_key = key
                 if out.rewind:
                     out.rewind = False
                     out.next = out.acked
-                    out.lane_of.clear()
                 params = self._path_params(link)
                 if out.next < transfer.size and out.next - out.acked < params.window:
-                    lanes = self._send_lanes(hash_id, link)
                     length = min(params.chunk, transfer.size - out.next)
                     nonce, aes = link.crypto.reserve()
                     framed = link.transport == "tcp"
@@ -1237,13 +1172,7 @@ class TransferMixin:
                         return
                     try:
                         if framed and self.tcp_transport:
-                            target = (
-                                min(lanes, key=self.tcp_transport.buffered)
-                                if lanes else link.transport_peer_id
-                            )
-                            await self.tcp_transport.send_framed(target, frame)
-                            if lanes:
-                                out.lane_of[out.next] = (target, sent)
+                            await self.tcp_transport.send_framed(link.transport_peer_id, frame)
                         else:
                             await self._send_raw(link.transport_peer_id, link.transport, frame)
                     except (KeyError, OSError, ConnectionError) as exc:
@@ -1265,13 +1194,6 @@ class TransferMixin:
                     )
                 out.wake.clear()
                 wait = params.stall - (now - out.progress_at)
-                if out.lane_of and out.next > out.acked:
-                    due = max(out.progress_at, out.repair_at) + C.TOR_REPAIR - now
-                    if due <= 0:
-                        out.repair_at = now
-                        await self._repair_lanes(hash_id, link, fh, out, transfer)
-                        continue
-                    wait = min(wait, due)
                 if wait > 0:
                     with contextlib.suppress(TimeoutError):
                         await asyncio.wait_for(out.wake.wait(), timeout=wait)
@@ -1281,7 +1203,6 @@ class TransferMixin:
                 out.progress_at = now
                 out.next = out.acked
                 out.complete_sent = False
-                out.lane_of.clear()
                 if out.stalls >= 3:
                     log.warning(
                         "No answer from %s for %s — reconnecting", hash_id[:8], transfer.filename
@@ -1325,7 +1246,6 @@ class TransferMixin:
             if transfer.state in TERMINAL:
                 self._out.pop(transfer.id, None)
                 self._cleanup_temp_zip(transfer)
-            self._lanes_maybe_idle(hash_id)
 
     # ── Resume, cancel ──
 
@@ -1338,8 +1258,8 @@ class TransferMixin:
         if not transfer or transfer.state in TERMINAL:
             return False
         peer_hash = self._peer_hash_for_transfer(transfer)
-        link = self.get_link(peer_hash)
-        if not link or not link.handshake_complete:
+        link = self.data_link(peer_hash)
+        if not link:
             return False
         if self._is_outgoing(transfer):
             # Re-send the full offer: the receiver may never have got it (file

@@ -51,6 +51,17 @@ from srltcp.utils.logging import get_logger
 
 log = get_logger(__name__)
 
+# Over Tor only the connection setup goes (handshake, keep-alive, addresses,
+# hole punching, pairing, receipts, cancels): Tor is the doorbell. Messages,
+# files, calls, groups, shares and sync wait for the direct connection.
+DOORBELL_REFUSED = frozenset({
+    MessageType.TEXT, MessageType.FILE_OFFER, MessageType.FILE_ACCEPT, MessageType.FILE_CHUNK,
+    MessageType.FILE_COMPLETE, MessageType.FILE_RESUME, MessageType.FILE_ACK,
+    MessageType.SHARE_LIST, MessageType.SHARE_REQUEST, MessageType.SYNC,
+    MessageType.CALL_SIGNAL, MessageType.CALL_MEDIA, MessageType.GROUP_UPDATE,
+    MessageType.GROUP_TEXT, MessageType.GROUP_LEAVE,
+})
+
 EventCallback = Callable[..., Awaitable[None]]
 
 MAX_TEXT_BYTES = 65536
@@ -385,9 +396,6 @@ class MessagingBackend(
             await self._handle_discovered(event.peer.address, "tcp", event.data)
         elif event.kind == "connected" and event.peer and event.peer.transport == "tcp":
             self._expire_if_unauthenticated(event.peer.peer_id)
-        elif event.kind == "disconnected" and event.peer and self.lane_owner(event.peer.peer_id):
-            self._lane_closed(event.peer.peer_id)
-            return  # an extra Tor lane, not the session itself
         elif event.kind == "disconnected" and event.peer:
             stale = self.get_link_by_peer_id(event.peer.peer_id)
             link_name = stale.peer_name if stale else ""
@@ -440,7 +448,7 @@ class MessagingBackend(
             link = self.get_link_by_peer_id(peer_id)
             if link and link.handshake_complete:
                 return
-            if self.upgrade_for_peer_id(peer_id) or self.lane_owner(peer_id):
+            if self.upgrade_for_peer_id(peer_id):
                 return
             if self.tcp_transport:
                 log.info("Closing connection %s: no handshake in time", peer_id[:8])
@@ -467,8 +475,6 @@ class MessagingBackend(
                 if peer.transport == "serial":
                     log.info("Serial ANNOUNCE received on %s", peer.address)
                 await self._handle_discovered(peer.address, peer.transport, body)
-            elif msg_type == MessageType.LANE_JOIN:
-                await self._handle_lane_join(peer, flags, body)
             elif msg_type == MessageType.HANDSHAKE:
                 await self._handle_handshake(peer.peer_id, body)
             elif msg_type == MessageType.HANDSHAKE_ACK:
@@ -490,9 +496,6 @@ class MessagingBackend(
     ) -> None:
         """Decrypt and route a message that must travel inside an E2EE session."""
         link = self.get_link_by_peer_id(peer.peer_id)
-        if link is None and msg_type == MessageType.FILE_CHUNK:
-            owner = self.lane_owner(peer.peer_id)  # file data on an extra Tor lane
-            link = self.get_link(owner) if owner else None
         if not link or not link.handshake_complete:
             log.debug("Dropping %s from %s — no session", msg_type.name, peer.peer_id[:8])
             return
@@ -760,7 +763,7 @@ class MessagingBackend(
         self.stamp_ttl(msg, self.disappear_ttl(), msg.timestamp)
         self._messages.append(msg)
         self._persist_messages()
-        if link and link.handshake_complete and self._is_link_reachable(link):
+        if self.data_link(recipient_hash) and link and self._is_link_reachable(link):
             await self._transmit_text(msg)
         else:
             self._kick_connect(recipient_hash, transport)
@@ -769,8 +772,8 @@ class MessagingBackend(
         return msg
 
     async def _transmit_text(self, msg: ChatMessage) -> bool:
-        link = self.get_link(msg.recipient_hash)
-        if not link or not link.handshake_complete:
+        link = self.data_link(msg.recipient_hash)
+        if not link:
             return False
         data: dict[str, Any] = {"id": msg.id, "text": msg.text, "ts": msg.timestamp}
         if msg.metadata.get("ttl"):
@@ -797,6 +800,11 @@ class MessagingBackend(
     def _kick_connect(self, hash_id: str, transport: str = "tcp") -> None:
         """Start a background dial so queued messages flush on link-up."""
         if not self._running:
+            return
+        link = self.get_link(hash_id)
+        if link and link.handshake_complete and self._link_on_tor(link):
+            # Reached over Tor (the doorbell): what's waiting needs the direct path.
+            self.request_direct_upgrade(hash_id, punch=True)
             return
         existing = self._dial_tasks.get(hash_id)
         if existing and not existing.done():
@@ -886,6 +894,9 @@ class MessagingBackend(
     def _seal(
         self, link: PeerLink, msg_type: MessageType, body: bytes, flags: int = 0
     ) -> bytes:
+        if msg_type in DOORBELL_REFUSED and self._link_on_tor(link):
+            # Backstop for data_link(): nothing but connection setup over Tor.
+            raise ConnectionError("Tor only sets up direct connections")
         flags |= Flags.ENCRYPTED | Flags.E2EE
         encrypted = link.crypto.encrypt(body, header_aad(msg_type, flags))
         return build_header(msg_type, flags=flags, body=encrypted)
@@ -900,8 +911,9 @@ class MessagingBackend(
     async def send_call_signal(self, recipient_hash: str, signal: dict[str, Any]) -> bool:
         if not self.is_trusted(recipient_hash):
             return False
-        link = self.get_link(recipient_hash)
-        if not link or not link.handshake_complete:
+        link = self.data_link(recipient_hash)
+        if not link:
+            self._kick_connect(recipient_hash)
             return False
         body = encode_payload(signal)
         if len(body) > 256 * 1024:
@@ -1260,10 +1272,10 @@ class MessagingBackend(
         if not self.trusted.is_trusted(recipient_hash):
             log.warning("Recipient %s not trusted for file send", recipient_hash[:8])
             return None
-        link = self.get_link(recipient_hash)
+        link = self.data_link(recipient_hash)
         effective_transport = link.transport if link else transport
         transfer: FileTransfer | None
-        if not link or not link.handshake_complete:
+        if not link:
             # No session right now (other network, Tor still connecting, phone
             # asleep): queue the file like a message and dial in the
             # background. It is offered as soon as the session is up (the
@@ -1273,8 +1285,8 @@ class MessagingBackend(
                 recipient_hash, path, transport=effective_transport, filename=filename,
                 ttl=self.disappear_ttl(),
             )
-            link = self.get_link(recipient_hash)
-            if link and link.handshake_complete:
+            link = self.data_link(recipient_hash)
+            if link:
                 await self.resume_transfer(transfer.id)  # came up while hashing
             else:
                 self._kick_connect(recipient_hash)

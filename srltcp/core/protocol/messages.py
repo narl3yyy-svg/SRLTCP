@@ -27,7 +27,7 @@ class MessageType(IntEnum):
     FILE_COMPLETE = 0x34
     FILE_RESUME = 0x35
     FILE_ACK = 0x36  # receiver -> sender: bytes on disk (window), then verified
-    LANE_JOIN = 0x37  # extra Tor connection joins a session to carry file data
+    LANE_JOIN = 0x37  # retired (Tor file lanes, until 0.11); ignored
     SHARE_LIST = 0x40
     SHARE_REQUEST = 0x41
     SYNC = 0x42  # folder sync (sync.py)

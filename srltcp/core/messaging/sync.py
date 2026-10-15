@@ -306,7 +306,7 @@ class SyncMixin:
             await asyncio.sleep(SCAN_EVERY)
 
     def _peer_ready(self: MessagingBackend, peer: str) -> bool:
-        link = self.get_link(peer)
+        link = self.data_link(peer)
         return bool(link and link.handshake_complete)
 
     async def _sync_round(self: MessagingBackend, sync: SyncFolder, *, full: bool = False) -> None:

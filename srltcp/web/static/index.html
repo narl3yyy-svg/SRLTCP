@@ -178,7 +178,7 @@
 <input type="checkbox" id="set-shrink-photos" />
 <span>Shrink photos before sending</span>
 </label>
-<small class="field-hint">JPEG, WebP and HEIC photos go out as JPEG with the longest side at most 2560 px, so they send faster over Tor or mobile data, without the location and camera details stored in the photo. Screenshots (PNG), GIFs and photos this device can't open are sent as they are. Off = the original file, untouched.</small>
+<small class="field-hint">JPEG, WebP and HEIC photos go out as JPEG with the longest side at most 2560 px, so they send faster over mobile data, without the location and camera details stored in the photo. Screenshots (PNG), GIFs and photos this device can't open are sent as they are. Off = the original file, untouched.</small>
 </div>
 <div class="settings-panel" data-panel="privacy">
 <p class="hint">Your keys, contacts, chats and settings are stored encrypted on this device. On Android the key is kept by the phone's secure hardware (Keystore), so a copy of the app's files is useless anywhere else.</p>
@@ -220,7 +220,7 @@
 </fieldset>
 </div>
 <div class="settings-panel" data-panel="network">
-<p class="hint">Most people never need to change anything here. SRLTCP picks the best path by itself: same Wi-Fi or VPN first, then a direct internet connection, then your relay, then Tor.</p>
+<p class="hint">Most people never need to change anything here. SRLTCP picks the best path by itself: same Wi-Fi or VPN first, then a direct internet connection, then your relay. Tor only helps devices on different networks find each other; nothing is sent over it.</p>
 <fieldset class="relay-settings">
 <legend>Over the internet</legend>
 <label class="field checkbox-field">
@@ -236,7 +236,7 @@
 <input type="checkbox" id="set-direct-internet" />
 <span>Try direct internet connections</span>
 </label>
-<small class="field-hint">Full speed between different networks (two mobile carriers, home Wi-Fi): the devices connect straight to each other over UDP, the way video calls do, finding each other through Tor or your relay. No port forwarding. Your public IP address is shared only with your contacts, inside the encrypted connection, and a STUN server (below) learns it too; on a direct connection your network can see which IP you talk to. Off = Tor or relay only: contacts never see your IP.</small>
+<small class="field-hint">Full speed between different networks (two mobile carriers, home Wi-Fi): the devices connect straight to each other over UDP, the way video calls do, finding each other through Tor or your relay. No port forwarding. Your public IP address is shared only with your contacts, inside the encrypted connection, and a STUN server (below) learns it too; on a direct connection your network can see which IP you talk to. Off = only the same network or your relay carry messages (never Tor): contacts never see your IP.</small>
 <label class="field">
 <span>STUN servers</span>
 <input type="text" id="set-stun-servers" placeholder="Default: Google and Cloudflare" autocomplete="off" spellcheck="false" />
@@ -245,9 +245,9 @@
 <div class="relay-status" id="relay-status" aria-live="polite"></div>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-tor-enabled" />
-<span>Reach contacts anywhere over Tor</span>
+<span>Find contacts on other networks (Tor)</span>
 </label>
-<small class="field-hint">No server and no port forwarding needed: works from any Wi-Fi or mobile network. Used only when there's no faster path. Only your trusted contacts get your Tor address (inside the encrypted connection), and only they can connect through it; over Tor your contacts don't see your IP address. Both of you need it on. Tor is built into the Android app; on a PC install Tor Browser.</small>
+<small class="field-hint">How two devices on different networks find each other, with no server and no port forwarding: Tor is used only to set up the direct connection. Messages, files and calls never go over Tor; they wait for the direct connection (the chat shows CONNECTING meanwhile). Only your trusted contacts get your Tor address (inside the encrypted connection), and only they can connect through it. Both of you need it on. Tor is built into the Android app; on a PC install Tor Browser.</small>
 <div class="relay-status" id="tor-status" aria-live="polite"></div>
 <small class="field-hint">The relay only forwards sealed, padded packets: it can't read messages, see names or who you talk to, or fake anything. See the Networking guide in the docs for details.</small>
 </fieldset>
@@ -288,7 +288,7 @@
 <label class="field">
 <span>External call relay — TURN/STUN server (leave empty)</span>
 <input type="text" id="set-stun" placeholder="Leave empty — calls already work without it" spellcheck="false" />
-<small>You don't need this: voice and video calls travel inside SRLTCP's own encrypted connection, so they work wherever messages work (Wi-Fi, VPN, relay, Tor). Only fill it in if you run your own TURN server (for example coturn) and want calls to use it as a last resort: enter its address like <code>turn:your.server:3478</code>, then the username and password you configured on that server. Calls stay end-to-end encrypted (DTLS-SRTP); the server only sees encrypted traffic and both IP addresses.</small>
+<small>You don't need this: voice and video calls travel inside SRLTCP's own encrypted connection, so they work wherever messages work (Wi-Fi, VPN, direct internet connections, relay). Only fill it in if you run your own TURN server (for example coturn) and want calls to use it as a last resort: enter its address like <code>turn:your.server:3478</code>, then the username and password you configured on that server. Calls stay end-to-end encrypted (DTLS-SRTP); the server only sees encrypted traffic and both IP addresses.</small>
 </label>
 <div class="field-row" id="turn-credentials">
 <label class="field grow"><span>TURN username</span><input type="text" id="set-turn-user" autocomplete="off" spellcheck="false" /></label>

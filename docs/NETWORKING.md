@@ -13,7 +13,7 @@ For each contact, the app tries these in order and uses the first that works:
 | 1 | **Direct, same network** | Both on the same Wi-Fi, or both on the same VPN (WireGuard) | Only the two devices |
 | 2 | **Direct, across networks** | Two mobile carriers, a phone and a home Wi-Fi, two homes: the devices punch a direct **UDP** connection through both NATs (see below); also one on the VPN and the other on the home Wi-Fi | Only the two devices |
 | 3 | **Internet relay** | Always, as long as both devices can reach your relay | The relay forwards sealed packets it can't read |
-| 4 | **Tor** | Any network that allows Tor, no server and no port forwarding (both devices need *Reach contacts anywhere over Tor* on) | Tor relays carry sealed traffic; your contact doesn't see your IP, and no single Tor relay knows both who you are and who you talk to |
+| 4 | **Tor (doorbell only)** | Finds the contact on any network so a direct connection (2) can be set up; carries no messages, files or calls (both devices need *Find contacts on other networks (Tor)* on) | Tor relays carry sealed traffic; your contact doesn't see your IP, and no single Tor relay knows both who you are and who you talk to |
 
 Every path carries the same end-to-end encrypted session (signed handshake,
 forward secrecy). A path is only a pipe; changing paths never weakens
@@ -64,15 +64,19 @@ contact) shows which case you're in.
    directly through both home routers (hole punching). When that works, the
    relay drops out of the path.
 
-## Tor: reach contacts from any network, no server needed
+## Tor: the doorbell (finding each other, nothing else)
 
-Each device runs Tor and publishes a private *onion service*. Your contacts
-connect to it through the Tor network. That works from any Wi-Fi, mobile data
-or VPN, behind any router or carrier NAT, and needs no server and no port
-forwarding.
+Each device runs Tor and publishes a private *onion service*. Contacts on
+other networks reach each other through it, from any Wi-Fi, mobile data or
+VPN, behind any router or carrier NAT, with no server and no port forwarding.
+**Tor is only used to find each other and set up a direct connection**:
+over it go the handshake, keep-alives, the address swap and the hole punch,
+nothing else. Messages, files, calls, groups, shares and sync **never go over
+Tor**; they wait (the chat header shows **CONNECTING**) and go out the moment
+the direct connection is up, usually within seconds.
 
-- **Turn it on:** *Settings → Network → Reach contacts anywhere over Tor*, on
-  both devices. It's on by default.
+- **Turn it on:** *Settings → Network → Find contacts on other networks
+  (Tor)*, on both devices. It's on by default.
 - **Android:** Tor is built into the app.
 - **PC:** install [Tor Browser](https://www.torproject.org/download/). SRLTCP
   finds its `tor.exe` by itself and starts its own copy in the background; you
@@ -82,31 +86,11 @@ forwarding.
 - **First connection:** the two devices must have met once (pairing on the same
   Wi-Fi/VPN, or over your relay). That's how they swap onion addresses, inside
   the encrypted connection.
-- **When it's used:** only when there's no faster path (same network, VPN,
-  IPv6, relay). The app keeps checking and moves to a direct path as soon as
-  one works. If both devices have IPv6 internet, they agree over Tor to dial
-  each other directly (hole punching, below) and leave Tor for a direct
-  connection; if the network blocks that, they stay on Tor.
-- **Speed:** fine for messages, slow for big files. Tor lets each connection
-  have only about 250 KB in flight per round trip, and onion round trips take
-  0.5-1 s, so one Tor circuit carries roughly 0.3 MB/s however fast your
-  internet is. A file is therefore spread over 8 extra circuits ("lanes",
-  each routed separately, opened for file data only and closed a minute
-  after the last file): typically 1-2 MB/s, depending on the Tor relays you
-  get. Messages and calls stay on the main circuit and don't queue behind the
-  file. Calls work but can be choppier than on a direct path.
-  The file bubble shows how many circuits carry it ("Tor ×9" = main + 8).
-  The sender opens the circuits; if it doesn't know the receiver's onion
-  address yet (the receiver reached it over Tor first), it asks and the
-  receiver opens them, and data flows over circuits opened by either side.
-  A circuit that gets stuck holds up the whole file, so when nothing is
-  confirmed for 6 seconds the chunks it holds go out on the other circuits
-  and a fresh one replaces it. A contact on an older version that accepts
-  fewer circuits is not asked for more.
-- **Leaving Tor for speed:** as soon as a file starts over Tor, both devices
-  look for a direct path (same Wi-Fi, VPN, IPv6), then every 15 seconds
-  while it's moving. When one works, the session moves over in the middle of
-  the file and carries on from where it was, often 10-50× faster.
+- **When the direct connection can't be made** (both phones behind
+  "symmetric" carrier NAT, a network that blocks UDP): messages and files
+  keep waiting, and the app keeps trying (every 15 s, then less often).
+  *Check connection* says why. Wi-Fi on either side usually solves it; a relay
+  of your own carries the traffic in that case too.
 
 Privacy: only your trusted contacts get your onion address, and connections
 through it are only accepted from trusted contacts. A stranger who somehow
@@ -154,10 +138,11 @@ retransmission, congestion control that watches delay as well as loss, so chat
 stays snappy during a big file), and call audio/video go as separate
 datagrams that never wait behind lost file data. If a phone's address changes
 (Wi-Fi to mobile data), authenticated packets from the new address move the
-connection there; if it goes quiet for 30 seconds, Tor or the relay takes over
-and a new round starts.
+connection there; if it goes quiet for 30 seconds, the phones find each other
+again over Tor (or the relay) and a new round starts.
 
-When it doesn't work, Tor or the relay simply keeps carrying the traffic:
+When it doesn't work, your relay carries the traffic if you have one;
+otherwise messages and files wait (Tor never carries them):
 - **"Symmetric" carrier NAT** gives a new random port for every destination,
   which no hole punching can predict. *Check connection* tells you when your
   network does this. Wi-Fi on either side, or IPv6 on mobile data, usually
@@ -184,9 +169,9 @@ privacy addresses are used instead.
 |---|---|---|
 | **Use the internet when there's no LAN/VPN path** | Uses the relay when there's no direct path. Off means LAN/VPN only. | On |
 | **Relay code** | `srltcp-relay://host:port#…`, printed by `srltcp relay`. It contains the server address, the certificate fingerprint (so nobody can impersonate the relay) and the access key. Paste it on one phone; contacts receive it inside the encrypted session. Keep it private. | Empty |
-| **Try direct internet connections** | Hole punching (IPv6 from a Tor session, IPv4 via your relay), described above. Shares your public IP address **only with your contacts**, inside the encrypted session. Off: Tor or relay only, contacts never see your IP. | On |
+| **Try direct internet connections** | Direct UDP (and TCP) connections between networks, described above. Shares your public IP address **only with your contacts** (and a STUN server), inside the encrypted session. Off: only the same network or your relay carry data (Tor never does), contacts never see your IP. | On |
 | **Status** | Which relays you're connected to, how many contacts use each one, and your public address as the relay sees it. This is shown only to you. | — |
-| **Reach contacts anywhere over Tor** | Tor onion service, described above. No server or port forwarding needed. Your Tor address goes only to trusted contacts, and only they can connect through it. | On |
+| **Find contacts on other networks (Tor)** | Tor onion service, described above: only to find each other and set up the direct connection, never for messages or files. No server or port forwarding needed. Your Tor address goes only to trusted contacts, and only they can connect through it. | On |
 
 ### Same Wi-Fi / VPN
 

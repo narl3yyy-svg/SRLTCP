@@ -320,7 +320,7 @@ class SharePeerMixin:
         grant.revoked = True
         recipient_hash = grant.recipient_hash
         self._prune_share_grants()
-        link = self.get_link(recipient_hash)
+        link = self.data_link(recipient_hash)
         if not link or not link.handshake_complete:
             return True
         body = encode_payload({"action": "revoke", "grant_id": grant_id})
@@ -374,7 +374,7 @@ class SharePeerMixin:
             out.append(grant.to_public_dict(remote=False))
         self._save_shares()
         for recipient in {g["recipient_hash"] for g in out}:
-            link = self.get_link(recipient)
+            link = self.data_link(recipient)
             if link and link.handshake_complete:
                 await self.send_pending_share_offers(recipient)
             else:
@@ -383,7 +383,7 @@ class SharePeerMixin:
 
     async def send_pending_share_offers(self: MessagingBackend, recipient_hash: str) -> None:
         """Deliver offers made while this contact was away (called on link-up)."""
-        link = self.get_link(recipient_hash)
+        link = self.data_link(recipient_hash)
         if not link or not link.handshake_complete:
             return
         self._prune_share_grants()
@@ -430,12 +430,12 @@ class SharePeerMixin:
         grant = self._remote_share_grants.get(grant_id)
         if not grant or grant.owner_hash != owner_hash or grant.revoked:
             return None
-        link = self.get_link(owner_hash)
+        link = self.data_link(owner_hash)
         if not link or not link.handshake_complete:
             transport = link.transport if link else "tcp"
             await self.connect_to_peer(owner_hash, transport=transport)
             await self.wait_for_handshake(owner_hash, timeout=10.0)
-            link = self.get_link(owner_hash)
+            link = self.data_link(owner_hash)
         if not link or not link.handshake_complete:
             return None
         identity = self._identity_for_transport(link.transport)
@@ -471,7 +471,7 @@ class SharePeerMixin:
         grant = self._remote_share_grants.get(grant_id)
         if not grant or grant.owner_hash != owner_hash or grant.revoked:
             return False
-        link = self.get_link(owner_hash)
+        link = self.data_link(owner_hash)
         if not link or not link.handshake_complete:
             return False
         identity = self._identity_for_transport(link.transport)
@@ -549,7 +549,7 @@ class SharePeerMixin:
             if prior and prior.owner_hash != hash_id:
                 return
             identity = ""
-            link = self.get_link(hash_id)
+            link = self.data_link(hash_id)
             if link:
                 identity = self._identity_for_transport(link.transport).hash_id
             grant = ShareGrant(
@@ -630,7 +630,7 @@ class SharePeerMixin:
         requester = hash_id
         grant = self._share_grants.get(grant_id)
         action = data.get("action", "")
-        link = self.get_link(hash_id)
+        link = self.data_link(hash_id)
         if not link or not link.handshake_complete:
             return
 

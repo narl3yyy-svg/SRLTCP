@@ -10,6 +10,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
+import pytest
+
 from srltcp.core.messaging.punch import (
     MAX_CANDIDATES,
     PunchMixin,
@@ -270,12 +272,14 @@ async def test_contact_on_tor_moves_to_a_punched_direct_path(
         await b.stop()
 
 
-async def test_a_file_over_tor_looks_for_a_direct_path_at_once(
+async def test_over_tor_nothing_but_connection_setup_goes(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """Tor is many times slower than a direct path: when a file starts over
-    Tor, both sides try for a direct path right away (and forget earlier
-    failed hole-punching rounds) instead of waiting for the next check."""
+    """Tor is only the doorbell: a message and a file to a contact reached
+    over Tor wait (nothing of them crosses Tor), a direct path is asked for at
+    once, and both go out as soon as the session is direct."""
+    from srltcp.core.protocol.messages import MessageType
+
     a, b = make_node(tmp_path, "alice"), make_node(tmp_path, "bob")
     await a.start()
     await b.start()
@@ -290,17 +294,30 @@ async def test_a_file_over_tor_looks_for_a_direct_path_at_once(
         for node, other in ((a, bh), (b, ah)):
             link = node.get_link(other)
             node.tcp_transport._tor_peers.add(link.transport_peer_id)  # "over Tor"
-        calls: list[tuple[str, str, bool]] = []
-        for name, node in (("alice", a), ("bob", b)):
-            monkeypatch.setattr(
-                node, "request_direct_upgrade",
-                lambda h, *, punch=False, name=name: calls.append((name, h, punch)),
-            )
+        calls: list[str] = []
+        monkeypatch.setattr(a, "request_direct_upgrade",
+                            lambda h, *, punch=False: calls.append(h) if punch else None)
+        await a.send_message(bh, "wait for direct")
         src = tmp_path / "f.bin"
         src.write_bytes(os.urandom(300_000))
-        await a.send_file(bh, src)
-        assert await wait_for(lambda: {c[0] for c in calls} == {"alice", "bob"}, timeout=8)
-        assert all(punch for _n, _h, punch in calls)
+        sent = await a.send_file(bh, src)
+        await asyncio.sleep(1.0)
+        assert calls and set(calls) == {bh}  # a direct path, right away
+        assert not any(m["text"] == "wait for direct" for m in b.get_messages())
+        assert sent["id"] not in b._transfers  # not even offered over Tor
+        assert a._transfers[sent["id"]].state == "paused"
+        # The backstop: data types can't be sealed for a Tor link at all.
+        with pytest.raises(ConnectionError):
+            a._seal(a.get_link(bh), MessageType.TEXT, b"{}")
+        # The session becomes direct: both go out.
+        for node, other in ((a, bh), (b, ah)):
+            node.tcp_transport._tor_peers.discard(node.get_link(other).transport_peer_id)
+        a.get_link(bh).link_up_announced = False  # (a real upgrade makes a new session)
+        await a._complete_handshake(bh, "bob", from_ack=True)
+        assert await wait_for(
+            lambda: any(m["text"] == "wait for direct" for m in b.get_messages()), timeout=8)
+        assert await wait_for(lambda: sent["id"] in b._transfers
+                              and b._transfers[sent["id"]].state == "complete", timeout=15)
     finally:
         await a.stop()
         await b.stop()
@@ -311,11 +328,10 @@ def test_speed_advice_names_the_missing_piece() -> None:
     peer = "a" * 32
     node = _Node(me="f" * 32, trusted={peer})
     node.config = SimpleNamespace(direct_internet=True)  # type: ignore[attr-defined]
-    node.tor_circuits = lambda h: 9  # type: ignore[method-assign]
     node.public_candidates = lambda: []  # type: ignore[method-assign]
     sp = node._speed_advice(peer, "tor")  # type: ignore[arg-type]
     assert not sp["my_public"] and "STUN" in sp["reason"]
-    assert any("relay" in t for t in sp["tips"]) and sp["tor_circuits"] == 9
+    assert any("relay" in t for t in sp["tips"])
     node.public_candidates = lambda: [("198.51.100.7", 7828)]  # type: ignore[method-assign]
     sp = node._speed_advice(peer, "tor")  # type: ignore[arg-type]
     assert sp["my_public"] and not sp["their_public"] and "contact" in sp["reason"]
@@ -328,7 +344,10 @@ def test_speed_advice_names_the_missing_piece() -> None:
     assert "off" in node._speed_advice(peer, "tor")["reason"]  # type: ignore[arg-type]
 
 
-async def test_contacts_on_tor_move_to_direct_udp(tmp_path: Path, monkeypatch: Any) -> None:
+@pytest.mark.parametrize("starter", ["leader", "follower"])
+async def test_contacts_on_tor_move_to_direct_udp(
+    tmp_path: Path, monkeypatch: Any, starter: str
+) -> None:
     """The fast path: two contacts on Tor swap UDP candidates and key shares
     inside the session, punch a real UDP connection (here on this machine),
     and the session moves onto it: messages, a file and call media flow."""
@@ -363,7 +382,10 @@ async def test_contacts_on_tor_move_to_direct_udp(tmp_path: Path, monkeypatch: A
         await follower.send_rendezvous(lh)  # carries its UDP candidates ("w")
         assert await wait_for(lambda: bool(leader._peer_udp.get(fh)))
 
-        await leader._try_direct_upgrade(fh)
+        if starter == "leader":
+            await leader._try_direct_upgrade(fh)
+        else:  # the other side has something waiting: it asks the leader to start
+            follower.request_direct_upgrade(lh, punch=True)
         for node, other, old in ((leader, fh, tor_l), (follower, lh, tor_f)):
             assert await wait_for(lambda node=node, other=other, old=old: (
                 (link := node.get_link(other)) is not None and link.handshake_complete

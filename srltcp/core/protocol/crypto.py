@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import struct
 import time
 from dataclasses import dataclass
@@ -268,15 +267,6 @@ class CryptoBox:
     def encrypt(self, plaintext: bytes, aad: bytes = b"") -> bytes:
         nonce, aes = self.reserve()
         return nonce + aes.encrypt(nonce, plaintext, aad)
-
-    def lane_hint(self, *, outgoing: bool) -> bytes:
-        """16-byte tag naming this session to the peer without revealing it
-        to anyone else (derived from a session key). Extra Tor connections
-        that carry file data for the session start with it."""
-        if not self._keys:
-            raise RuntimeError("session keys not established")
-        key = self._keys.send_key if outgoing else self._keys.recv_key
-        return hmac.new(key, b"srltcp-lane-hint-v1", hashlib.sha256).digest()[:16]
 
     def decrypt(self, ciphertext: bytes, aad: bytes = b"") -> bytes:
         if not self._keys:
