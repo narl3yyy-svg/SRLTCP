@@ -249,6 +249,10 @@ You normally never touch these, because the app learns addresses by itself.
   amounts of data.
 - On the LAN/VPN, discovery announcements (your name and ID) are visible to
   devices on that network. They're signed, so they can't be faked.
+- Discovery never leaves your own networks: nothing is announced on mobile
+  data or over the internet, and announces, *Find by IP* and contact requests
+  from other networks are ignored. Someone elsewhere can't find you; to add
+  them, use a pairing code or link.
 
 ## Troubleshooting
 

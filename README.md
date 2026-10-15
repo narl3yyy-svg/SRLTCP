@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks over **Tor** (no server needed), **direct IPv6**, or your own optional **relay**, switching automatically. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.10.10 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.11.0 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -35,7 +35,7 @@
 | **Voice & video calls** | WebRTC; signalling and media both travel inside the encrypted SRLTCP session (built-in relay), so calls work wherever chat works — no third-party servers |
 | **Offline delivery** | Messages queue while a contact is offline and deliver on reconnect, with ✓/✓✓ receipts |
 | **Works over WireGuard** | VPN-aware discovery (unicast sweep + replies), Find by IP, automatic address updates |
-| **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected |
+| **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected. Discovery stays on **your own networks** (the Wi-Fi/LAN you're on and your VPN): never sent on mobile data or across the internet, and announces, Find by IP and contact requests from other networks are ignored, so nobody elsewhere can find you |
 | **Contact requests** | Unknown peers can't message you; they appear as "wants to chat" until you accept |
 | **Chat history** | Saved locally, encrypted, pruned by your retention setting |
 | **Trusted peers** | Trust-before-message security model |
@@ -251,7 +251,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.10.10.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.11.0.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -259,7 +259,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.10.10.apk` (one APK for ph
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.10.10.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.11.0.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 

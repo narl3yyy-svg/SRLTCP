@@ -1,5 +1,61 @@
 # SRLTCP Release Notes
 
+## v0.11.0 (2026-10-15)
+
+### Full speed between networks: direct UDP
+- **Two phones on different mobile carriers (or mobile data and a home
+  Wi-Fi) now connect straight to each other** instead of sending everything
+  through Tor. They meet over Tor (or your relay), swap addresses inside the
+  encrypted session, and punch a direct **UDP** connection through both
+  carriers' NATs, the way video calls do. The header shows **DIRECT**.
+- **Speed:** in our simulation of two carrier NATs (TCP between them blocked,
+  packet loss) the phones were direct after about 10 seconds and a 40 MB file
+  moved at 14-25 MB/s, about 100 times faster than Tor. Chat keeps flowing
+  during big files, and call audio/video go as separate packets that never
+  wait behind lost file data.
+- **Private and secure:** every UDP packet is encrypted and authenticated
+  with keys only you and the contact have (from the encrypted session), and
+  the signed, quantum-safe handshake runs inside it. Packets from anyone else
+  get no answer at all.
+- Follows a phone to a new network (Wi-Fi to mobile data) after checking the
+  new address really answers.
+- When a network can't be punched ("symmetric" carrier NAT on both sides),
+  Tor or your relay keeps carrying the traffic, as before.
+- *Edit contact → Check connection → Speed* explains why a contact isn't
+  direct and what to change.
+- Uses a STUN server to learn your public address (Google's and Cloudflare's
+  by default; set your own under *Settings → Network → STUN servers*). It
+  learns your IP address, nothing else. Turning off *Direct internet
+  connections* turns all of this off (Tor/relay only, contacts never see your
+  IP).
+- **Both devices need this version** for the UDP path (older versions keep
+  using Tor).
+
+### Discovery only on your own network
+- **Nobody outside your own Wi-Fi/LAN or VPN can find you any more.**
+  Nothing is announced on mobile data or over the internet, and
+  announcements, *Find by IP* and contact requests from other networks are
+  ignored. To add someone elsewhere, use a pairing code or link. Contacts you
+  already have still reach you from anywhere.
+
+### Security review
+Three independent reviews attacked the new connection, the key exchange and
+the whole app. Fixed:
+- A contact could make the receiving side buffer unlimited out-of-order data
+  (memory and CPU); now capped.
+- A connection could be moved to an address that never proved it answers; now
+  checked with a challenge first. A peer acknowledging data it never got is
+  detected and disconnected.
+- A UDP connection only accepts the contact it was made for.
+- Stricter checks on addresses a contact may ask us to try (no tunnels that
+  could wrap a LAN address, nothing on our own networks); hardware-derived
+  IPv6 addresses are never shared.
+- A contact can't pile up unlimited unfinished file offers (capped at 256);
+  new contact requests are rate-limited.
+- Everything else held: web UI only reachable from the phone itself,
+  DNS-rebinding, CSRF, XSS (script policy), path traversal, Tor and relay
+  access, forged or replayed packets.
+
 ## v0.10.10 (2026-10-15)
 
 ### Faster Tor when only one side knows the other's Tor address

@@ -743,6 +743,12 @@ async def main() -> int:
     finally:
         for n in NODES.values():
             n.stop()
+        # Keep the screenshots only: node data and the 600 MB test file go.
+        import shutil
+
+        for n in NODES.values():
+            shutil.rmtree(n.data, ignore_errors=True)
+        (OUT / "big.bin").unlink(missing_ok=True)
     print(f"screenshots: {OUT}")
     if errors:
         print("browser errors:", *errors, sep="\n  ")
