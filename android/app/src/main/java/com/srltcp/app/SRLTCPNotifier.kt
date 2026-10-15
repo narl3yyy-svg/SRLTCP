@@ -20,6 +20,7 @@ object SRLTCPNotifier {
     const val NOTIFICATION_NODE = 7825
     const val NOTIFICATION_CALL = 9500
     const val EXTRA_INCOMING_CALL = "com.srltcp.app.INCOMING_CALL"
+    const val EXTRA_ANSWER_CALL = "com.srltcp.app.ANSWER_CALL"
     private const val ALERT_ID_BASE = 9000
     private const val RING_MS = 45_000L  // same as the web UI's ring timeout
     private val RING_VIBRATION = longArrayOf(0, 1000, 1000)
@@ -79,6 +80,19 @@ object SRLTCPNotifier {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        // "Answer" opens the app and answers right away (tapping the
+        // notification itself only opens the call screen).
+        val answer = PendingIntent.getActivity(
+            context,
+            NOTIFICATION_CALL + 2,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_INCOMING_CALL, true)
+                putExtra(EXTRA_ANSWER_CALL, true)
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
         val decline = PendingIntent.getService(
             context,
             NOTIFICATION_CALL + 1,
@@ -104,7 +118,7 @@ object SRLTCPNotifier {
             .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), AudioManager.STREAM_RING)
             .setVibrate(RING_VIBRATION)
             .addAction(0, "Decline", decline)
-            .addAction(0, "Answer", open)
+            .addAction(0, "Answer", answer)
         // Shows the call screen (with the caller's name) over the lock screen;
         // with private notifications it rings as a notification only.
         if (!private) builder.setFullScreenIntent(open, true)

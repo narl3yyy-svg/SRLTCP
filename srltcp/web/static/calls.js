@@ -37,7 +37,12 @@
     lostAt: 0,           // when media stopped (0 = flowing)
     recoverTimer: null,
     restarting: false,
+    facing: "user",      // camera in use: "user" (front) | "environment" (rear)
+    switching: false,
   };
+  // Answer tapped on the ringing notification, possibly before the offer
+  // reached this (freshly opened) page: answer it when it arrives.
+  let answerWanted = 0;
 
   // Android app: route call audio like a phone call (earpiece/speaker).
   const nativeAudio = () => {
@@ -131,7 +136,68 @@
     $("#call-accept-video")?.classList.toggle("hidden", !call.video);
     $("#call-toggle-camera")?.classList.toggle("hidden", !call.video);
     $("#call-speaker")?.classList.toggle("hidden", !nativeAudio());
+    $("#call-switch-camera")?.classList.add("hidden");
+    if (call.video && mode !== "incoming") showSwitchIfTwoCameras();
     updateButtons();
+  }
+
+  async function showSwitchIfTwoCameras() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter((d) => d.kind === "videoinput").length;
+      $("#call-switch-camera")?.classList.toggle("hidden", !(call.video && cams > 1));
+    } catch (_) { /* leave it hidden */ }
+  }
+
+  /** Front <-> rear camera, without renegotiating: the outgoing track is replaced.
+   * Most phones can't open two cameras at once, so the old one closes first. */
+  async function openCamera(facing) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { exact: facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
+    } catch (_) {
+      return navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } });
+    }
+  }
+
+  async function switchCamera() {
+    if (!call.pc || !call.local || call.switching) return;
+    call.switching = true;
+    const want = call.facing === "user" ? "environment" : "user";
+    const old = call.local.getVideoTracks()[0];
+    const sender = call.pc.getSenders().find((s) => s.track === old)
+      || call.pc.getSenders().find((s) => s.track?.kind === "video");
+    if (old) {
+      old.stop();
+      call.local.removeTrack(old);
+    }
+    let facing = want;
+    let stream = null;
+    try {
+      stream = await openCamera(want);
+    } catch (err) {
+      app().toast?.(`Could not switch camera: ${err?.message || err?.name || "error"}`, "error");
+      facing = call.facing;
+      try { stream = await openCamera(facing); } catch (_) { /* no camera now */ }
+    }
+    const track = stream?.getVideoTracks()[0];
+    if (track) {
+      track.enabled = !call.cameraOff;
+      call.local.addTrack(track);
+      try { await sender?.replaceTrack(track); } catch (_) { /* keeps the old sender state */ }
+      call.facing = facing;
+    }
+    call.switching = false;
+    $("#call-overlay")?.classList.toggle("rear-camera", call.facing === "environment");
+    const lv = $("#call-local-video");
+    if (lv) {
+      lv.srcObject = null;
+      lv.srcObject = call.local;
+      lv.play?.().catch(() => {});
+    }
+    $("#call-switch-camera")?.setAttribute("aria-label",
+      call.facing === "user" ? "Switch to the rear camera" : "Switch to the front camera");
   }
 
   function updateButtons() {
@@ -181,8 +247,9 @@
       id: null, peer: null, peerName: "", video: false, pc: null, local: null,
       remote: null, role: null, state: "idle", pendingOffer: null, pendingIce: [],
       ringTimer: null, muted: false, cameraOff: false, speaker: false,
-      startedAt: 0, lostAt: 0, recoverTimer: null, restarting: false,
+      startedAt: 0, lostAt: 0, recoverTimer: null, restarting: false, facing: "user", switching: false,
     });
+    $("#call-overlay")?.classList.remove("rear-camera");
     routeAudio(false);
     callScreen(false);
     updateButtons();
@@ -493,7 +560,17 @@
     call.ringTimer = setTimeout(() => {
       if (call.state === "incoming") decline("timeout");
     }, RING_TIMEOUT_MS);
+    if (answerWanted && Date.now() - answerWanted < RING_TIMEOUT_MS) {
+      answerWanted = 0;
+      accept(call.video);
+    }
   }
+
+  // Android: "Answer" on the ringing notification.
+  window.onAndroidAnswerCall = () => {
+    if (call.state === "incoming") accept(call.video);
+    else if (call.state === "idle") answerWanted = Date.now();
+  };
 
   async function accept(withVideo) {
     if (call.state !== "incoming") return;
@@ -632,6 +709,7 @@
     $("#call-mute")?.addEventListener("click", toggleMute);
     $("#call-toggle-camera")?.addEventListener("click", toggleCamera);
     $("#call-speaker")?.addEventListener("click", toggleSpeaker);
+    $("#call-switch-camera")?.addEventListener("click", switchCamera);
     // Show the remote picture only once frames arrive (no empty player / play icon).
     const rv = $("#call-remote-video");
     const markPlaying = () => {

@@ -160,6 +160,7 @@ class MainActivity : AppCompatActivity() {
         if (intent?.getBooleanExtra(SRLTCPNotifier.EXTRA_INCOMING_CALL, false) == true) {
             setCallScreen(true)
         }
+        takeAnswerRequest(intent)
         firstLaunch = savedInstanceState == null
         pendingSavePath = savedInstanceState?.getString(STATE_PENDING_SAVE)
 
@@ -272,6 +273,7 @@ class MainActivity : AppCompatActivity() {
                     isTrustedPage = isOurUrl(url)
                     if (isClosing || isFinishing || url == "about:blank") return
                     pageLoaded = true
+                    deliverAnswer()
                     loadAttempt = 0
                     handler.removeCallbacks(loadRetryRunnable)
                     view.evaluateJavascript(
@@ -651,6 +653,24 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.getBooleanExtra(SRLTCPNotifier.EXTRA_INCOMING_CALL, false)) setCallScreen(true)
+        takeAnswerRequest(intent)
+    }
+
+    /** "Answer" on the call notification: answer in the page (now, or once it has loaded). */
+    private var answerPending = false
+
+    private fun takeAnswerRequest(intent: Intent?) {
+        if (intent?.getBooleanExtra(SRLTCPNotifier.EXTRA_ANSWER_CALL, false) != true) return
+        intent.removeExtra(SRLTCPNotifier.EXTRA_ANSWER_CALL)  // not again after a rotation
+        SRLTCPNotifier.stopRinging(this)
+        answerPending = true
+        if (pageLoaded) deliverAnswer()
+    }
+
+    private fun deliverAnswer() {
+        if (!answerPending) return
+        answerPending = false
+        deliverToWeb("onAndroidAnswerCall", "")
     }
 
     /**

@@ -233,6 +233,39 @@ async def desktop_flow() -> None:
         await alice.wait_for_selector("#call-overlay", state="hidden", timeout=10000)
         print("call ended on both sides")
 
+        # --- Answer from the Android notification (before the page has the
+        # offer, as when the app opens from the notification) + rear camera ---
+        await alice.evaluate("window.onAndroidAnswerCall()")
+        await bob.evaluate("""(() => {  // pretend Bob's device has a front and a rear camera
+            const md = navigator.mediaDevices, real = md.enumerateDevices.bind(md);
+            md.enumerateDevices = async () => { const d = await real();
+              const cam = d.find((x) => x.kind === "videoinput");
+              return cam ? [...d, { kind: "videoinput", deviceId: "rear", label: "rear", groupId: "" }] : d; };
+        })()""")
+        await bob.click("#btn-call-video")
+        for pg in (alice, bob):
+            await pg.wait_for_function(
+                "document.querySelector('#call-status').textContent.includes('encrypted')", timeout=20000)
+        print("notification Answer: call answered with no tap in the page")
+        await bob.wait_for_selector("#call-switch-camera:not(.hidden)", timeout=5000)
+        assert await alice.is_hidden("#call-switch-camera")  # one camera: no switch button
+        sender = "(() => { const v = document.querySelector('#call-local-video').srcObject;"
+        sender += " return v && v.getVideoTracks()[0] && v.getVideoTracks()[0].id; })()"
+        before = await bob.evaluate(sender)
+        await bob.click("#call-switch-camera")
+        await bob.wait_for_selector("#call-overlay.rear-camera", timeout=5000)
+        after = await bob.evaluate(sender)
+        assert before and after and before != after, (before, after)
+        assert await bob.get_attribute("#call-switch-camera", "aria-label") == "Switch to the front camera"
+        t0 = await alice.evaluate("document.querySelector('#call-remote-video').currentTime")
+        await asyncio.sleep(2)
+        assert await alice.evaluate("document.querySelector('#call-remote-video').currentTime") > t0
+        await bob.click("#call-switch-camera")
+        await bob.wait_for_function("!document.querySelector('#call-overlay').classList.contains('rear-camera')")
+        print("camera switch: rear and back to front, video keeps flowing")
+        await bob.click("#call-hangup")
+        await alice.wait_for_selector("#call-overlay", state="hidden", timeout=10000)
+
         # --- Voice call declined ---
         await alice.click("#btn-call-voice")
         await bob.wait_for_selector("#call-overlay:not(.hidden)[data-mode=incoming]", timeout=10000)

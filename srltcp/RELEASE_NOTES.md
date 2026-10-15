@@ -1,5 +1,17 @@
 # SRLTCP Release Notes
 
+## v0.10.6 (2026-10-15)
+
+### Calls
+- **"Answer" on the ringing notification answers the call.** Before, it only
+  opened the app and you had to answer again inside it. A video call is
+  answered with video. (Tapping the notification itself still just opens the
+  call screen, where you can choose voice or video.)
+- **Switch between the front and rear camera** during a video call with the
+  new camera button. The other side keeps seeing you without the call
+  restarting. Your own preview is mirrored only for the front camera. The
+  button shows only on devices with more than one camera.
+
 ## v0.10.5 (2026-10-15)
 
 ### Calls survive a network switch

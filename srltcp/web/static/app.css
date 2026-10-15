@@ -1632,6 +1632,7 @@ label.field > span {
 .call-overlay.video.remote-playing .call-remote-video { display: block; }
 .call-local-video { position: absolute; right: 1rem; top: max(1rem, env(safe-area-inset-top)); width: 28vw; max-width: 180px; border-radius: 12px; border: 2px solid rgba(255,255,255,0.2); display: none; z-index: 2; transform: scaleX(-1); background: #111; }
 .call-overlay.video.local-on .call-local-video { display: block; }
+.call-overlay.rear-camera .call-local-video { transform: none; }  /* only the selfie view is mirrored */
 .call-info { position: relative; z-index: 2; text-align: center; margin-top: 3rem; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
 .call-peer-name { font-size: 1.6rem; font-weight: 600; }
 .call-status { color: #c6cbd8; margin-top: 0.35rem; }
