@@ -12,7 +12,7 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 76
+        versionCode = 77
         versionName = "0.10.2"
 
         ndk {
@@ -119,3 +119,21 @@ tasks.register("renameReleaseApk") {
     }
 }
 
+
+// The app's Python code lives in /srltcp; copy it in on every build so an APK
+// never ships older code than its version name says.
+val syncPython by tasks.registering(Sync::class) {
+    from(rootProject.file("../srltcp")) {
+        exclude("**/__pycache__/**", "**/*.pyc", "**/.mypy_cache/**", "**/.ruff_cache/**")
+    }
+    into(file("src/main/python/srltcp"))
+    doLast {
+        val init = file("src/main/python/srltcp/__init__.py").readText()
+        val code = Regex("__version__ = \"([^\"]+)\"").find(init)?.groupValues?.get(1)
+        val name = android.defaultConfig.versionName
+        check(code == name) { "srltcp/__init__.py is $code but versionName is $name" }
+    }
+}
+tasks.named("preBuild") { dependsOn(syncPython) }
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("PythonSources") }
+    .configureEach { dependsOn(syncPython) }
