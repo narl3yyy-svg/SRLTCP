@@ -60,3 +60,4 @@ Thumbs.db
 htmlcov/
 .coverage
 .aider*
+release/
