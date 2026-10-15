@@ -181,14 +181,64 @@
   }
 
   /* ── WebRTC plumbing ── */
+  const AUDIO = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  const onWindows = /Windows/i.test(navigator.userAgent || "");
+
+  /** What to tell the user when the browser can't open the camera or microphone. */
+  function mediaHelp(err, what) {
+    const name = err?.name || "";
+    if (name === "NotAllowedError" || name === "SecurityError") {
+      return `${what} blocked. Allow it for this page (the icon at the left of the address bar)`
+        + (onWindows ? " and in Windows Settings → Privacy & security → Camera / Microphone:"
+          + " turn on access and \"Let desktop apps access…\" (browsers count as desktop apps)." : ".");
+    }
+    if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError") {
+      return `${what} is busy or blocked: close other apps using it (Teams, Zoom, Skype, the Camera app,`
+        + " another browser tab)" + (onWindows ? ", check the camera's privacy switch or key on the laptop"
+          + " and any antivirus webcam protection" : "") + ", then try again.";
+    }
+    if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") {
+      return `No ${what.toLowerCase()} found on this device.`;
+    }
+    return `${what}: ${err?.message || name || "could not be opened"}`;
+  }
+
+  /**
+   * Microphone (+ camera). The camera is tried with the preferred size, then
+   * with anything it offers (some Windows webcam drivers refuse sizes), and if
+   * it still can't be opened the call goes ahead with voice only.
+   */
   async function getMedia(video) {
     if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("This device/browser does not support calls");
+      throw new Error(window.isSecureContext === false
+        ? "Calls need a secure page: open SRLTCP at https://… or http://localhost"
+        : "This device/browser does not support calls");
     }
-    return navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: video ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-    });
+    let videoErr = null;
+    if (video) {
+      const tries = [
+        { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+        true,
+      ];
+      for (const v of tries) {
+        try {
+          return await navigator.mediaDevices.getUserMedia({ audio: AUDIO, video: v });
+        } catch (err) {
+          videoErr = err;
+          if (err?.name === "NotAllowedError" || err?.name === "SecurityError") break;
+        }
+      }
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO, video: false });
+    } catch (err) {
+      throw new Error(mediaHelp(videoErr && video ? videoErr : err, video ? "Camera/microphone" : "Microphone"));
+    }
+    if (videoErr) {
+      app().toast?.(`Voice only — ${mediaHelp(videoErr, "Camera")}`, "error");
+    }
+    return stream;
   }
 
   function createPeerConnection(config) {
@@ -296,7 +346,7 @@
       }, RING_TIMEOUT_MS);
     } catch (err) {
       app().toast?.(err?.message || "Could not start the call (microphone/camera permission?)", "error");
-      if (call.peer) signal(call.peer, { type: "hangup", call_id: call.id, reason: "error" });
+      if (call.peer) signal(call.peer, { type: "hangup", call_id: call.id, reason: "no_media" });
       reset();
     }
   }
@@ -353,7 +403,7 @@
       await signal(call.peer, { type: "answer", call_id: call.id, sdp: call.pc.localDescription.sdp });
     } catch (err) {
       app().toast?.(err?.message || "Could not answer (microphone/camera permission?)", "error");
-      hangup("error");
+      hangup("no_media");
     }
   }
 
@@ -401,8 +451,12 @@
         reset();
         break;
       case "hangup":
-        if (call.state === "incoming" || call.state === "outgoing") {
+        if ((call.state === "incoming" || call.state === "outgoing") && sig.reason !== "no_media") {
           app().toast?.(sig.reason === "declined" ? "Call declined" : "Call ended");
+        }
+        if (sig.reason === "no_media") {
+          app().toast?.(`${call.peerName}'s device couldn't open its microphone — the call was`
+            + " ended there. Check the camera/microphone permissions on that device.", "error");
         }
         reset();
         break;

@@ -1,5 +1,20 @@
 # SRLTCP Release Notes
 
+## v0.10.4 (2026-10-15)
+
+### Video calls with a PC whose camera won't open
+- **The call goes ahead with voice** when the camera can't be opened (busy in
+  another app, blocked by Windows or the browser), instead of ending at once.
+  You still see the other person's video.
+- **It says why**, and what to change: the browser's permission for the page,
+  Windows Settings → Privacy & security → Camera / Microphone ("Let desktop
+  apps access…": browsers count as desktop apps), another app using the
+  camera, or the laptop's camera privacy switch.
+- The camera is tried again without a preferred picture size, which some
+  Windows webcam drivers refuse.
+- If the other device can't open its microphone at all, your phone now says
+  so instead of just "Call ended".
+
 ## v0.10.3 (2026-10-15)
 
 ### QR scanner that focuses
