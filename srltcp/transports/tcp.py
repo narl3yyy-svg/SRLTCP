@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 import socket
 import uuid
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from srltcp.core.messaging.constants import DISCOVERY_PORT
 from srltcp.transports.base import (
@@ -18,6 +20,9 @@ from srltcp.transports.base import (
 from srltcp.utils.logging import get_logger
 from srltcp.utils.network import broadcast_targets
 from srltcp.utils.ports import bind_udp_port, start_tcp_server
+
+if TYPE_CHECKING:
+    from srltcp.transports.udp import UdpConnection
 
 log = get_logger(__name__)
 
@@ -75,6 +80,7 @@ class TCPTransport(Transport):
         # Connections that came in through our onion service or were dialed
         # over Tor: only trusted contacts may use them (see backend).
         self._tor_peers: set[str] = set()
+        self._datagram_handlers: list[Callable[[TransportPeer, bytes], None]] = []
         self._onion_server: asyncio.Server | None = None
         self.onion_port = 0
 
@@ -304,6 +310,36 @@ class TCPTransport(Transport):
         await self._emit_event(TransportEvent(kind="connected", peer=peer))
         return peer_id
 
+    async def adopt_udp(self, conn: UdpConnection) -> str:
+        """Hold a punched UDP connection like a TCP one: the session, file
+        transfers and everything else run over it unchanged."""
+        if len(self._connections) >= MAX_CONNECTIONS:
+            await conn.close()
+            raise ConnectionError("too many connections")
+        conn.peer.address = conn.address
+        conn.set_frame_handler(self._handle_frame)
+        conn.set_close_handler(self._on_connection_closed)
+        conn.set_datagram_handler(self._handle_datagram)
+        self._connections[conn.peer.peer_id] = conn  # type: ignore[assignment]
+        await conn.start_reading()
+        await self._emit_event(TransportEvent(kind="connected", peer=conn.peer))
+        log.info("UDP peer connected: %s (%s)", conn.peer.peer_id[:8], conn.address)
+        return conn.peer.peer_id
+
+    def on_datagram(self, handler: Callable[[TransportPeer, bytes], None]) -> None:
+        self._datagram_handlers.append(handler)
+
+    def _handle_datagram(self, peer: TransportPeer, payload: bytes) -> None:
+        for handler in self._datagram_handlers:
+            handler(peer, payload)
+
+    def send_datagram(self, peer_id: str, payload: bytes) -> bool:
+        """Unreliable delivery where the connection supports it (UDP: call
+        media, where late is worse than lost). False: use send()."""
+        conn = self._connections.get(peer_id)
+        send = getattr(conn, "send_datagram", None)
+        return bool(send and send(payload))
+
     async def send(self, peer_id: str, payload: bytes) -> None:
         conn = self._connections.get(peer_id)
         if not conn:
@@ -340,8 +376,8 @@ class TCPTransport(Transport):
     def local_ip(self, peer_id: str) -> str:
         """Our address on this connection (which interface it uses)."""
         conn = self._connections.get(peer_id)
-        if not conn:
-            return ""
+        if not conn or conn.writer is None:
+            return ""  # (UDP follows address changes by itself)
         sockname = conn.writer.get_extra_info("sockname")
         return str(sockname[0]) if sockname else ""
 

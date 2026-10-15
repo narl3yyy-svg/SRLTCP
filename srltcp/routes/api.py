@@ -844,6 +844,13 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         updated.discovery_port = max(1024, min(updated.discovery_port, 65535))
         updated.relay_enabled = bool(updated.relay_enabled)
         updated.direct_internet = bool(updated.direct_internet)
+        updated.stun_servers = str(updated.stun_servers or "").strip()[:600]
+        try:
+            from srltcp.transports.udp import parse_stun_servers
+
+            parse_stun_servers(updated.stun_servers)
+        except ValueError as exc:
+            return web.json_response({"error": f"STUN servers: {exc}"}, status=400)
         updated.tor_enabled = bool(updated.tor_enabled)
         updated.shrink_photos = bool(updated.shrink_photos)
         from srltcp.core.messaging.disappear import CHOICES

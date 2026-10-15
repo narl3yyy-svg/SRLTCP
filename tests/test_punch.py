@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -81,10 +82,10 @@ class _Node(PunchMixin):
     def public_candidates(self) -> list[tuple[str, int]]:
         return [self.public]
 
-    async def _send_punch(self, hash_id: str, phase: str, cands: Any) -> None:  # type: ignore[override]
+    async def _send_punch(self, hash_id: str, phase: str, cands: Any, extra: Any = None) -> None:  # type: ignore[override]
         self.sent.append((hash_id, phase))
 
-    async def _punch(self, hash_id: str, targets: Any, *, leader: bool) -> None:  # type: ignore[override]
+    async def _punch(self, hash_id: str, targets: Any, *, leader: bool, **_udp: Any) -> None:  # type: ignore[override]
         self.rounds.append((hash_id, leader))
 
     async def _prime(self, targets: Any) -> None:  # type: ignore[override]
@@ -308,18 +309,83 @@ async def test_a_file_over_tor_looks_for_a_direct_path_at_once(
 def test_speed_advice_names_the_missing_piece() -> None:
     """Check connection explains why a contact on another network isn't direct."""
     peer = "a" * 32
-    node = _Node(me="f" * 32, trusted={peer}, public=("198.51.100.7", 7828))
+    node = _Node(me="f" * 32, trusted={peer})
     node.config = SimpleNamespace(direct_internet=True)  # type: ignore[attr-defined]
     node.tor_circuits = lambda h: 9  # type: ignore[method-assign]
+    node.public_candidates = lambda: []  # type: ignore[method-assign]
     sp = node._speed_advice(peer, "tor")  # type: ignore[arg-type]
-    assert not sp["my_ipv6"] and "no IPv6" in sp["reason"] and "APN" in sp["tips"][0]
+    assert not sp["my_public"] and "STUN" in sp["reason"]
     assert any("relay" in t for t in sp["tips"]) and sp["tor_circuits"] == 9
-    node.public = ("2a01:4f8::b", 7828)
+    node.public_candidates = lambda: [("198.51.100.7", 7828)]  # type: ignore[method-assign]
     sp = node._speed_advice(peer, "tor")  # type: ignore[arg-type]
-    assert sp["my_ipv6"] and not sp["their_ipv6"] and "contact's network" in sp["reason"]
-    node._peer_public[peer] = [("2a01:4f8::a", 7828)]
+    assert sp["my_public"] and not sp["their_public"] and "contact" in sp["reason"]
+    node._peer_udp[peer] = [("2a01:4f8::a", 7828)]
     node._punch_failures[peer] = 2
-    assert "firewall" in node._speed_advice(peer, "tor")["reason"]  # type: ignore[arg-type]
-    assert node._speed_advice(peer, "direct")["reason"].startswith("Direct")  # type: ignore[arg-type]
+    sp = node._speed_advice(peer, "tor")  # type: ignore[arg-type]
+    assert "block" in sp["reason"] and sp["their_ipv6"] and any("APN" in t for t in sp["tips"])
+    assert node._speed_advice(peer, "direct (udp)")["reason"].startswith("Direct")  # type: ignore[arg-type]
     node.config.direct_internet = False  # type: ignore[attr-defined]
     assert "off" in node._speed_advice(peer, "tor")["reason"]  # type: ignore[arg-type]
+
+
+async def test_contacts_on_tor_move_to_direct_udp(tmp_path: Path, monkeypatch: Any) -> None:
+    """The fast path: two contacts on Tor swap UDP candidates and key shares
+    inside the session, punch a real UDP connection (here on this machine),
+    and the session moves onto it: messages, a file and call media flow."""
+    import socket
+
+    import srltcp.core.messaging.punch as punch_mod
+
+    monkeypatch.setattr(punch_mod, "punchable_candidate", lambda h, p: True)  # loopback here
+    a, b = make_node(tmp_path, "alice"), make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    try:
+        trust(a, b)
+        trust(b, a)
+        ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+        leader, follower = (a, b) if ah < bh else (b, a)
+        lh, fh = (ah, bh) if leader is a else (bh, ah)
+        await leader.connect_to_peer(fh)
+        assert await leader.wait_for_handshake(fh, timeout=8)
+        assert await wait_for(lambda: follower.get_link(lh) is not None
+                              and follower.get_link(lh).handshake_complete)
+        tor_l, tor_f = leader.get_link(fh), follower.get_link(lh)
+        leader.tcp_transport._tor_peers.add(tor_l.transport_peer_id)  # "over Tor"
+        follower.tcp_transport._tor_peers.add(tor_f.transport_peer_id)
+        for node in (leader, follower):
+            assert node.udp is not None
+            node.udp.mapped[socket.AF_INET] = ("127.0.0.1", node.udp.ports[socket.AF_INET])
+            monkeypatch.setattr(node, "_refresh_udp", AsyncMock())  # no STUN from tests
+            monkeypatch.setattr(node, "public_candidates", lambda: [])  # UDP only
+            monkeypatch.setattr(node, "_direct_candidates", lambda _h: [])
+        await follower.send_rendezvous(lh)  # carries its UDP candidates ("w")
+        assert await wait_for(lambda: bool(leader._peer_udp.get(fh)))
+
+        await leader._try_direct_upgrade(fh)
+        for node, other, old in ((leader, fh, tor_l), (follower, lh, tor_f)):
+            assert await wait_for(lambda node=node, other=other, old=old: (
+                (link := node.get_link(other)) is not None and link.handshake_complete
+                and link.transport_peer_id != old.transport_peer_id
+                and link.address.startswith("udp:")
+            ), timeout=10)
+        await leader.send_message(fh, "over UDP now")
+        assert await wait_for(
+            lambda: any(m["text"] == "over UDP now" for m in follower.get_messages())
+        )
+        src = tmp_path / "big.bin"
+        src.write_bytes(os.urandom(12_000_000))
+        sent = await leader.send_file(fh, src)
+        tid = sent["id"]
+        assert await wait_for(lambda: tid in follower._transfers
+                              and follower._transfers[tid].state == "complete", timeout=30)
+        assert follower._incoming_paths[tid].read_bytes() == src.read_bytes()
+        # Call media goes as datagrams, outside the ordered stream.
+        got: list[tuple[str, bytes]] = []
+        monkeypatch.setattr(follower, "_handle_call_media",
+                            lambda h, body: got.append((h, body)))
+        await leader._send_call_media(fh, 5000, 6000, b"rtp")
+        assert await wait_for(lambda: got == [(lh, struct.pack(">HH", 5000, 6000) + b"rtp")])
+    finally:
+        await a.stop()
+        await b.stop()

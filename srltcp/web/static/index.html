@@ -236,7 +236,12 @@
 <input type="checkbox" id="set-direct-internet" />
 <span>Try direct internet connections</span>
 </label>
-<small class="field-hint">Connects straight through both routers (and over IPv6 from a Tor connection), no port forwarding. Your public IP address is shared only with your contacts, inside the encrypted connection, but on a direct connection your network can see which IP you talk to. Off = Tor or relay only: contacts never see your IP.</small>
+<small class="field-hint">Full speed between different networks (two mobile carriers, home Wi-Fi): the devices connect straight to each other over UDP, the way video calls do, finding each other through Tor or your relay. No port forwarding. Your public IP address is shared only with your contacts, inside the encrypted connection, and a STUN server (below) learns it too; on a direct connection your network can see which IP you talk to. Off = Tor or relay only: contacts never see your IP.</small>
+<label class="field">
+<span>STUN servers</span>
+<input type="text" id="set-stun-servers" placeholder="Default: Google and Cloudflare" autocomplete="off" spellcheck="false" />
+<small>Tell this device its public address for direct connections; they see your IP address, nothing else. <code>host:port</code>, separated by commas. Leave empty for the defaults.</small>
+</label>
 <div class="relay-status" id="relay-status" aria-live="polite"></div>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-tor-enabled" />

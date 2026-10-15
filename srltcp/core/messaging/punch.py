@@ -30,10 +30,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ipaddress
+import secrets
 import time
 from typing import TYPE_CHECKING, Any
 
 from srltcp.core.protocol.messages import MessageType, decode_payload, encode_payload
+from srltcp.transports.udp import (
+    STUN_SERVERS,
+    UdpConnection,
+    UdpEndpoint,
+    combine_secrets,
+    derive_keys,
+    parse_stun_servers,
+)
 from srltcp.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -42,6 +51,8 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 PUNCH_WINDOW = 8.0  # seconds both sides keep dialing
+UDP_PUNCH_WINDOW = 6.0  # seconds both sides keep probing over UDP
+STUN_FRESH = 20.0  # re-ask STUN before a round if the answer is older (carrier NATs forget)
 PUNCH_ATTEMPT_TIMEOUT = 1.5
 PUNCH_FOLLOWER_DELAY = 1.0  # the answering side starts dialing a moment later
 PUNCH_ANSWER_EVERY = 30.0  # a contact can start at most one round this often
@@ -101,6 +112,16 @@ def _clean_candidates(raw: object) -> list[tuple[str, int]]:
     return out[:MAX_CANDIDATES]
 
 
+def _hex(value: object, size: int) -> bytes | None:
+    """A hex field of exactly ``size`` bytes from a contact's message, else None."""
+    if not isinstance(value, str) or len(value) != 2 * size:
+        return None
+    try:
+        return bytes.fromhex(value)
+    except ValueError:
+        return None
+
+
 def _same_family(
     theirs: list[tuple[str, int]], mine: list[tuple[str, int]]
 ) -> list[tuple[str, int]]:
@@ -121,6 +142,75 @@ class PunchMixin:
         self._punching: set[str] = set()
         self._punch_failures: dict[str, int] = {}
         self._last_public: list[tuple[str, int]] = []
+        self.udp: UdpEndpoint | None = None
+        self._peer_udp: dict[str, list[tuple[str, int]]] = {}
+        self._udp_offers: dict[str, tuple[bytes, bytes, float]] = {}  # our secret, id, when
+
+    # ── UDP (the fast path between networks, see transports/udp.py) ──
+
+    async def start_udp(self: MessagingBackend) -> None:
+        if self.udp is not None or not self.tcp_transport:
+            return
+        port = self.config.tcp_port + 3 if self.config.tcp_port else 0
+        try:
+            servers = parse_stun_servers(getattr(self.config, "stun_servers", ""))
+        except ValueError:
+            servers = STUN_SERVERS
+        endpoint = UdpEndpoint(port, stun_servers=servers)
+        try:
+            await endpoint.start()
+        except OSError as exc:
+            log.warning("Direct UDP connections unavailable: %s", exc)
+            return
+        if not endpoint.families:
+            return
+        self.udp = endpoint
+        if self.direct_internet_enabled():
+            task = asyncio.create_task(self._refresh_udp())
+            self.__dict__.setdefault("_udp_tasks", set()).add(task)
+            task.add_done_callback(self.__dict__["_udp_tasks"].discard)
+
+    def stop_udp(self: MessagingBackend) -> None:
+        if self.udp is not None:
+            self.udp.stop()
+            self.udp = None
+
+    async def _refresh_udp(self: MessagingBackend, *, if_older: float = 0.0) -> None:
+        """Ask STUN for our public UDP address (only with direct internet
+        connections on: the STUN server sees our IP address)."""
+        udp = self.udp
+        if udp is None or not self.direct_internet_enabled():
+            return
+        if if_older and time.monotonic() - udp.mapped_at < if_older:
+            return
+        before = self.udp_candidates()
+        await udp.refresh_mapping()
+        if self.udp_candidates() != before:
+            log.info("UDP address for direct connections: %s", ", ".join(
+                f"{h}:{p}" for h, p in self.udp_candidates()) or "none")
+            await self.addresses_changed()  # contacts learn it (inside the session)
+
+    def udp_candidates(self: MessagingBackend) -> list[tuple[str, int]]:
+        """Where contacts can reach our UDP socket: STUN's answer per address
+        family, and our global IPv6 addresses (no NAT on IPv6)."""
+        udp = self.udp
+        if udp is None or not self.direct_internet_enabled():
+            return []
+        import socket
+
+        out: list[tuple[str, int]] = []
+        for family in (socket.AF_INET6, socket.AF_INET):
+            mapped = udp.mapped.get(family)
+            if mapped and punchable_candidate(*mapped) and mapped not in out:
+                out.append(mapped)
+        v6_port = udp.ports.get(socket.AF_INET6)
+        if v6_port:
+            from srltcp.utils.network import global_ipv6_addresses
+
+            for ip in global_ipv6_addresses():
+                if (ip, v6_port) not in out:
+                    out.append((ip, v6_port))
+        return out[:MAX_CANDIDATES]
 
     # ── Our addresses ──
 
@@ -170,6 +260,7 @@ class PunchMixin:
         return {
             "a": self.local_candidates(),
             "u": [list(c) for c in public],
+            "w": [list(c) for c in self.udp_candidates()],
             # Our onion address (Tor) — "" tells them Tor is off for us.
             "o": self._tor_onion if self.tor_ready() else "",
         }
@@ -212,6 +303,12 @@ class PunchMixin:
                 self._upgrade_attempts.pop(hash_id, None)
                 self._punch_next.pop(hash_id, None)
             self._peer_public[hash_id] = public
+        if "w" in data:
+            udp = _clean_candidates(data.get("w"))
+            if udp and udp != self._peer_udp.get(hash_id):
+                self._upgrade_attempts.pop(hash_id, None)
+                self._punch_next.pop(hash_id, None)
+            self._peer_udp[hash_id] = udp
 
     # ── Punching ──
 
@@ -220,20 +317,36 @@ class PunchMixin:
         now = time.monotonic()
         if now < self._punch_next.get(hash_id, 0.0) or hash_id in self._punching:
             return
-        mine = self.public_candidates()
-        if not mine or not _same_family(self._peer_public.get(hash_id, []), mine):
-            return
         self._punch_next[hash_id] = now + PUNCH_RETRY_EVERY
+        await self._refresh_udp(if_older=STUN_FRESH)
+        mine = self.public_candidates()
+        mine_udp = self.udp_candidates()
+        tcp_ok = bool(mine) and bool(_same_family(self._peer_public.get(hash_id, []), mine))
+        theirs_udp = self._peer_udp.get(hash_id, [])
+        # Offer UDP whenever we have an address: the answer brings theirs (it may
+        # have changed since their last RENDEZVOUS). Older versions ignore it.
+        udp_ok = bool(mine_udp) and (not theirs_udp or bool(_same_family(theirs_udp, mine_udp)))
+        if not tcp_ok and not udp_ok:
+            return
         self._punch_offered[hash_id] = now
-        await self._send_punch(hash_id, "o", mine)
+        udp_fields: dict[str, Any] = {}
+        if udp_ok:
+            secret, my_id = secrets.token_bytes(32), secrets.token_bytes(8)
+            self._udp_offers[hash_id] = (secret, my_id, now)
+            udp_fields = {"w": [list(c) for c in mine_udp], "k": secret.hex(), "i": my_id.hex()}
+        await self._send_punch(hash_id, "o", mine, udp_fields)
 
     async def _send_punch(
-        self: MessagingBackend, hash_id: str, phase: str, cands: list[tuple[str, int]]
+        self: MessagingBackend,
+        hash_id: str,
+        phase: str,
+        cands: list[tuple[str, int]],
+        extra: dict[str, Any] | None = None,
     ) -> None:
         link = self.get_link(hash_id)
         if not link or not link.handshake_complete:
             return
-        body = encode_payload({"ph": phase, "c": [list(c) for c in cands]})
+        body = encode_payload({"ph": phase, "c": [list(c) for c in cands], **(extra or {})})
         with contextlib.suppress(KeyError, OSError, RuntimeError, ConnectionError):
             packet = self._seal(link, MessageType.PUNCH, body)
             await self._send_raw(link.transport_peer_id, link.transport, packet)
@@ -256,34 +369,103 @@ class PunchMixin:
             self._punch_answered[hash_id] = now
             mine = self.public_candidates()
             theirs = _same_family(theirs, mine)
+            conn, udp_targets, udp_fields = await self._udp_answer(hash_id, data)
             if mine and theirs:
                 # Open our router towards them *before* answering: the leader
                 # dials as soon as the answer arrives.
                 await self._prime(theirs)
-            await self._send_punch(hash_id, "a", mine)
-            if mine and theirs:
-                asyncio.create_task(self._punch(hash_id, theirs, leader=False))
+            await self._send_punch(hash_id, "a", mine, udp_fields)
+            if (mine and theirs) or conn:
+                asyncio.create_task(self._punch(
+                    hash_id, theirs if mine else [], leader=False,
+                    udp_conn=conn, udp_targets=udp_targets,
+                ))
         elif phase == "a":
             offered = self._punch_offered.pop(hash_id, 0.0)
             theirs = _same_family(theirs, self.public_candidates())
-            if theirs and time.monotonic() - offered < 15.0:
-                asyncio.create_task(self._punch(hash_id, theirs, leader=True))
-            elif not theirs:
-                self._punch_next[hash_id] = time.monotonic() + PUNCH_BACKOFF[-1]
+            conn, udp_targets = self._udp_lead(hash_id, data)
+            if (theirs or conn) and time.monotonic() - offered < 15.0:
+                asyncio.create_task(self._punch(
+                    hash_id, theirs, leader=True, udp_conn=conn, udp_targets=udp_targets,
+                ))
+            else:
+                if conn:
+                    conn._shutdown()
+                if not theirs:
+                    self._punch_next[hash_id] = time.monotonic() + PUNCH_BACKOFF[-1]
+
+    async def _udp_answer(
+        self: MessagingBackend, hash_id: str, data: dict[str, Any]
+    ) -> tuple[UdpConnection | None, list[tuple[str, int]], dict[str, Any]]:
+        """Follower: their offer carries UDP candidates, a key share and an
+        id; make our connection (it can take their probes at once) and the
+        answer's UDP part."""
+        theirs = [c for c in _clean_candidates(data.get("w")) if punchable_candidate(*c)]
+        their_key, their_id = _hex(data.get("k"), 32), _hex(data.get("i"), 8)
+        if not theirs or their_key is None or their_id is None or self.udp is None:
+            return None, [], {}
+        await self._refresh_udp(if_older=STUN_FRESH)
+        mine = self.udp_candidates()
+        targets = _same_family(theirs, mine)
+        if not mine or not targets:
+            return None, [], {}
+        secret, my_id = secrets.token_bytes(32), secrets.token_bytes(8)
+        # Keys: leader->follower and follower->leader; they lead (they offered).
+        l2f, f2l = derive_keys(combine_secrets(their_key, secret), hash_id, self._me_hash())
+        conn = self.udp.new_connection(their_id, send_key=f2l, recv_key=l2f, my_id=my_id)
+        if conn is None:
+            return None, [], {}
+        self.udp.prime(targets)  # before answering: the leader probes as soon as it hears
+        return conn, targets, {"w": [list(c) for c in mine], "k": secret.hex(), "i": my_id.hex()}
+
+    def _udp_lead(
+        self: MessagingBackend, hash_id: str, data: dict[str, Any]
+    ) -> tuple[UdpConnection | None, list[tuple[str, int]]]:
+        """Leader: the answer to our offer completes the UDP keys."""
+        offer = self._udp_offers.pop(hash_id, None)
+        if offer is None or self.udp is None:
+            return None, []
+        secret, my_id, when = offer
+        theirs = [c for c in _clean_candidates(data.get("w")) if punchable_candidate(*c)]
+        their_key, their_id = _hex(data.get("k"), 32), _hex(data.get("i"), 8)
+        targets = _same_family(theirs, self.udp_candidates())
+        if not targets or their_key is None or their_id is None or time.monotonic() - when > 15:
+            return None, []
+        l2f, f2l = derive_keys(combine_secrets(secret, their_key), self._me_hash(), hash_id)
+        conn = self.udp.new_connection(their_id, send_key=l2f, recv_key=f2l, my_id=my_id)
+        return (conn, targets) if conn else (None, [])
 
     async def _punch(
-        self: MessagingBackend, hash_id: str, targets: list[tuple[str, int]], *, leader: bool
+        self: MessagingBackend,
+        hash_id: str,
+        targets: list[tuple[str, int]],
+        *,
+        leader: bool,
+        udp_conn: UdpConnection | None = None,
+        udp_targets: list[tuple[str, int]] | None = None,
     ) -> None:
-        if hash_id in self._punching or not self.tcp_transport:
-            return
         port = self.punch_port()
-        if not port:
+        if hash_id in self._punching or not self.tcp_transport or not port:
+            if udp_conn:
+                udp_conn._shutdown()
             return
         self._punching.add(hash_id)
         try:
-            peer_id = await self._race_dials(
-                targets, port, delay=0.0 if leader else PUNCH_FOLLOWER_DELAY
-            )
+            peer_id: str | None = None
+            if udp_conn:
+                # UDP first: it gets through carrier NATs far more often than TCP.
+                if self.udp and udp_targets and await self.udp.punch(
+                    udp_conn, udp_targets, UDP_PUNCH_WINDOW,
+                    delay=0.0 if leader else PUNCH_FOLLOWER_DELAY,
+                ):
+                    peer_id = await self.tcp_transport.adopt_udp(udp_conn)
+                    log.info("Direct UDP connection to %s via %s", hash_id[:8], udp_conn.address)
+                else:
+                    udp_conn._shutdown()
+            if not peer_id and targets:
+                peer_id = await self._race_dials(
+                    targets, port, delay=0.0 if leader else PUNCH_FOLLOWER_DELAY
+                )
             if not peer_id:
                 fails = self._punch_failures.get(hash_id, 0)
                 self._punch_failures[hash_id] = fails + 1
@@ -371,40 +553,44 @@ class PunchMixin:
 
     def _speed_advice(self: MessagingBackend, hash_id: str, path: str) -> dict[str, Any]:
         """Why a contact on another network is on Tor/the relay rather than
-        direct (the fast path), in plain words. Across mobile networks the
-        phones can only connect directly over IPv6: carrier NAT on IPv4 lets
-        nothing in."""
-        mine6 = any(":" in h for h, _p in self.public_candidates())
-        theirs6 = any(":" in h for h, _p in self._peer_public.get(hash_id, []))
+        direct (the fast path), in plain words. Across networks the devices
+        connect directly over UDP (IPv4 through carrier NAT, or IPv6); each
+        needs a public address (STUN, or IPv6) to give the other."""
+        mine = self.udp_candidates() + self.public_candidates()
+        theirs = self._peer_udp.get(hash_id, []) + self._peer_public.get(hash_id, [])
         failed = self._punch_failures.get(hash_id, 0)
-        tips = []
-        if path == "direct":
+        symmetric = bool(self.udp and self.udp.symmetric)
+        tips: list[str] = []
+        if path in ("direct", "direct (udp)"):
             reason = "Direct connection: full speed."
         elif not self.direct_internet_enabled():
             reason = ("Direct internet connections are off on this device "
                       "(Settings → Network → Try direct internet connections).")
-        elif not mine6:
-            reason = ("This device's network has no IPv6, so it can't connect directly to a "
-                      "phone on another network.")
-            tips.append("On mobile data: Settings → Network → SIM → Access Point Names → your "
-                        "APN → APN protocol: IPv4/IPv6 (some carriers and MVNOs default to IPv4 "
-                        "only).")
-        elif not theirs6:
-            reason = ("Your contact's network has no IPv6 (or they turned direct connections "
-                      "off), so the phones can't connect directly.")
-            tips.append("On their phone: APN protocol IPv4/IPv6 (Settings → Network → SIM → "
-                        "Access Point Names).")
+        elif not mine:
+            reason = ("This device couldn't find its public address (the STUN servers didn't "
+                      "answer: blocked on this network?), so it can't connect directly.")
+        elif not theirs:
+            reason = ("Your contact's device hasn't shared a public address (an older version, "
+                      "direct connections turned off, or STUN blocked on their network).")
         elif failed:
-            reason = ("Both devices have IPv6, but a carrier's firewall blocked the direct "
-                      f"connection ({failed} tr{'y' if failed == 1 else 'ies'}).")
+            reason = ("Both devices have public addresses, but the networks between you block "
+                      f"direct connections ({failed} tr{'y' if failed == 1 else 'ies'}).")
+            if symmetric:
+                reason += (" This network gives a different port for every destination "
+                           "(\"symmetric\" carrier NAT), which direct connections can't cross.")
+            tips.append("Wi-Fi on either side, or IPv6 on mobile data (Settings → Network → "
+                        "SIM → Access Point Names → APN protocol: IPv4/IPv6), often works.")
         else:
-            reason = "Both devices have IPv6: a direct connection is being tried."
+            reason = "Both devices have public addresses: a direct connection is being tried."
         if path in ("tor", "relay"):
             tips.append("Works on any network at full speed: run your own relay "
                         "(Settings → Network → Internet relay) or put both phones on the same "
                         "VPN (WireGuard, or Tailscale which works through carrier NAT).")
         return {
-            "my_ipv6": mine6, "their_ipv6": theirs6, "direct_tries_failed": failed,
+            "my_ipv6": any(":" in h for h, _p in mine),
+            "their_ipv6": any(":" in h for h, _p in theirs),
+            "my_public": bool(mine), "their_public": bool(theirs),
+            "symmetric_nat": symmetric, "direct_tries_failed": failed,
             "tor_circuits": self.tor_circuits(hash_id), "reason": reason, "tips": tips,
         }
 
@@ -446,6 +632,8 @@ class PunchMixin:
                 link.transport_peer_id
             )
             path = "relay" if link.transport == "relay" else ("tor" if on_tor else "direct")
+            if path == "direct" and link.address.startswith("udp:"):
+                path = "direct (udp)"
         relay_ok = self.relay_available_for(hash_id)
         relay_known = self.pair_relay(hash_id) is not None
         direct_ok = any(r["ok"] for r in results)

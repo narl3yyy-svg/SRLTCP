@@ -111,6 +111,7 @@ class PingMixin:
                         self._kick_connect(hash_id)
                 await self.relay_network_changed(ips)
                 await self.addresses_changed()
+                await self._refresh_udp()  # new network: new public UDP address
                 if ips - last:
                     # A network came up (VPN connected, new Wi-Fi): try contacts now.
                     self._net_changed_tick = self._ping_tick

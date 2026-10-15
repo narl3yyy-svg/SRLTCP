@@ -11,7 +11,7 @@ For each contact, the app tries these in order and uses the first that works:
 | # | Path | When it works | What sees your traffic |
 |---|---|---|---|
 | 1 | **Direct, same network** | Both on the same Wi-Fi, or both on the same VPN (WireGuard) | Only the two devices |
-| 2 | **Direct, across networks** | One on the VPN and the other on the home Wi-Fi; or two different home networks (hole punching, see below) | Only the two devices |
+| 2 | **Direct, across networks** | Two mobile carriers, a phone and a home Wi-Fi, two homes: the devices punch a direct **UDP** connection through both NATs (see below); also one on the VPN and the other on the home Wi-Fi | Only the two devices |
 | 3 | **Internet relay** | Always, as long as both devices can reach your relay | The relay forwards sealed packets it can't read |
 | 4 | **Tor** | Any network that allows Tor, no server and no port forwarding (both devices need *Reach contacts anywhere over Tor* on) | Tor relays carry sealed traffic; your contact doesn't see your IP, and no single Tor relay knows both who you are and who you talk to |
 
@@ -31,9 +31,9 @@ and go out automatically.
 different networks can't find each other without a meeting point: something both
 can reach. Direct internet connections (hole punching) use the session you
 already have, over **Tor** or your **relay**, as that meeting point to swap
-public addresses. With IPv6 on both sides, Tor is enough: no server at all.
-IPv4 punching needs a relay, because only a server outside your network can
-tell a phone its public IPv4 address.
+public addresses: Tor is the doorbell, the direct UDP connection carries the
+traffic. No server of your own is needed: a public STUN server tells each
+phone its public address (see below).
 
 ## Common setups
 
@@ -123,34 +123,58 @@ stay on Tor: then neither contacts nor networks learn who talks to whom.
 
 ## Hole punching (direct internet connections)
 
-Home routers block incoming connections, but they let replies to *outgoing*
-connections back in. If both phones dial each other at the same moment, each
-router sees the other phone's packets as replies, and a direct connection
-opens. Nothing on either router needs to be configured.
+Routers and mobile carriers block incoming connections, but they let replies
+to *outgoing* traffic back in. If both phones send to each other at the same
+moment, each NAT sees the other phone's packets as replies, and a direct
+connection opens. Nothing on either router needs to be configured. This is how
+video-call apps get through, and SRLTCP does it over **UDP**, which carrier
+NATs let through far more often than TCP.
 
 How it works in SRLTCP:
-1. Each phone connects to the relay from port **7828** (peer port + 3). The
-   relay tells the phone which public address and port the internet sees.
-2. The phones exchange those addresses **inside the encrypted session**, so
-   only your contacts ever see them, never the relay or anyone else.
-3. Both phones dial each other at an agreed moment. The first connection that
-   opens is checked with the normal signed handshake (an impostor can't take
-   it over) and replaces the relay session.
+1. Each phone asks a **STUN server** (Google's and Cloudflare's by default, or
+   your own under *STUN servers*) which public address and port the internet
+   sees for its UDP socket (port **7828**). IPv6 addresses need no STUN.
+2. Over the session they already have (Tor or the relay), the phones swap
+   those addresses, a random key share each and a connection id, **inside the
+   end-to-end encrypted session**, so only your contacts ever see them.
+3. Both phones first send a "priming" packet that opens their own NAT but
+   expires before reaching the other one (a hop limit), then probe each other.
+   The first packet that arrives and decrypts fixes the path.
+4. The normal signed, quantum-safe handshake runs over the new connection (an
+   impostor can't take it over) and it replaces the Tor/relay session. Files,
+   chat and calls move over without restarting; a file carries on from where
+   it was.
 
-When it doesn't work, the relay simply keeps carrying the traffic:
-- **Carrier-grade NAT** on mobile data usually picks a new random port for
-  every destination ("strict" or "symmetric" NAT). Hole punching can't
-  predict that port.
-- **Some corporate or guest networks** block it.
-- **Turned off.** Turning off *Direct internet connections* stops it, so
-  contacts never learn your IP address (relay only).
+On the wire, every UDP packet is encrypted and authenticated (AES-256-GCM)
+with keys only the two contacts know; packets that don't decrypt are dropped
+without an answer, so nobody can inject data, close the connection or use the
+phone to bounce traffic. The session inside adds its own end-to-end
+encryption. The connection is reliable and ordered like TCP (acknowledgements,
+retransmission, congestion control that watches delay as well as loss, so chat
+stays snappy during a big file), and call audio/video go as separate
+datagrams that never wait behind lost file data. If a phone's address changes
+(Wi-Fi to mobile data), authenticated packets from the new address move the
+connection there; if it goes quiet for 30 seconds, Tor or the relay takes over
+and a new round starts.
 
-**IPv6.** If both phones have global IPv6 addresses, the app tries those too,
-and no relay is needed: the phones know their own IPv6 addresses (IPv6 has no
-NAT), so they swap them inside the Tor session and dial each other the same
-way. Many networks let IPv6 through much more easily than IPv4 NAT. Addresses
-built from the phone's hardware (MAC) address are never shared; the
-temporary privacy addresses are used instead.
+When it doesn't work, Tor or the relay simply keeps carrying the traffic:
+- **"Symmetric" carrier NAT** gives a new random port for every destination,
+  which no hole punching can predict. *Check connection* tells you when your
+  network does this. Wi-Fi on either side, or IPv6 on mobile data, usually
+  works.
+- **Some corporate or guest networks** block UDP.
+- **Turned off.** Turning off *Direct internet connections* stops it (and
+  STUN), so contacts never learn your IP address (Tor or relay only).
+
+Tested in `scripts/simulate_udp.sh`: two phones behind separate carrier NATs,
+TCP between the networks blocked, 0.5% packet loss: direct UDP after about
+10 s, a 40 MB file at 14-21 MB/s with chat flowing meanwhile; with symmetric NAT
+on both sides they correctly stay on the relay.
+
+**TCP and IPv6.** The app also tries TCP hole punching (through home routers,
+with a relay telling it its public IPv4 address) and plain IPv6. Addresses
+built from the phone's hardware (MAC) address are never shared; the temporary
+privacy addresses are used instead.
 
 ## Settings, one by one
 
@@ -205,14 +229,17 @@ You normally never touch these, because the app learns addresses by itself.
 | 7825 | TCP | Each device (peer connections) | Only inside your LAN/VPN firewall, never on the router |
 | 7826 | UDP | Each device (LAN/VPN discovery) | Same as above |
 | 7827 | TCP | **Relay server only** | Yes, on the server's firewall (or run it on 443) |
-| 7828 | TCP | Each device (hole punching, outgoing) | No, it only dials out |
+| 7828 | UDP | Each device (direct connections between networks) | No. It only answers packets from contacts it's punching to; everything else gets no reply |
+| 7828 | TCP | Each device (TCP hole punching, outgoing) | No, it only dials out |
 | — | Tor | Each device (onion service) | No. Tor only dials out, and the onion listener is bound to 127.0.0.1 |
 | 9876 | TCP | Each device (local web UI, 127.0.0.1 only) | No |
 
 ## Privacy summary
 
 - Your IP address is visible to: the relay operator (you, if you run it), and
-  your contacts **only if** *direct internet connections* is on. Strangers
+  your contacts and the STUN server **only if** *direct internet connections*
+  is on (the STUN server learns only that this IP asked, nothing about your
+  contacts or messages). Strangers
   can't learn it from the app, because addresses travel only inside encrypted
   sessions with trusted contacts.
 - Over Tor, your contact doesn't see your IP address. The first Tor relay sees
@@ -232,7 +259,7 @@ You normally never touch these, because the app learns addresses by itself.
 | Messages wait while one phone is on mobile data and the other on Wi-Fi | Open *Edit contact* → **Check connection**. It says whether Tor is working on this device and whether the contact has shared a Tor address yet. If not, open the chat once while both phones are on the same Wi-Fi, with Tor showing "connected" on both (Settings → Network). The chat also explains it by itself if a contact stays unreachable. |
 | Tor stays at "connecting…" | The network may block Tor (some workplaces and schools do). Check the PC's clock is correct; Tor refuses to work with a wrong clock. |
 | Contact always shows **relay**, never direct | Normal on mobile data (carrier NAT). On home networks, make sure *Direct internet connections* is on for both phones. Some routers block hole punching. |
-| Contact always shows **TOR**, never direct | A direct path over the internet needs IPv6 on both networks (or a relay for IPv4) and *Direct internet connections* on for both phones. Some mobile carriers and routers block incoming IPv6; then Tor keeps carrying the traffic. |
+| Contact always shows **TOR**, never direct | *Edit contact* → **Check connection** → *Speed* says why: STUN blocked, the contact on an older version, direct connections off, or a "symmetric" carrier NAT. Both phones need this version and *Direct internet connections* on. |
 | VPN phone can't reach the home phone directly | The VPN client's `AllowedIPs` must include the home LAN, and the WireGuard server must route or NAT to the LAN. |
 | "Relay unreachable" | Is the server up, TCP 7827 open on its firewall, and the code pasted correctly? |
 | "Relay certificate doesn't match" | The code is from a different relay, the relay's certificate was regenerated, or something is intercepting the connection. Get a fresh code from `srltcp relay`. |

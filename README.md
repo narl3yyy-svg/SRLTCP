@@ -17,7 +17,7 @@
 | **P2P mode** | Direct encrypted links between peers on LAN or serial cable |
 | **Internet relay** | Paired contacts keep talking with the VPN off or on different networks; automatic switching between direct and relay; the relay is blind (TLS + pinned cert, rotating mailboxes, second encryption layer, padding) |
 | **Tor (no server needed)** | Reach trusted contacts from any network without a server or port forwarding: each device publishes a private onion service that only its contacts can use. Bundled on Android; uses Tor Browser's Tor on a PC |
-| **Direct across networks** | No port forwarding: one phone on the VPN and one on the home Wi-Fi connect directly, and two home networks connect directly through both routers (hole punching; over IPv6 straight from a Tor session, no relay needed). Addresses are exchanged only inside the encrypted session; Tor or the relay steps in when a network doesn't allow it |
+| **Direct across networks** | Full speed between two mobile carriers, a phone and a home Wi-Fi, two homes: the devices punch a direct, encrypted **UDP** connection through both NATs (like video calls do), with Tor as the meeting point and backup, no server or port forwarding. Reliable and ordered for chat and files, separate datagrams for call audio/video; follows a phone to a new network. Addresses are exchanged only inside the encrypted session; Tor or the relay steps in when a network doesn't allow it |
 | **Quantum-safe encryption** | Every session: X25519 + ML-KEM-768 key exchange, Ed25519 + ML-DSA-65 signatures, AES-256-GCM with replay protection |
 | **Verified contacts** | 60-digit safety numbers over both identity keys; automatic when you pair in person (QR or NFC) |
 | **Encrypted on the device** | Keys, contacts, chats, groups and settings sealed at rest (Android Keystore / Windows DPAPI); encrypted backup and restore |
@@ -77,7 +77,7 @@ srltcp/
       share_peer.py         # E2EE folder/file shares
       sync.py               # Two-way folder sync with a contact
       groups.py             # Group chats
-      relay.py, punch.py    # Relay client, path switching, hole punching (IPv4/IPv6)
+      relay.py, punch.py    # Relay client, path switching, hole punching (UDP, TCP, IPv6)
       tor.py                # Onion service, Tor dialing, parallel Tor lanes
       turn.py               # Built-in call relay (media through the session)
       disappear.py          # Disappearing messages
@@ -319,13 +319,13 @@ After that, addresses look after themselves: when a contact's IP changes (new Wi
 
 ### Phones on different mobile carriers / without the VPN
 
-Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data usually has **no IPv4 address another phone can connect to**, so something reachable has to sit in the middle. By default that's **Tor** (built in, no setup; see below). With IPv6 on both sides the phones can also connect directly. If you'd rather have a faster middle you control, run your own relay:
+Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data usually has **no IPv4 address another phone can connect to**. SRLTCP still connects them **directly over UDP** in most cases (below): they meet over **Tor** (built in, no setup), swap addresses inside the encrypted session and punch through both NATs, and Tor only carries the traffic when that's impossible. If you'd rather have a fast fallback you control too, run your own relay:
 
 1. **Pair locally** (same Wi-Fi, WireGuard, QR or NFC), or send a pairing link.
 2. **Internet relay** — run `srltcp relay` on a server with a public address (your WireGuard server is perfect) and paste the code it prints into *Settings → Network → Internet relay* on **one** phone. The other phone learns it automatically inside the encrypted connection.
 3. From then on the phones use a **direct** path whenever one works and the **relay** otherwise — VPN off, different carriers, Wi-Fi to mobile data. Moving to the relay takes a few seconds (3 s in our test); when a direct path comes back they move back within about a minute. Messages, files, voice and video calls all work over the relay. The chat header shows **DIRECT** or **RELAY**.
 
-**Direct without port forwarding.** One phone on the VPN and the other on the home Wi-Fi connect directly (the phones tell each other their LAN and VPN addresses inside the encrypted session). Two phones on *different home networks* also connect directly through both routers: with *Settings → Network → Try direct internet connections* on (default), they use the connection they already have (Tor for IPv6, a relay for IPv4) to agree on a moment and dial each other at once (hole punching) — in our simulation the direct connection was up 10 s after they met on the relay, with routers that ignore or reset unexpected connections alike. This shares your public IP address with your contacts only, and on a direct connection your networks can see which address you talk to; turn it off to keep every internet connection on Tor or the relay. Carrier-grade NAT on IPv4 mobile data usually prevents it; Tor or the relay then simply carries on.
+**Direct without port forwarding (UDP).** With *Settings → Network → Try direct internet connections* on (default), two phones on different networks (two mobile carriers, mobile data and a home Wi-Fi, two homes) connect straight to each other: each learns its public address from a STUN server, they swap addresses and key shares inside the session they already have (Tor or a relay), and both send UDP packets to each other at once, which opens both NATs (hole punching). The connection is encrypted per packet with keys only the two of you have, the signed quantum-safe handshake runs inside it, and it carries chat, files and calls at the full speed of both connections (the header shows **DIRECT**). In our simulation (two carrier NATs, TCP between them blocked, packet loss) the phones were direct after about 10 s and a 40 MB file moved at 14-21 MB/s. "Symmetric" carrier NAT on both sides can't be punched; Tor or the relay then carries on, and *Check connection* says so. Phones on a VPN and the home Wi-Fi also connect directly (LAN/VPN addresses are shared inside the session). This shares your public IP address with your contacts (and the STUN server); turn it off to keep every internet connection on Tor or the relay. Details: [docs/NETWORKING.md](docs/NETWORKING.md#hole-punching-direct-internet-connections).
 
 **No server, no port forwarding: Tor.** With *Settings → Network → Reach contacts anywhere over Tor* on (default) on both devices, they reach each other from any network through the Tor network: phone on mobile data, PC on a VPN, a friend's Wi-Fi. No relay and nothing to configure on any router. Each device publishes a private onion service; its address goes only to trusted contacts (inside the encrypted connection), and only trusted contacts can connect through it. Tor is built into the Android app; on a PC install [Tor Browser](https://www.torproject.org/download/) (SRLTCP starts its Tor by itself). Tor is used only when there's no faster path, and the app moves back to a direct path when one appears. **IPv6 straight from Tor:** when both devices have IPv6 internet, they swap their IPv6 addresses inside the Tor session and dial each other directly (no relay, no server); the chat badge changes from TOR to DIRECT and files run at the full speed of both connections. If a network blocks it, they simply stay on Tor. Tested on a private Tor network (`scripts/tor_testnet.sh` + `scripts/simulate_tor.py`).
 
@@ -669,7 +669,9 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [ ] Per-contact "always use Tor" (hide who talks to whom even when a direct path exists)
 - [ ] Several relays per contact (failover) and multi-hop relaying
 - [ ] Android USB serial Chaquopy shim (full OTG support)
-- [ ] QUIC (UDP) as an extra direct path: UDP hole punching gets through more routers and carrier NATs than TCP, so fewer contacts fall back to Tor. Plan: keep TCP whenever a direct TCP path works (faster), use QUIC when only UDP gets through, Tor as the last resort; SRLTCP's quantum-safe handshake runs inside QUIC. Needs aioquic built for Android (Chaquopy has no wheel yet) or a Java QUIC library
+- [x] Direct UDP between networks (QUIC-style reliable, encrypted transport in pure Python; STUN + hole punching; Tor as meeting point)
+- [ ] Faster direct UDP: native packet processing (batching, GSO) for >30 MB/s per phone
+- [ ] Reconnect directly after both apps restart without waiting for Tor (remember the last UDP addresses)
 - [ ] Bandwidth limiting and QoS per transfer
 - [ ] Signed APK releases with a stable release key (updates install over the old app)
 - [ ] Desktop system tray wrapper (Tauri/Electron)

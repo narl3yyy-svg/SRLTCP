@@ -2590,6 +2590,7 @@
     setCheckbox("set-relay-enabled", settings.relay_enabled !== false);
     setInputValue("set-relay-code", settings.relay_code || "");
     setCheckbox("set-direct-internet", settings.direct_internet !== false);
+    setInputValue("set-stun-servers", settings.stun_servers || "");
     setCheckbox("set-tor-enabled", settings.tor_enabled !== false);
     setCheckbox("set-shrink-photos", !!settings.shrink_photos);
     setSelectValue("set-disappear", String(settings.disappear_seconds || 0));
@@ -4628,6 +4629,7 @@
       relay_enabled: $("#set-relay-enabled")?.checked ?? true,
       relay_code: ($("#set-relay-code")?.value || "").trim(),
       direct_internet: $("#set-direct-internet")?.checked ?? true,
+      stun_servers: ($("#set-stun-servers")?.value || "").trim(),
       tor_enabled: $("#set-tor-enabled")?.checked ?? true,
       shrink_photos: $("#set-shrink-photos")?.checked || false,
       disappear_seconds: parseInt($("#set-disappear")?.value || "0", 10),
@@ -4858,7 +4860,8 @@
     const yn = (v) => (v ? "yes" : "no");
     const tips = (sp.tips || []).map((t) => `<li>${escapeHtml(t)}</li>`).join("");
     return `<p><strong>Speed:</strong> ${escapeHtml(sp.reason || "")}</p>` +
-      `<p class="muted">IPv6 here: ${yn(sp.my_ipv6)} · IPv6 on their side: ${yn(sp.their_ipv6)}` +
+      `<p class="muted">Public address here: ${yn(sp.my_public)} · on their side: ${yn(sp.their_public)}` +
+      ` · IPv6 here: ${yn(sp.my_ipv6)}` + (sp.symmetric_nat ? " · symmetric NAT here" : "") +
       (sp.tor_circuits ? ` · Tor circuits: ${sp.tor_circuits}` : "") + `</p>` +
       (tips ? `<ul>${tips}</ul>` : "");
   }

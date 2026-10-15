@@ -109,6 +109,9 @@ class AppSettings:
     # Direct connections across networks (hole punching). Shares your public
     # address with your contacts (only them, inside the encrypted session).
     direct_internet: bool = True
+    # STUN servers for direct UDP connections ("host:port, ..."; empty =
+    # Google's and Cloudflare's public ones). They learn your IP address.
+    stun_servers: str = ""
     # Reach contacts over Tor when there's no other path (onion service; no
     # server or port forwarding). Bundled on Android; needs Tor on a PC.
     tor_enabled: bool = True

@@ -68,6 +68,7 @@ class NodeConfig:
     relay_enabled: bool = True
     relay_code: str = ""
     direct_internet: bool = True  # hole punching; shares public IP with contacts
+    stun_servers: str = ""  # for direct UDP ("host:port, ..."; empty = defaults)
     tor_enabled: bool = False  # reach contacts over Tor (onion service)
     tor_path: str = ""  # tor executable on a PC (empty: find it)
     punch_port: int = 0  # 0 = listen port + 3
@@ -179,6 +180,7 @@ class MessagingBackend(
                 strict_ports=self.config.strict_ports,
             )
             self._wire_transport(self.tcp_transport)
+            self.tcp_transport.on_datagram(self._on_transport_datagram)
 
         if self.config.enable_serial:
             self.identities["serial"] = self.identity_store.load_or_create(
@@ -207,6 +209,7 @@ class MessagingBackend(
         await self.start_ping_loop()
         await self.start_call_relay()
         if self.tcp_transport:
+            await self.start_udp()
             await self.start_relay_client()
         await self.start_tor()
         self.connect_known_contacts()
@@ -241,6 +244,7 @@ class MessagingBackend(
         self._reconnect_tasks.clear()
         await self.stop_transfers()
         self._pending_handshakes.clear()
+        self.stop_udp()
         if self.tcp_transport:
             log.info(
                 "Closing TCP transport (port %d, discovery %d)",
@@ -921,10 +925,26 @@ class MessagingBackend(
             return
         body = struct.pack(">HH", src_port, dst_port) + payload
         try:
+            if (
+                link.transport == "tcp"
+                and self.tcp_transport
+                and self.tcp_transport.send_datagram(link.transport_peer_id, body)
+            ):
+                # Direct UDP: as a datagram, never waiting behind lost packets.
+                # The UDP layer encrypts and authenticates it with keys only the
+                # two of us have, and the media inside is DTLS-SRTP encrypted.
+                return
             packet = self._seal(link, MessageType.CALL_MEDIA, body)
             await self._send_raw(link.transport_peer_id, link.transport, packet)
         except (KeyError, OSError, ConnectionError, RuntimeError):
             pass  # media is loss-tolerant; the call recovers or ends
+
+    def _on_transport_datagram(self, peer: TransportPeer, body: bytes) -> None:
+        """Call media over direct UDP: accepted only on a connection that
+        carries a contact's established session."""
+        link = self.get_link_by_peer_id(peer.peer_id)
+        if link and link.handshake_complete and self.is_trusted(link.hash_id):
+            self._handle_call_media(link.hash_id, body)
 
     def _handle_call_media(self, hash_id: str, body: bytes) -> None:
         if self.call_relay is None or len(body) < 4:
