@@ -1759,10 +1759,16 @@ html, body { touch-action: pan-x pan-y; }
 .contact-check-result li.ok { color: var(--success, #3ecf8e); }
 .contact-check-result li.bad { color: var(--text-muted); }
 .contact-check-result .muted { color: var(--text-muted); }
-.chat-notice {
-  align-self: center; margin: 0.4rem auto; padding: 0.3rem 0.75rem; max-width: 90%;
-  font-size: 0.75rem; text-align: center; color: var(--text-muted);
-  border: 1px dashed var(--border); border-radius: 999px;
+
+/* Wi-Fi waiting for its sign-in page (Android reports it). */
+.wifi-signin {
+  position: fixed; top: env(safe-area-inset-top, 0); left: 0; right: 0; z-index: 900;
+  display: flex; align-items: center; justify-content: center; gap: 0.6rem; flex-wrap: wrap;
+  padding: 0.45rem 1rem; font-size: 0.8rem; text-align: center;
+  background: var(--warning, #e0a63b); color: #111;
 }
-.chat-notice.down { color: var(--warning, #e0a63b); border-color: var(--warning, #e0a63b); }
-.chat-notice.up { color: var(--success, #3ecf8e); }
+.wifi-signin.hidden { display: none; }
+.wifi-signin button {
+  padding: 0.2rem 0.8rem; border-radius: 999px; border: 1px solid #111;
+  background: #111; color: var(--warning, #e0a63b); font-weight: 600;
+}

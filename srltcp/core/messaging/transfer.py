@@ -153,6 +153,28 @@ class _Incoming:
     prehash: int = 0  # bytes on disk from before a restart, not hashed yet
 
 
+PART_SUFFIX = ".srltcp-part"
+
+
+def part_path(dest: Path) -> Path:
+    """Where a download's bytes go until verified: hidden (a leading dot; the
+    gallery and media scanner skip it), next to its final name so the move
+    into place is a rename."""
+    return dest.with_name(f".{dest.name}{PART_SUFFIX}")
+
+
+def _place_verified(part: Path, dest: Path) -> Path:
+    """Worker thread: move a verified download to its final name (or the next
+    free one if something took that name meanwhile)."""
+    import os
+
+    if part == dest:
+        return dest
+    final = dest if not dest.exists() else unique_dest_path(dest.parent, dest.name)
+    os.replace(part, final)
+    return final
+
+
 def _valid_sha(value: str) -> bool:
     return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
@@ -270,7 +292,8 @@ class TransferMixin:
                 self._journal_path.unlink(missing_ok=True)
             return
         keep = [
-            {**t.to_dict(), "path": str(self._incoming_paths.get(t.id, t.path))}
+            {**t.to_dict(), "path": str(self._incoming_paths.get(t.id, t.path)),
+             "final": str(t.path)}
             for t in self._transfers.values()
             if not t.metadata.get("sync")  # sync asks again after a restart
             and (
@@ -323,10 +346,12 @@ class TransferMixin:
         outgoing = sender in own
         if (not outgoing and recipient not in own) or size < 0:
             return None  # another identity (it was reset)
+        final = Path(str(item.get("final") or path))  # (incoming: verified copy's name)
         transfer = FileTransfer(
             id=tid, sender_hash=sender, recipient_hash=recipient,
             filename=safe_filename(str(item.get("filename") or path.name)),
-            path=path, size=size, sha256="", transport=str(item.get("transport") or "tcp"),
+            path=path if outgoing else final, size=size, sha256="",
+            transport=str(item.get("transport") or "tcp"),
             state=state, offset=max(0, min(offset, size)), created=created, metadata=meta,
         )
         if state in TERMINAL:
@@ -355,6 +380,19 @@ class TransferMixin:
         self._in[tid] = _Incoming(path=path, expected=have, written=have, prehash=have)
         transfer.offset = have
         return transfer
+
+    def _free_dest(self: MessagingBackend, filename: str) -> Path:
+        """A final name no file has and no unfinished download will take."""
+        directory = ensure_dir(self._transfer_dir)
+        taken = {t.path for t in self._transfers.values() if t.state not in TERMINAL}
+        safe = safe_filename(filename)
+        stem, suffix = Path(safe).stem, Path(safe).suffix
+        n = 0
+        while True:
+            dest = directory / (safe if not n else f"{stem}{n}{suffix}")
+            if not dest.exists() and dest not in taken and not part_path(dest).exists():
+                return dest
+            n += 1
 
     def _purge_copies(self: MessagingBackend) -> None:
         keep = {
@@ -709,7 +747,7 @@ class TransferMixin:
                 return
             dest = target
         else:
-            dest = unique_dest_path(self._transfer_dir, filename)
+            dest = self._free_dest(filename)
         link = self.get_link(hash_id)
         assert link is not None
         transfer = FileTransfer(
@@ -728,12 +766,15 @@ class TransferMixin:
             transfer.metadata["ttl"] = ttl  # the sender's disappearing timer
         if sync_meta is not None:
             transfer.metadata["sync"] = sync_meta
+        # The bytes go to a hidden partial file until verified (sync files have
+        # their own partial files already): nothing half-received or damaged
+        # ever shows under the real name.
+        part = dest if sync_meta is not None else part_path(dest)
         self._transfers[transfer_id] = transfer
-        self._incoming_paths[transfer_id] = dest
-        self._in[transfer_id] = _Incoming(path=dest)
-        # Reserve the name so concurrent offers with the same filename don't collide.
+        self._incoming_paths[transfer_id] = part
+        self._in[transfer_id] = _Incoming(path=part)
         with contextlib.suppress(OSError):
-            dest.touch(exist_ok=True)
+            part.touch(exist_ok=True)  # (reserves the name for concurrent offers)
         self._journal_changed()
         await self._send_control(
             hash_id, MessageType.FILE_ACCEPT, {"transfer_id": transfer_id, "offset": 0}
@@ -899,6 +940,14 @@ class TransferMixin:
         if transfer.state in TERMINAL:
             return  # cancelled meanwhile
         transfer.offset = transfer.size
+        if ok and not transfer.metadata.get("sync"):
+            try:
+                final = await asyncio.to_thread(_place_verified, rx.path, transfer.path)
+                transfer.path = final
+                self._incoming_paths[transfer.id] = final
+            except OSError as exc:
+                log.warning("Moving %s into place failed: %s", transfer.filename, exc)
+                ok = False
         if ok:
             transfer.sha256 = rx.sha256
             transfer.state = TransferState.COMPLETE

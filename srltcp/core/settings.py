@@ -125,7 +125,7 @@ class AppSettings:
     call_stun_server: str = ""  # stun:/turn:/turns: URL (empty = direct only)
     call_turn_username: str = ""
     call_turn_password: str = ""
-    version: str = "0.12.1"
+    version: str = "0.12.2"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

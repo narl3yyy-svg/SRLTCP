@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     /** True while the main frame is our own https://127.0.0.1 UI (checked by the JS bridge). */
     @Volatile
     var isTrustedPage = false
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
         private set
 
     private val fileChooserLauncher = registerForActivityResult(
@@ -161,6 +162,9 @@ class MainActivity : AppCompatActivity() {
             setCallScreen(true)
         }
         takeAnswerRequest(intent)
+        networkCallback = NetworkWatch.watch(this) {
+            deliverToWeb("onNetworkState", NetworkWatch.state(this).toString())
+        }
         firstLaunch = savedInstanceState == null
         pendingSavePath = savedInstanceState?.getString(STATE_PENDING_SAVE)
 
@@ -563,6 +567,14 @@ class MainActivity : AppCompatActivity() {
         } else {
             wv.importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
             if (pageLoaded) wv.visibility = android.view.View.VISIBLE
+        }
+    }
+
+    /** Wi-Fi settings: tapping the network there opens its sign-in page. */
+    fun openWifiSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
+        } catch (_: Exception) {
         }
     }
 
@@ -1041,6 +1053,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        NetworkWatch.unwatch(this, networkCallback)
+        networkCallback = null
         setCallAudio(false, false)
         NfcPairing.listener = null
         NfcPairing.card = null

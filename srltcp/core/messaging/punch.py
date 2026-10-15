@@ -662,6 +662,36 @@ class PunchMixin:
             "reason": reason, "tips": tips,
         }
 
+    def _network_blockers(
+        self: MessagingBackend, hash_id: str, results: list[dict[str, Any]]
+    ) -> list[str]:
+        """What this network does that stops a direct connection, in plain
+        words (from what the app already knows; nothing extra is sent)."""
+        import socket
+
+        from srltcp.utils.network import same_network
+
+        out: list[str] = []
+        isolated = [
+            r for r in results
+            if not r["ok"] and same_network(r["address"].rsplit(":", 1)[0])
+            and "isn't listening" not in r["detail"]
+        ]
+        if isolated:
+            out.append("You're both on this Wi-Fi, but it keeps devices apart (common on plane, "
+                       "hotel, café and guest Wi-Fi), so the phones can't talk over it directly.")
+        mapped = self.udp.mapped.get(socket.AF_INET) if self.udp else None
+        theirs = self._peer_udp.get(hash_id, []) + self._peer_public.get(hash_id, [])
+        if mapped and any(h == mapped[0] for h, _p in theirs):
+            out.append("You both reach the internet through the same public address (the same "
+                       "Wi-Fi, satellite link like Starlink, or carrier). Most of these don't "
+                       "pass traffic between their own users, so a direct connection can't "
+                       "go that way.")
+        if self.direct_internet_enabled() and self.udp and not self.udp_candidates():
+            out.append("This network blocks the UDP that direct connections use (or the STUN "
+                       "servers that find your public address).")
+        return out
+
     async def diagnose_contact(
         self: MessagingBackend, hash_id: str, *, probe_tor: bool = True
     ) -> dict[str, Any]:
@@ -715,6 +745,9 @@ class PunchMixin:
             except (OSError, TimeoutError, ConnectionError, asyncio.IncompleteReadError):
                 tor_problem = ("their Tor address didn't answer: their app may be closed, or "
                                "Tor is still connecting on their side")
+        blockers = [] if direct_ok or path.startswith("direct") else self._network_blockers(
+            hash_id, results
+        )
         if direct_ok:
             summary = "Reachable directly — no relay needed."
         elif relay_ok:
@@ -731,6 +764,8 @@ class PunchMixin:
                             "must include the home network (WireGuard AllowedIPs).")
             if relay_known and not relay_ok:
                 summary += " Your relay isn't connected right now — check Settings → Network."
+        if blockers:
+            summary += " " + " ".join(blockers)
         return {
             "hash_id": hash_id,
             "path": path,
@@ -739,5 +774,6 @@ class PunchMixin:
             "relay": {"configured": relay_known, "connected": relay_ok},
             "my_addresses": self.local_candidates(),
             "tor": {**self.tor_status(), "contact_has_address": bool(self.peer_onion(hash_id))},
+            "network": blockers,
             "summary": summary,
         }

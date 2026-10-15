@@ -117,6 +117,17 @@ class SRLTCPBridge(private val activity: MainActivity) {
         activity.runOnUiThread { activity.restartApp() }
     }
 
+    /** {"wifi", "captive" (waiting for its sign-in page), "wifi_internet"}. */
+    @JavascriptInterface
+    fun networkState(): String =
+        if (activity.isTrustedPage) NetworkWatch.state(activity).toString() else "{}"
+
+    @JavascriptInterface
+    fun openWifiSettings() {
+        if (!activity.isTrustedPage) return
+        activity.runOnUiThread { activity.openWifiSettings() }
+    }
+
     @JavascriptInterface
     fun shareText(title: String, text: String) {
         if (!activity.isTrustedPage) return

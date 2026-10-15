@@ -560,13 +560,6 @@
             if (msgInput) msgInput.disabled = false;
             if (sendBtn) sendBtn.disabled = false;
           }
-          // Connection changes show only in that contact's open chat.
-          if (chatIsOpen(data.hash_id) && isTorAddress(data.address)) {
-            // Tor is only the doorbell: nothing is sent over it.
-            addChatNotice(data.hash_id, "Found them over Tor — connecting directly. Messages and files wait until the direct connection is up.", "up");
-          } else if (chatIsOpen(data.hash_id) && (state.chatNotices?.[data.hash_id] || []).length) {
-            addChatNotice(data.hash_id, `Connected again ${pathLabel(data.transport, data.address)}`, "up");
-          }
           logActivity(`Link up: ${data.name || data.hash_id?.slice(0, 8)}`);
           break;
         case "link_down":
@@ -582,14 +575,6 @@
           loadPeers();
           if (state.selectedPeer === data.hash_id) {
             refreshPeerStatus(data.hash_id);
-          }
-          if (chatIsOpen(data.hash_id)) {
-            addChatNotice(
-              data.hash_id,
-              `${data.name || "Contact"} disconnected — looking for another way to reach them; messages you send wait and go out as soon as they're back`,
-              "down"
-            );
-            explainIfStillDown(data.hash_id);
           }
           logActivity(`Link down: ${data.name || data.hash_id?.slice(0, 8)}`);
           break;
@@ -3414,53 +3399,8 @@
     failed: "Not sent",
   };
 
-  function chatIsOpen(hashId) {
-    return !!hashId && state.selectedPeer === hashId && !state.selectedGroup;
-  }
-
-  function addChatNotice(hashId, text, kind = "") {
-    if (!hashId) return;
-    state.chatNotices = state.chatNotices || {};
-    const list = (state.chatNotices[hashId] = state.chatNotices[hashId] || []);
-    const now = Date.now() / 1000;
-    const last = list[list.length - 1];
-    if (last && (kind === "up" || kind === "down") && last.kind && last.kind !== kind
-        && now - last.timestamp < 20) {
-      // A short drop and reconnect (switching path): the latest state replaces
-      // the previous line instead of piling up notices.
-      list.pop();
-      if (kind === "up") {
-        if (state.selectedPeer === hashId && state.messageCache) {
-          renderMessages(state.messageCache, { preserveScroll: true });
-        }
-        return;
-      }
-    }
-    list.push({ __notice: true, text, kind, timestamp: now });
-    if (list.length > 20) list.splice(0, list.length - 20);
-    if (state.selectedPeer === hashId && !state.selectedGroup && state.messageCache) {
-      renderMessages(state.messageCache, { preserveScroll: true });
-    }
-  }
-
   function isTorAddress(address) {
     return (address || "").includes(".onion") || address === "tor";
-  }
-
-  /* Still no path a while after a disconnect: say why, in the chat. */
-  function explainIfStillDown(hashId) {
-    clearTimeout((state.downTimers ||= {})[hashId]);
-    state.downTimers[hashId] = setTimeout(async () => {
-      if (isPeerLinked(hashId)) return;
-      const { ok, data } = await apiPost(`/api/trusted/${hashId}/diagnose?probe_tor=0`, {}, { silent: true });
-      if (ok && data?.summary && !isPeerLinked(hashId)) addChatNotice(hashId, data.summary, "down");
-    }, 45000);
-  }
-
-  function pathLabel(transport, address) {
-    if (transport === "relay") return "through your relay";
-    if (isTorAddress(address)) return "over Tor";
-    return "directly";
   }
 
   function renderMessages(msgs, { preserveScroll = false, scrollToBottom = false } = {}) {
@@ -3471,23 +3411,13 @@
     state.messageCache = msgs;
     let lastDate = "";
     let html = "";
-    // Connection notices ("disconnected", "connected again") are shown in the
-    // chat where they happened, but never stored.
-    const notices = (!state.selectedGroup && state.chatNotices?.[state.selectedPeer]) || [];
-    const items = notices.length
-      ? [...msgs, ...notices].sort((x, y) => (x.timestamp || 0) - (y.timestamp || 0))
-      : msgs;
-
-    items.forEach((m) => {
+    // (Connection state shows in the header only, never in the chat.)
+    msgs.forEach((m) => {
       try {
       const date = formatDate(m.timestamp);
       if (date !== lastDate) {
         html += `<div class="date-sep">${date}</div>`;
         lastDate = date;
-      }
-      if (m.__notice) {
-        html += `<div class="chat-notice ${m.kind || ""}">${escapeHtml(m.text)} · ${formatTime(m.timestamp)}</div>`;
-        return;
       }
       const out = isOutgoing(m.sender_hash);
       const mediaType = mediaMsgType(m);
@@ -4850,7 +4780,10 @@
     const tor = !data.tor?.enabled ? "off" : data.tor.state === "ready"
       ? (data.tor.contact_has_address ? "ready" : "ready (contact's Tor address not known yet)")
       : `${data.tor.state}${data.tor.detail ? ` — ${data.tor.detail}` : ""}`;
-    out.innerHTML = `<p>${escapeHtml(data.summary || "")}</p>` +
+    const signIn = androidNetworkState().captive
+      ? `<p><strong>This Wi-Fi is waiting for you to sign in</strong> (its sign-in page), so nothing can reach the internet yet. Tap <em>Sign in</em> at the top.</p>`
+      : "";
+    out.innerHTML = signIn + `<p>${escapeHtml(data.summary || "")}</p>` +
       (rows ? `<ul>${rows}</ul>` : "") +
       `<p class="muted">Now: ${escapeHtml(data.path || "not connected")} · Relay: ${escapeHtml(relay)} · Tor: ${escapeHtml(tor)} · Your addresses: ${escapeHtml((data.my_addresses || []).join(", ") || "none")}</p>` +
       speedHtml(data.speed);
@@ -5037,7 +4970,25 @@
     scrollMessagesToBottom();
     loadMessages().then(() => requestAnimationFrame(scrollMessagesToBottom));
   }
-  window.srltcpOnResume = onAppResumed;
+  window.srltcpOnResume = () => {
+    onAppResumed();
+    showNetworkState(androidNetworkState());
+  };
+
+  /* Wi-Fi waiting for its sign-in page (planes, hotels): Android knows; say so. */
+  function androidNetworkState() {
+    try {
+      return JSON.parse(window.SRLTCPAndroid?.networkState?.() || "{}") || {};
+    } catch {
+      return {};
+    }
+  }
+  function showNetworkState(st) {
+    $("#wifi-signin")?.classList.toggle("hidden", !st?.captive);
+  }
+  window.onNetworkState = showNetworkState;
+  $("#btn-wifi-signin")?.addEventListener("click", () => window.SRLTCPAndroid?.openWifiSettings?.());
+  showNetworkState(androidNetworkState());
 
   document.addEventListener("visibilitychange", () => {
     saveMobileSession();

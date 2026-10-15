@@ -272,3 +272,47 @@ async def test_offer_flood_from_a_contact_is_capped(pair: Any) -> None:  # type:
             {"transfer_id": f"{i:016x}", "filename": f"f{i}", "size": 0}))
     pending = [t for t in b._transfers.values() if t.sender_hash == ah]
     assert len(pending) == tr.MAX_PENDING_INCOMING
+
+
+async def test_download_shows_under_its_name_only_once_verified(
+    backend: MessagingBackend, tmp_path: Path
+) -> None:
+    """Bytes go to a hidden partial file (the gallery and other apps skip
+    it); the real name appears only after the SHA-256 check, and a damaged
+    download never appears at all."""
+    for good in (True, False):
+        payload = os.urandom(3000)
+        transfer = incoming(backend, tmp_path, payload)
+        final = transfer.path
+        part = tr.part_path(final)
+        assert part.name.startswith(".") and part.parent == final.parent
+        backend._incoming_paths[TID] = part
+        backend._in[TID] = tr._Incoming(path=part)
+        await backend._handle_file_chunk(SENDER, pack_file_chunk(TID, 0, payload[:1000]))
+        await settle(backend)
+        assert part.exists() and not final.exists()  # half-received: hidden
+        await backend._handle_file_chunk(SENDER, pack_file_chunk(TID, 1000, payload[1000:]))
+        sha = hashlib.sha256(payload).hexdigest() if good else "1" * 64
+        await backend._handle_file_complete(
+            SENDER, encode_payload({"transfer_id": TID, "sha256": sha})
+        )
+        await settle(backend)
+        assert not part.exists()
+        if good:
+            assert transfer.state == TransferState.COMPLETE
+            assert final.read_bytes() == payload
+            assert backend.transfer_file_path(TID) == final
+            final.unlink()
+        else:
+            assert transfer.state == TransferState.FAILED and not final.exists()
+        backend._transfers.pop(TID)
+
+
+def test_new_download_never_takes_a_name_in_use(backend: MessagingBackend) -> None:
+    first = backend._free_dest("photo.jpg")
+    backend._transfers["1" * 16] = FileTransfer(
+        id="1" * 16, sender_hash=SENDER, recipient_hash="0" * 32, filename="photo.jpg",
+        path=first, size=1, sha256="", transport="tcp", state=TransferState.TRANSFERRING,
+    )
+    second = backend._free_dest("photo.jpg")
+    assert second != first and second.name == "photo1.jpg"
