@@ -208,6 +208,27 @@ async def desktop_flow() -> None:
         await alice.click("#call-mute")
         print("call: remote audio playing, picture shown, mic on by default, mute is red")
         await shot(alice, "05-alice-in-call")
+        # Network switch mid-call: Bob's node goes silent for longer than
+        # WebRTC waits (~30 s). The call must hold on and resume by itself.
+        import signal as _signal
+        NODES["bob"].proc.send_signal(_signal.SIGSTOP)
+        try:
+            await alice.wait_for_function(
+                "document.querySelector('#call-status').textContent.includes('Reconnecting')",
+                timeout=40000)
+            await asyncio.sleep(35)
+            assert await alice.is_visible("#call-overlay"), "call ended during the outage"
+        finally:
+            NODES["bob"].proc.send_signal(_signal.SIGCONT)
+        for pg in (alice, bob):
+            await pg.wait_for_function(
+                "document.querySelector('#call-status').textContent.includes('encrypted')",
+                timeout=60000)
+        t0 = await alice.evaluate("document.querySelector('#call-remote-video').currentTime")
+        await asyncio.sleep(2)
+        t1 = await alice.evaluate("document.querySelector('#call-remote-video').currentTime")
+        assert t1 > t0, (t0, t1)
+        print("call survived a 35 s outage (network switch) and resumed with video")
         await bob.click("#call-hangup")
         await alice.wait_for_selector("#call-overlay", state="hidden", timeout=10000)
         print("call ended on both sides")

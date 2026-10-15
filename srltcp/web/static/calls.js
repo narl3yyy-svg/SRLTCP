@@ -11,6 +11,10 @@
 
   const $ = (sel) => document.querySelector(sel);
   const RING_TIMEOUT_MS = 45000;
+  // A network switch (Wi-Fi <-> mobile data) drops the session for a while:
+  // the call waits this long for it to come back, then gives up.
+  const RECOVER_MS = 90000;
+  const RECOVER_EVERY_MS = 3000;
 
   const call = {
     id: null,
@@ -30,6 +34,9 @@
     muted: false,
     cameraOff: false,
     speaker: false,
+    lostAt: 0,           // when media stopped (0 = flowing)
+    recoverTimer: null,
+    restarting: false,
   };
 
   // Android app: route call audio like a phone call (earpiece/speaker).
@@ -156,7 +163,7 @@
   }
 
   function startClock() {
-    call.startedAt = Date.now();
+    if (!call.startedAt) call.startedAt = Date.now();
     clearInterval(call.clockTimer);
     call.clockTimer = setInterval(() => {
       const s = Math.floor((Date.now() - call.startedAt) / 1000);
@@ -167,12 +174,14 @@
   function reset() {
     clearTimeout(call.ringTimer);
     clearInterval(call.clockTimer);
+    clearInterval(call.recoverTimer);
     try { call.pc?.close(); } catch (_) { /* ignore */ }
     call.local?.getTracks().forEach((t) => t.stop());
     Object.assign(call, {
       id: null, peer: null, peerName: "", video: false, pc: null, local: null,
       remote: null, role: null, state: "idle", pendingOffer: null, pendingIce: [],
       ringTimer: null, muted: false, cameraOff: false, speaker: false,
+      startedAt: 0, lostAt: 0, recoverTimer: null, restarting: false,
     });
     routeAudio(false);
     callScreen(false);
@@ -267,22 +276,32 @@
       // audio engine can reset the route when it opens its output).
       if (inCall()) routeAudio(true);
     };
-    pc.onconnectionstatechange = () => {
-      const st = pc.connectionState;
+    // Older WebViews report only iceConnectionState: map it.
+    const state = () => pc.connectionState
+      || ({ checking: "connecting", completed: "connected" }[pc.iceConnectionState] ?? pc.iceConnectionState);
+    pc.onconnectionstatechange = pc.oniceconnectionstatechange = () => {
+      if (pc !== call.pc) return;
+      const st = state();
       if (st === "connected") {
-        call.state = "active";
-        startClock();
-        routeAudio(true);
-        $("#call-remote-audio")?.play?.().catch(() => {});
-        $("#call-remote-video")?.play?.().catch(() => {});
-      } else if (st === "failed") {
-        app().toast?.(
-          "Call could not connect — check that the contact is online (a text message should get ✓✓).",
-          "error"
-        );
-        hangup("failed");
-      } else if (st === "disconnected") {
-        setStatus("Reconnecting…");
+        if (call.lostAt) {
+          connectionBack();
+        } else if (call.state !== "active") {
+          call.state = "active";
+          startClock();
+          routeAudio(true);
+          $("#call-remote-audio")?.play?.().catch(() => {});
+          $("#call-remote-video")?.play?.().catch(() => {});
+        }
+      } else if (st === "failed" || st === "disconnected") {
+        if (call.state === "active") {
+          connectionLost();
+        } else if (st === "failed" && !call.lostAt) {
+          app().toast?.(
+            "Call could not connect — check that the contact is online (a text message should get ✓✓).",
+            "error"
+          );
+          hangup("failed");
+        }
       }
     };
     return pc;
@@ -302,6 +321,98 @@
       lv.muted = true;
     }
     stream.getTracks().forEach((t) => call.pc.addTrack(t, stream));
+  }
+
+  /* ── Surviving a network switch ──
+   * The media path itself doesn't change (each side's browser talks to its
+   * own node), but while the session reconnects no media flows and WebRTC
+   * gives up after ~30 s. So: keep the call, say "Reconnecting…", and once
+   * the session is back restart ICE (the caller sends a new offer; the callee
+   * asks for one). Up to RECOVER_MS, then the call ends. */
+  function connectionLost() {
+    if (call.lostAt || !call.pc) return;
+    call.lostAt = Date.now();
+    clearInterval(call.clockTimer);
+    setStatus("Reconnecting…");
+    call.recoverTimer = setInterval(recoverTick, RECOVER_EVERY_MS);
+  }
+
+  function connectionBack() {
+    clearInterval(call.recoverTimer);
+    call.recoverTimer = null;
+    call.lostAt = 0;
+    call.state = "active";
+    startClock();
+    routeAudio(true);
+    $("#call-remote-audio")?.play?.().catch(() => {});
+    $("#call-remote-video")?.play?.().catch(() => {});
+  }
+
+  function recoverTick() {
+    if (!call.pc || !call.lostAt) return;
+    if (Date.now() - call.lostAt > RECOVER_MS) {
+      app().toast?.("Call lost — the connection didn't come back", "error");
+      hangup("failed");
+      return;
+    }
+    if (call.role === "caller") restartIce();
+    else signal(call.peer, { type: "restart", call_id: call.id });
+  }
+
+  // Wait until the description carries all candidates (they'd be lost if
+  // sent separately while the session is still coming back).
+  function gathered(pc, ms = 3000) {
+    if (pc.iceGatheringState === "complete") return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        if (pc.iceGatheringState === "complete") {
+          pc.removeEventListener("icegatheringstatechange", done);
+          resolve();
+        }
+      };
+      pc.addEventListener("icegatheringstatechange", done);
+      setTimeout(resolve, ms);
+    });
+  }
+
+  async function freshIceConfig(pc) {
+    try {
+      const cfg = await iceConfig(call.peer);  // addresses may have changed
+      pc.setConfiguration({ ...pc.getConfiguration(), ...cfg });
+    } catch (_) { /* keep the old one */ }
+  }
+
+  async function restartIce() {
+    const pc = call.pc;
+    if (!pc || call.restarting || call.role !== "caller") return;
+    call.restarting = true;
+    try {
+      await freshIceConfig(pc);
+      const offer = await pc.createOffer({ iceRestart: true });
+      await pc.setLocalDescription(offer);
+      await gathered(pc);
+      if (pc === call.pc) {
+        await signal(call.peer, { type: "reoffer", call_id: call.id, sdp: pc.localDescription.sdp });
+      }
+    } catch (_) {
+      /* the session isn't back yet: the next tick tries again */
+    } finally {
+      call.restarting = false;
+    }
+  }
+
+  async function onReoffer(sdp) {
+    const pc = call.pc;
+    if (!pc || call.role !== "callee") return;
+    try {
+      await freshIceConfig(pc);
+      await pc.setRemoteDescription({ type: "offer", sdp });
+      await pc.setLocalDescription(await pc.createAnswer());
+      await gathered(pc);
+      if (pc === call.pc) {
+        await signal(call.peer, { type: "answer", call_id: call.id, sdp: pc.localDescription.sdp });
+      }
+    } catch (_) { /* a newer offer follows */ }
   }
 
   async function flushIce() {
@@ -433,10 +544,22 @@
       case "answer":
         if (call.role !== "caller" || !call.pc) return;
         clearTimeout(call.ringTimer);
-        call.state = "connecting";
-        setStatus("Connecting…");
-        await call.pc.setRemoteDescription({ type: "answer", sdp: sig.sdp });
+        if (call.state === "outgoing") {
+          call.state = "connecting";
+          setStatus("Connecting…");
+        }
+        try {
+          await call.pc.setRemoteDescription({ type: "answer", sdp: sig.sdp });
+        } catch (_) {
+          return;  // answer to an older restart offer
+        }
         await flushIce();
+        break;
+      case "reoffer":
+        await onReoffer(sig.sdp);
+        break;
+      case "restart":
+        restartIce();
         break;
       case "ice":
         if (!sig.candidate) return;

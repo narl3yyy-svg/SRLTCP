@@ -1,5 +1,17 @@
 # SRLTCP Release Notes
 
+## v0.10.5 (2026-10-15)
+
+### Calls survive a network switch
+- **Switching networks no longer ends a call** (Wi-Fi to mobile data, leaving
+  home, the VPN reconnecting). The call shows "Reconnecting…" and carries on
+  by itself as soon as the two devices are connected again, with voice and
+  video. It waits up to 90 seconds before giving up. Tested by freezing one
+  side for 35 seconds in the middle of a video call.
+- How soon it comes back depends on how the devices find each other on the
+  new network (direct, Tor or your relay). A PC is reachable from mobile data
+  only with Tor installed on it (Tor Browser) or a relay.
+
 ## v0.10.4 (2026-10-15)
 
 ### Video calls with a PC whose camera won't open
