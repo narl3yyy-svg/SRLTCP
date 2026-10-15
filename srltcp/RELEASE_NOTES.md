@@ -1,5 +1,19 @@
 # SRLTCP Release Notes
 
+## v0.10.1 (2026-10-15)
+
+### Faster files when you start on Tor
+- **A direct path is looked for the moment a file starts over Tor** (same
+  Wi-Fi, VPN or IPv6), and every 15 seconds while it's moving, instead of
+  every 45 seconds. When one works, the file moves over mid-transfer and
+  carries on from where it was (in testing: from 0.18 MB/s on Tor to over
+  9 MB/s direct). Earlier failed hole-punching attempts no longer hold the
+  next try back.
+- **Twice as many Tor circuits for file data** (8 instead of 4), with twice
+  as much data in flight. Tor limits each circuit to roughly 0.3 MB/s, so a
+  file over Tor gets up to about twice as fast as before; it still can't
+  match a direct connection.
+
 ## v0.10.0 (2026-10-15)
 
 ### Folder sync

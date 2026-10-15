@@ -727,6 +727,8 @@ class TransferMixin:
         await self._send_control(
             hash_id, MessageType.FILE_ACCEPT, {"transfer_id": transfer_id, "offset": 0}
         )
+        if self._link_on_tor(link):
+            self.request_direct_upgrade(hash_id, punch=True)  # a file over Tor: try direct now
         if sync_meta is not None:
             return  # no chat bubble for sync files
         if self._on_file_offer:

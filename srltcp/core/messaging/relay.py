@@ -64,7 +64,8 @@ RELAY_PEER_PREFIX = "relay:"
 RELAY_DEAD_AFTER = 70.0
 RELAY_CONNECT_TIMEOUT = 10.0
 OFFLINE_AFTER_NACK = 20.0  # don't retry a contact the relay says isn't there
-UPGRADE_EVERY = 45.0  # try a direct path this often while on the relay
+UPGRADE_EVERY = 45.0  # try a direct path this often while on the relay or Tor
+UPGRADE_EVERY_BUSY = 15.0  # …and this often while a file is moving over them
 DIRECT_TIMEOUT = 3.0
 
 
@@ -713,7 +714,8 @@ class RelayMixin:
             # One side drives upgrades so both don't race each other.
             if self._me_hash() > hash_id or hash_id in self._upgrades:
                 continue
-            if now - self._upgrade_attempts.get(hash_id, 0.0) < UPGRADE_EVERY:
+            every = UPGRADE_EVERY_BUSY if self.has_active_transfer_for(hash_id) else UPGRADE_EVERY
+            if now - self._upgrade_attempts.get(hash_id, 0.0) < every:
                 continue
             # A running file transfer does not hold us back: it resends from
             # the last confirmed byte on the new path (and gets much faster).
@@ -722,9 +724,13 @@ class RelayMixin:
             self._upgrade_attempts[hash_id] = now
             asyncio.create_task(self._try_direct_upgrade(hash_id))
 
-    def request_direct_upgrade(self: MessagingBackend, hash_id: str) -> None:
-        """The contact just showed up on our network: if we reach it through
-        the relay or Tor, try the direct path now instead of within 45 s."""
+    def request_direct_upgrade(
+        self: MessagingBackend, hash_id: str, *, punch: bool = False
+    ) -> None:
+        """The contact just showed up on our network, or a file starts moving:
+        if we reach it through the relay or Tor, try the direct path now
+        instead of within 45 s. ``punch`` also skips the wait after earlier
+        failed hole-punching rounds (the network may have changed)."""
         link = self.get_link(hash_id)
         if not link or not link.handshake_complete or not self.tcp_transport:
             return
@@ -736,6 +742,8 @@ class RelayMixin:
         if now - self._upgrade_attempts.get(hash_id, 0.0) < 5.0:
             return
         self._upgrade_attempts[hash_id] = now
+        if punch:
+            self._punch_next.pop(hash_id, None)
         asyncio.create_task(self._try_direct_upgrade(hash_id))
 
     def _call_active(self: MessagingBackend) -> bool:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -263,6 +264,42 @@ async def test_contact_on_tor_moves_to_a_punched_direct_path(
         assert await wait_for(
             lambda: any(m["text"] == "over IPv6 now" for m in follower.get_messages())
         )
+    finally:
+        await a.stop()
+        await b.stop()
+
+
+async def test_a_file_over_tor_looks_for_a_direct_path_at_once(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Tor is many times slower than a direct path: when a file starts over
+    Tor, both sides try for a direct path right away (and forget earlier
+    failed hole-punching rounds) instead of waiting for the next check."""
+    a, b = make_node(tmp_path, "alice"), make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    try:
+        trust(a, b)
+        trust(b, a)
+        ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+        await a.connect_to_peer(bh)
+        assert await a.wait_for_handshake(bh, timeout=8)
+        assert await wait_for(lambda: b.get_link(ah) is not None
+                              and b.get_link(ah).handshake_complete)
+        for node, other in ((a, bh), (b, ah)):
+            link = node.get_link(other)
+            node.tcp_transport._tor_peers.add(link.transport_peer_id)  # "over Tor"
+        calls: list[tuple[str, str, bool]] = []
+        for name, node in (("alice", a), ("bob", b)):
+            monkeypatch.setattr(
+                node, "request_direct_upgrade",
+                lambda h, *, punch=False, name=name: calls.append((name, h, punch)),
+            )
+        src = tmp_path / "f.bin"
+        src.write_bytes(os.urandom(300_000))
+        await a.send_file(bh, src)
+        assert await wait_for(lambda: {c[0] for c in calls} == {"alice", "bob"}, timeout=8)
+        assert all(punch for _n, _h, punch in calls)
     finally:
         await a.stop()
         await b.stop()

@@ -87,13 +87,18 @@ forwarding.
   one works. If both devices have IPv6 internet, they agree over Tor to dial
   each other directly (hole punching, below) and leave Tor for a direct
   connection; if the network blocks that, they stay on Tor.
-- **Speed:** fine for messages and files; the first connection takes a few
-  seconds. One Tor circuit carries roughly 0.5 MB/s, so a file is spread over
-  4 extra circuits ("lanes", each routed separately, opened for file data
-  only and closed a minute after the last file). Messages and calls stay on
-  the main circuit and don't queue behind the file. Calls work but can be
-  choppier than on a direct path. When both devices get on the same network,
-  the session moves to the direct path, even in the middle of a file.
+- **Speed:** fine for messages, slow for big files. Tor lets each connection
+  have only about 250 KB in flight per round trip, and onion round trips take
+  0.5-1 s, so one Tor circuit carries roughly 0.3 MB/s however fast your
+  internet is. A file is therefore spread over 8 extra circuits ("lanes",
+  each routed separately, opened for file data only and closed a minute
+  after the last file): typically 1-2 MB/s, depending on the Tor relays you
+  get. Messages and calls stay on the main circuit and don't queue behind the
+  file. Calls work but can be choppier than on a direct path.
+- **Leaving Tor for speed:** as soon as a file starts over Tor, both devices
+  look for a direct path (same Wi-Fi, VPN, IPv6), then every 15 seconds
+  while it's moving. When one works, the session moves over in the middle of
+  the file and carries on from where it was, often 10-50× faster.
 
 Privacy: only your trusted contacts get your onion address, and connections
 through it are only accepted from trusted contacts. A stranger who somehow

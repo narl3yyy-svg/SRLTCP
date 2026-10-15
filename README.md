@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks over **Tor** (no server needed), **direct IPv6**, or your own optional **relay**, switching automatically. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.10.0 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.10.1 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -120,7 +120,7 @@ Identities are stored, encrypted, in `~/.srltcp/identities/` (or `%APPDATA%\SRLT
 | **NFC pairing** | Contact cards (public key, name, LAN address) | Public data; requires phones a few cm apart |
 | **Internet relay (7827, TLS)** | Rotating mailbox tokens + padded blobs sealed with the pair key, inside the E2EE session | Yes — three layers; the relay sees only IPs, timing and rough volume |
 
-**File transfer flow:** upload to local staging → (queued while the contact is unreachable) → `FILE_OFFER` (encrypted JSON) → `FILE_ACCEPT` → encrypted `FILE_CHUNK` stream, confirmed by `FILE_ACK` (a sliding window: the sender keeps a limited amount unconfirmed and resends from the last confirmed byte after a lost piece, a path change or a re-key) → `FILE_COMPLETE` with the SHA-256, computed while streaming → the receiver, which hashed while writing, answers with a final `FILE_ACK` (verified or not). The receiver writes strictly in order to your configured incoming folder; a cancelled or damaged download is deleted. Either side can cancel (`FILE_REJECT`). Over Tor the chunks are spread over 4 extra circuits ("lanes") joined with a session-key proof; chat stays on the main circuit.
+**File transfer flow:** upload to local staging → (queued while the contact is unreachable) → `FILE_OFFER` (encrypted JSON) → `FILE_ACCEPT` → encrypted `FILE_CHUNK` stream, confirmed by `FILE_ACK` (a sliding window: the sender keeps a limited amount unconfirmed and resends from the last confirmed byte after a lost piece, a path change or a re-key) → `FILE_COMPLETE` with the SHA-256, computed while streaming → the receiver, which hashed while writing, answers with a final `FILE_ACK` (verified or not). The receiver writes strictly in order to your configured incoming folder; a cancelled or damaged download is deleted. Either side can cancel (`FILE_REJECT`). Over Tor the chunks are spread over 8 extra circuits ("lanes") joined with a session-key proof; chat stays on the main circuit; and both devices look for a direct path the moment a file starts.
 
 **Port forwarding:** if you forward **TCP 7825** to your node, traffic after the handshake is still end-to-end encrypted; an observer on the internet can see connection timing, packet sizes and your public IP.
 
@@ -251,7 +251,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.10.0.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.10.1.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -259,7 +259,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.10.0.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.10.0.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.10.1.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -527,7 +527,7 @@ You don't need it: Tor, direct IPv6 and the relay connect contacts on different 
 | Setting | Value | Rationale |
 |---------|-------|-----------|
 | Chunk / window | 1 MiB / 24 MiB direct · 64 KiB / 4 MiB Tor · 128 KiB / 2 MiB relay · 8 KiB serial | Keeps each path full without flooding it |
-| Tor | 4 parallel circuits for file data | One circuit tops out around 0.5 MB/s |
+| Tor | 8 parallel circuits for file data; a direct path is tried as soon as a file starts | One circuit tops out around 0.3 MB/s (Tor's per-stream window / onion round trip) |
 | Compression | zstd (level 1 direct, 3 on slow paths) | Skipped for photos, videos, archives and data that doesn't shrink |
 | Frame CRC | CRC32 | Cheap integrity check per frame |
 | Hashing | SHA-256 while streaming, both sides | No extra pass over the file before or after |

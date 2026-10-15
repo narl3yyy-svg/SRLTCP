@@ -11,8 +11,11 @@ WEB_PORT = 9876
 CHUNK_SIZE = 1024 * 1024  # direct TCP (LAN / VPN / punched)
 CHUNK_WINDOW = 24 * 1024 * 1024
 TOR_CHUNK_SIZE = 64 * 1024  # small: chat and pings never queue behind a big chunk
-TOR_WINDOW = 4 * 1024 * 1024  # spread over the parallel Tor circuits
-TOR_LANES = 4  # extra Tor circuits that carry file data (chat stays on the main one)
+# Tor lets each stream have only ~250 KB in flight per round trip (often
+# 0.5-1 s on onion circuits), so one circuit tops out around 0.3 MB/s:
+# speed comes from many circuits at once.
+TOR_WINDOW = 8 * 1024 * 1024  # spread over the parallel Tor circuits
+TOR_LANES = 8  # extra Tor circuits that carry file data (chat stays on the main one)
 RELAY_CHUNK_SIZE = 128 * 1024  # stays under the relay's 256 KiB frame limit
 RELAY_WINDOW = 2 * 1024 * 1024
 SERIAL_CHUNK_SIZE = 8 * 1024  # serial/RF links have smaller frames

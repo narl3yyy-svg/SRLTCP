@@ -538,6 +538,10 @@ class TorMixin:
         lanes = [p for p in self._tor_lanes.get(hash_id, []) if transport.has_peer(p)]
         self._tor_lanes[hash_id] = lanes
         dialing = self._lane_dialing.get(hash_id)
+        if not lanes and (dialing is None or dialing.done()):
+            # A file is starting over Tor: look for a direct path right away
+            # (LAN, VPN, IPv6), it is many times faster than any Tor circuit.
+            self.request_direct_upgrade(hash_id, punch=True)
         if (
             len(lanes) < TOR_LANES
             and (dialing is None or dialing.done())
