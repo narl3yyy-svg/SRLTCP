@@ -323,6 +323,41 @@ async def test_over_tor_nothing_but_connection_setup_goes(
         await b.stop()
 
 
+async def test_tor_session_never_replaces_a_working_direct_one(tmp_path: Path) -> None:
+    """A Tor connection from the contact while the direct session works is
+    refused (it used to take over: the link flapped Tor/direct, files and
+    calls restarted). Once the direct session has gone silent, Tor may ring."""
+    a, b = make_node(tmp_path, "alice"), make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    try:
+        trust(a, b)
+        trust(b, a)
+        ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+        await a.connect_to_peer(bh)
+        assert await a.wait_for_handshake(bh, timeout=8)
+        assert await wait_for(lambda: b.get_link(ah) is not None
+                              and b.get_link(ah).handshake_complete)
+        direct = a.get_link(bh).transport_peer_id
+        # Every other connection reaching Alice counts as coming over Tor.
+        a.tcp_transport.is_tor = lambda pid: pid != direct  # type: ignore[method-assign]
+        b.remove_link(ah)  # Bob lost track of the session and rings over "Tor"
+        await b.connect_to_peer(ah)
+        await asyncio.sleep(2.0)
+        assert a.get_link(bh).transport_peer_id == direct  # the direct one stays
+        assert a.get_link(bh).handshake_complete
+        # The direct session went quiet: now the doorbell is answered.
+        a.get_link(bh).last_seen -= 100
+        b.remove_link(ah)
+        await b.connect_to_peer(ah)
+        assert await wait_for(lambda: a.get_link(bh) is not None
+                              and a.get_link(bh).transport_peer_id != direct
+                              and a.get_link(bh).handshake_complete, timeout=8)
+    finally:
+        await a.stop()
+        await b.stop()
+
+
 def test_speed_advice_names_the_missing_piece() -> None:
     """Check connection explains why a contact on another network isn't direct."""
     peer = "a" * 32

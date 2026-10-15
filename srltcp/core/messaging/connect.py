@@ -52,6 +52,7 @@ def _unb64(value: object, size: int) -> bytes:
     return raw
 
 PENDING_HANDSHAKE_TTL = 15.0
+DIRECT_ALIVE_WINDOW = 15.0  # a direct session heard from this recently is working (pings: 10 s)
 HANDSHAKE_VERSION = 6  # v6: hybrid post-quantum (X25519+ML-KEM-768, Ed25519+ML-DSA-65)
 # v5: windowed file transfers (FILE_ACK), Tor lanes
 # v4: signature names the recipient (no cross-node replay)
@@ -538,6 +539,18 @@ class ConnectMixin:
                 self.trusted.set_public_key(remote_hash, pub_hex)
         return remote_hash, bytes.fromhex(pub_hex), ed_pub
 
+    def _direct_alive(self: MessagingBackend, hash_id: str) -> bool:
+        """A direct session with this contact that carried something lately."""
+        link = self.get_link(hash_id)
+        return bool(
+            link
+            and link.handshake_complete
+            and link.transport == "tcp"
+            and not self._link_on_tor(link)
+            and self._is_link_reachable(link)
+            and time.monotonic() - link.last_seen < DIRECT_ALIVE_WINDOW
+        )
+
     def _handshake_is_fresh(self: MessagingBackend, nonce: bytes, timestamp: object) -> bool:
         """Reject stale or replayed handshake openings."""
         try:
@@ -788,6 +801,15 @@ class ConnectMixin:
             # Our onion address is only given to contacts: a stranger using it
             # gets nothing, not even a contact request.
             log.info("Refused a Tor connection from a non-contact (%s)", remote_hash[:8])
+            await self._reject_connection(peer_id)
+            return
+        if self.tcp_transport and self.tcp_transport.is_tor(peer_id) and self._direct_alive(
+            remote_hash
+        ):
+            # Tor only rings the doorbell: while the direct connection works
+            # it stays. (Letting the Tor one take over dropped the call, the
+            # file, the speed, and had both sides punch again.)
+            log.info("Kept the direct path to %s (refused a Tor session)", remote_hash[:8])
             await self._reject_connection(peer_id)
             return
         expected = self.tcp_transport.expected_peer(peer_id) if self.tcp_transport else None

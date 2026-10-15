@@ -27,10 +27,13 @@ dropped. The SRLTCP session inside adds its own end-to-end encryption.
 
 Reliability and speed follow QUIC (RFC 9000/9002) in a small form: packets
 are acknowledged by number with ranges, loss is detected by reordering
-(3 packets) or time, the sender keeps a congestion window (NewReno-style,
-gentle 0.7 back-off for radio losses) and paces packets over the round trip
-instead of bursting, and the receiver advertises how much it can buffer
-(flow control). A 1400-byte probe after the start enables bigger packets
+(3 packets) or time, and the receiver advertises how much it can buffer
+(flow control). The sending rate follows BBR (the controller YouTube and
+QUIC use on mobile networks): it measures the rate data actually arrives at
+and the path's shortest round trip, and paces packets at that rate. A
+loss-based window (TCP Reno) mistakes the random losses of a radio link for
+congestion and, at mobile round trips, ends up at a few dozen KB/s; BBR
+keeps the link full and the queues short. A 1400-byte probe after the start enables bigger packets
 when the path allows them.
 """
 
@@ -38,6 +41,7 @@ from __future__ import annotations
 
 import asyncio
 import bisect
+import collections
 import contextlib
 import hashlib
 import heapq
@@ -82,13 +86,19 @@ MAX_ACK_RANGES = 16
 
 INITIAL_RTT = 0.3
 MAX_ACK_DELAY = 0.01
-ACK_EVERY = 2  # packets before an acknowledgement goes out without waiting
+ACK_EVERY = 4  # packets before an acknowledgement goes out without waiting
 INITIAL_WINDOW = 32 * MIN_DATAGRAM
 MIN_WINDOW = 4 * MIN_DATAGRAM
-MAX_WINDOW = 24 * 1024 * 1024
+MAX_WINDOW = 32 * 1024 * 1024
 LOSS_REORDER = 3
 LOSS_TIME = 9 / 8
-BACKOFF = 0.7
+# BBR (see _Bbr)
+STARTUP_GAIN = 2.885  # 2/ln 2: doubles the delivery rate every round trip
+PROBE_GAINS = (1.25, 0.75, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)  # one phase per round trip
+CWND_GAIN = 2.5  # (2 in BBR; radio links deliver acknowledgements in bursts)
+BW_ROUNDS = 10  # bandwidth = the best delivery rate of the last 10 round trips
+MIN_RTT_WINDOW = 10.0  # shortest round trip of the last 10 s...
+PROBE_RTT_TIME = 0.2  # ...re-measured by sending less for 0.2 s when it expires
 RECV_WINDOW = 24 * 1024 * 1024  # bytes a receiver buffers ahead of the app
 SEND_HIGH = 2 * 1024 * 1024  # unsent bytes before a writer waits (like a TCP buffer)
 SEND_MAX = 48 * 1024 * 1024  # unsent + unacknowledged, hard limit
@@ -140,6 +150,11 @@ class _Sent:
     ranges: list[tuple[int, int]]
     eliciting: bool
     probe_size: int = 0  # a path-MTU probe of this size
+    # Delivery-rate sampling (BBR): the connection's state when this was sent.
+    delivered: int = 0
+    delivered_at: float = 0.0
+    first_sent_at: float = 0.0
+    app_limited: bool = False
 
 
 @dataclass
@@ -160,6 +175,196 @@ class _Rtt:
         else:
             self.rttvar = 0.75 * self.rttvar + 0.25 * abs(self.srtt - sample)
             self.srtt = 0.875 * self.srtt + 0.125 * sample
+
+
+class _Bbr:
+    """BBR congestion control (Cardwell et al., ACM Queue 2016; RFC draft
+    draft-cardwell-iccrg-bbr-congestion-control), in a small form.
+
+    The model is the bottleneck bandwidth (best delivery rate measured over
+    the last ``BW_ROUNDS`` round trips) and the round-trip propagation delay
+    (shortest round trip over ``MIN_RTT_WINDOW``). Packets are paced at
+    gain × bandwidth and at most ``CWND_GAIN`` × bandwidth × delay are in
+    flight. Random loss doesn't lower the rate (radio links lose packets
+    without being congested); only heavy loss (a policer, a tiny buffer)
+    does. States: startup (find the rate fast), drain (empty the queue it
+    built), probe-bw (cruise, probing for more every 8 round trips) and
+    probe-rtt (briefly send less to re-measure the real round trip).
+    """
+
+    def __init__(self, mss: int, now: float) -> None:
+        self.mss = mss
+        self.delivered = 0
+        self.delivered_at = now
+        self.first_sent_at = now
+        self.app_limited_until = 0  # sampling is app-limited until this much is delivered
+        self.round = 0
+        self.next_round_delivered = 0
+        self.round_lost = 0
+        self.round_delivered_start = 0
+        self.bw_by_round: list[tuple[int, float]] = []  # (round, best rate in it)
+        self.bw = 0.0
+        self.min_rtt = 0.0
+        self.min_rtt_at = now
+        self.state = "startup"
+        self.full_bw = 0.0
+        self.full_bw_rounds = 0
+        self.cycle = 0
+        self.cycle_at = now
+        self.probe_rtt_until = 0.0
+        self.cwnd = float(INITIAL_WINDOW)
+
+    @property
+    def pacing_gain(self) -> float:
+        if self.state == "startup":
+            return STARTUP_GAIN
+        if self.state == "drain":
+            return 1 / STARTUP_GAIN
+        if self.state == "probe_bw":
+            return PROBE_GAINS[self.cycle]
+        return 1.0
+
+    def bdp(self) -> float:
+        return self.bw * self.min_rtt
+
+    def pacing_rate(self, srtt: float) -> float:
+        # Floor: a rate measured while there was little to send (a chat reply)
+        # must never hold back what comes next.
+        floor = (STARTUP_GAIN if self.state == "startup" else 1.0) * INITIAL_WINDOW
+        return max(self.pacing_gain * self.bw, floor / max(srtt, 0.001))
+
+    def on_send(self, p: _Sent, now: float, in_flight: int) -> None:
+        if in_flight == 0:  # (re)starting from idle: rate intervals start now
+            self.first_sent_at = self.delivered_at = now
+        p.delivered = self.delivered
+        p.delivered_at = self.delivered_at
+        p.first_sent_at = self.first_sent_at
+        p.app_limited = self.app_limited_until > 0
+
+    def note_app_limited(self, in_flight: int) -> None:
+        """Nothing to send while the window has room: samples taken now show
+        how fast the app writes, not how fast the path is."""
+        self.app_limited_until = max(self.delivered + in_flight, 1)
+
+    def on_loss(self, size: int) -> None:
+        self.round_lost += size
+
+    def on_ack(
+        self, acked: list[_Sent], newest: _Sent, now: float, rtt: float, in_flight: int
+    ) -> None:
+        acked_bytes = 0
+        for p in acked:
+            acked_bytes += p.size
+        self.delivered += acked_bytes
+        self.delivered_at = now
+        if self.app_limited_until and self.delivered > self.app_limited_until:
+            self.app_limited_until = 0
+        # Round trips are counted in deliveries: a round ends when a packet
+        # sent after the previous round ended is acknowledged.
+        round_start = False
+        if newest.delivered >= self.next_round_delivered:
+            round_lost = self.round_lost
+            round_bytes = self.delivered - self.round_delivered_start
+            self.next_round_delivered = self.delivered
+            self.round_delivered_start = self.delivered
+            self.round_lost = 0
+            self.round += 1
+            round_start = True
+            self._on_round_loss(round_lost, round_bytes)
+        # Delivery rate over the interval this packet's flight took.
+        self.first_sent_at = newest.at
+        interval = max(newest.at - newest.first_sent_at, now - newest.delivered_at)
+        if interval > 0 and (not self.min_rtt or interval >= self.min_rtt):
+            rate = (self.delivered - newest.delivered) / interval
+            if not newest.app_limited or rate >= self.bw:
+                if self.bw_by_round and self.bw_by_round[-1][0] == self.round:
+                    if rate > self.bw_by_round[-1][1]:
+                        self.bw_by_round[-1] = (self.round, rate)
+                else:
+                    self.bw_by_round.append((self.round, rate))
+                self.bw_by_round = [r for r in self.bw_by_round if r[0] > self.round - BW_ROUNDS]
+                self.bw = max(r[1] for r in self.bw_by_round)
+        # Shortest round trip (it expires, so a longer path is noticed).
+        expired = now - self.min_rtt_at > MIN_RTT_WINDOW
+        if rtt > 0 and (not self.min_rtt or rtt <= self.min_rtt or expired):
+            self.min_rtt, self.min_rtt_at = rtt, now
+        if self.state == "startup" and self._startup_overshoots(rtt):
+            self.state = "drain"
+            self.full_bw = self.bw
+        self._advance(now, in_flight, round_start, expired)
+        self._set_cwnd(acked_bytes)
+
+    def _startup_overshoots(self, rtt: float) -> bool:
+        """Leave startup as soon as a queue clearly builds (round trip far
+        above the minimum while the rate stopped rising) or losses pile up
+        within the round, instead of overfilling the buffer for three more
+        round trips (each one doubles what's in flight)."""
+        if not self.min_rtt or not self.bw:
+            return False
+        queued = rtt > 2 * self.min_rtt + 0.02 and self.full_bw_rounds >= 1
+        in_round = self.delivered - self.round_delivered_start
+        lossy = self.round_lost >= 20 * self.mss and self.round_lost > 0.05 * (in_round or 1)
+        return queued or lossy
+
+    def _on_round_loss(self, lost: int, delivered: int) -> None:
+        total = lost + delivered
+        if lost < 10 * self.mss or not total:
+            return
+        rate = lost / total
+        if self.state == "startup" and rate > 0.1:
+            self.state = "drain"  # the queue overflowed: we found the limit
+            self.full_bw = self.bw
+        elif rate > 0.2 and self.bw:
+            # Heavy loss even at our measured rate: a policer or a small
+            # buffer. Probe from a lower rate.
+            self.bw_by_round = [(r, b * 0.85) for r, b in self.bw_by_round]
+            self.bw *= 0.85
+
+    def _advance(self, now: float, in_flight: int, round_start: bool, expired: bool) -> None:
+        if self.state == "startup" and round_start:
+            if self.bw >= self.full_bw * 1.25:
+                self.full_bw, self.full_bw_rounds = self.bw, 0
+            else:
+                self.full_bw_rounds += 1
+                if self.full_bw_rounds >= 3:
+                    self.state = "drain"
+        if self.state == "drain" and in_flight <= self.bdp():
+            self._enter_probe_bw(now)
+        if self.state == "probe_bw":
+            gain = PROBE_GAINS[self.cycle]
+            elapsed = now - self.cycle_at > self.min_rtt
+            if (gain == 0.75 and in_flight <= self.bdp()) or (
+                elapsed and (gain != 0.75 or in_flight <= self.bdp() * 1.1)
+            ):
+                self.cycle = (self.cycle + 1) % len(PROBE_GAINS)
+                self.cycle_at = now
+        if expired and self.state in ("probe_bw", "drain") and self.min_rtt:
+            self.state, self.probe_rtt_until = "probe_rtt", 0.0
+        if self.state == "probe_rtt":
+            target = max(self.bdp() / 2, 4.0 * self.mss)
+            if not self.probe_rtt_until and in_flight <= target:
+                self.probe_rtt_until = now + max(PROBE_RTT_TIME, self.min_rtt)
+            elif self.probe_rtt_until and now >= self.probe_rtt_until:
+                self.min_rtt_at = now
+                self._enter_probe_bw(now)
+
+    def _enter_probe_bw(self, now: float) -> None:
+        self.state = "probe_bw"
+        self.cycle = secrets.choice((0, 2, 3, 4, 5, 6, 7))  # (not the drain phase)
+        self.cycle_at = now
+
+    def _set_cwnd(self, acked: int) -> None:
+        floor = 4.0 * self.mss
+        if self.state == "probe_rtt":
+            self.cwnd = max(floor, min(self.cwnd, self.bdp() / 2))
+            return
+        gain = STARTUP_GAIN if self.state == "startup" else CWND_GAIN
+        target = gain * self.bdp() + 3 * self.mss if self.bw and self.min_rtt else 0.0
+        if self.state == "startup" or not target:
+            self.cwnd += acked  # grow with every delivery until the rate stops rising
+        else:
+            self.cwnd = min(self.cwnd + acked, target)
+        self.cwnd = min(max(self.cwnd, floor), float(MAX_WINDOW))
 
 
 @dataclass
@@ -185,6 +390,9 @@ class UdpConnection:
         recv_key: bytes,
     ) -> None:
         self.endpoint = endpoint
+        # The sockets this connection lives on (the endpoint may move new
+        # punches to a fresh port; this connection keeps its own).
+        self.socks = dict(endpoint._socks)
         self.my_id = my_id
         self.peer_conn_id = peer_conn_id
         self._seal = AESGCM(send_key)
@@ -216,6 +424,11 @@ class UdpConnection:
         self._segs: list[bytes] = []
         self._seg_at: list[int] = []  # stream offset of each segment
         self._seg_head = 0  # segments before this one are confirmed and freed
+        # Frames written but not started yet: they get their place in the
+        # stream when their first byte is sent, small ones first.
+        self._urgent: collections.deque[bytes] = collections.deque()
+        self._bulk: collections.deque[bytes] = collections.deque()
+        self._queued = 0  # bytes in _urgent and _bulk
         self._send_end = 0
         self._snext = 0  # next new byte to send
         self._peer_cum = 0  # peer has every byte below this
@@ -224,9 +437,8 @@ class UdpConnection:
         self._sent: dict[int, _Sent] = {}
         self._in_flight = 0
         self._largest_acked = -1
-        self._cwnd: float = float(INITIAL_WINDOW)
-        self._ssthresh: float = float(MAX_WINDOW)
-        self._recovery_start = 0.0
+        self._cc = _Bbr(MIN_DATAGRAM, now)
+        self._cwnd: float = self._cc.cwnd
         self._rtt = _Rtt()
         self._pto_count = 0
         self._last_eliciting_sent = 0.0
@@ -277,21 +489,28 @@ class UdpConnection:
             self._reader = asyncio.create_task(self._read_loop())
 
     async def send(self, payload: bytes) -> None:
+        """Messages (chat, acknowledgements, call signalling...): they go out
+        before queued file data, so a message never waits behind a video.
+        (The session layer accepts messages a little out of order, and a
+        file's completion arriving before its last data is fine.)"""
         from srltcp.core.protocol.framing import FrameWriter
 
-        await self.send_framed(FrameWriter.write(payload))
+        await self._queue(FrameWriter.write(payload), urgent=True)
 
     async def send_framed(self, frame: bytes) -> None:
+        """File data (framed in a worker thread)."""
+        await self._queue(frame, urgent=False)
+
+    async def _queue(self, frame: bytes, *, urgent: bool) -> None:
         if self._closed:
             raise ConnectionError("connection closed")
-        while not self._room():
+        while not self._room(urgent):
             self._writable.clear()
             await self._writable.wait()
             if self._closed:
                 raise ConnectionError("connection closed")
-        self._segs.append(frame)
-        self._seg_at.append(self._send_end)
-        self._send_end += len(frame)
+        (self._urgent if urgent else self._bulk).append(frame)
+        self._queued += len(frame)
         self._schedule_pump()
 
     def send_datagram(self, payload: bytes) -> bool:
@@ -304,13 +523,27 @@ class UdpConnection:
         return True
 
     def buffered(self) -> int:
-        return self._send_end - self._snext
+        return self._send_end - self._snext + self._queued
 
-    def _room(self) -> bool:
+    def _room(self, urgent: bool = False) -> bool:
         held = self._send_end - (
             self._seg_at[self._seg_head] if self._seg_head < len(self._segs) else self._send_end
         )
-        return self._send_end - self._snext < SEND_HIGH and held < SEND_MAX
+        if held + self._queued >= SEND_MAX:
+            return False
+        return urgent or self.buffered() < SEND_HIGH
+
+    def _commit_next(self) -> bool:
+        """Give the next queued frame (small ones first) its place in the stream."""
+        queue = self._urgent or self._bulk
+        if not queue:
+            return False
+        frame = queue.popleft()
+        self._queued -= len(frame)
+        self._segs.append(frame)
+        self._seg_at.append(self._send_end)
+        self._send_end += len(frame)
+        return True
 
     def _read(self, off: int, ln: int) -> bytes:
         i = bisect.bisect_right(self._seg_at, off, self._seg_head) - 1
@@ -365,10 +598,15 @@ class UdpConnection:
         if self.punch and not self.punch.done.done():
             self.punch.done.set_result(False)
 
-    def _abort(self, why: str) -> None:
+    def _abort(self, why: str, *, tell: bool = True) -> None:
         if self._closed:
             return
         log.info("UDP connection %s closed: %s", self.peer.peer_id[:8], why)
+        if tell and self.remote and self.opened.is_set():
+            # Both sides drop it together (never a half-open link one side
+            # still trusts while the other looks for another way).
+            with contextlib.suppress(OSError):
+                self._send_packet(bytes([F_CLOSE]), eliciting=False)
         self._shutdown()
         if self._on_close:
             handler, self._on_close = self._on_close, None
@@ -527,8 +765,12 @@ class UdpConnection:
                             )
                             self.remote, self._remote_rx = self._rx_addr, now
                             self._challenges.clear()
+                            # A new network: its rate and delay are unknown.
+                            self._cc = _Bbr(self._max_datagram, now)
+                            self._cwnd = self._cc.cwnd
+                            self._rtt = _Rtt()
                 elif kind == F_CLOSE:
-                    self._abort("closed by the contact")
+                    self._abort("closed by the contact", tell=False)
                     return False
                 else:
                     return eliciting  # unknown frame: ignore the rest
@@ -626,7 +868,9 @@ class UdpConnection:
         if not ranges:
             return
         newly_largest = False
-        acked_bytes = 0
+        acked: list[_Sent] = []
+        newest: _Sent | None = None
+        newest_pn = -1
         largest_info: _Sent | None = None
         lowest_out = next(iter(self._sent), None)
         for hi, lo in ranges:
@@ -650,36 +894,27 @@ class UdpConnection:
                 if info is None:
                     continue
                 self._in_flight -= info.size
-                if info.eliciting:
-                    acked_bytes += info.size
+                acked.append(info)
+                if pn > newest_pn:
+                    newest, newest_pn = info, pn
                 if pn == hi and hi == self._largest_acked:
                     largest_info = info
                 if info.probe_size:
                     self._max_datagram = max(self._max_datagram, info.probe_size)
+                    self._cc.mss = self._max_datagram
                     log.debug(
                         "UDP %s: %d-byte packets get through",
                         self.peer.peer_id[:8],
                         info.probe_size,
                     )
+        sample = 0.0
         if newly_largest and largest_info is not None and largest_info.eliciting:
-            self._rtt.update(now - largest_info.at, min(delay, MAX_ACK_DELAY * 4))
-        if acked_bytes:
+            sample = now - largest_info.at
+            self._rtt.update(sample, min(delay, MAX_ACK_DELAY * 4))
+        if acked and newest is not None:
             self._pto_count = 0
-            # Delay as well as loss: the smoothed round trip rising well above
-            # the path's minimum means packets queue in a buffer (radio
-            # networks have deep ones). Stop doubling then, and stop growing
-            # while it's high, so chat and calls never wait behind a file.
-            srtt, base = self._rtt.srtt, self._rtt.minimum
-            if base and srtt > 1.5 * base + 0.01 and self._cwnd < self._ssthresh:
-                self._ssthresh = self._cwnd
-            if base and srtt > 2 * base + 0.03:
-                pass
-            elif self._cwnd < self._ssthresh:
-                self._cwnd = min(MAX_WINDOW, self._cwnd + acked_bytes)
-            else:
-                self._cwnd = min(
-                    MAX_WINDOW, self._cwnd + 2 * self._max_datagram * acked_bytes / self._cwnd
-                )
+            self._cc.on_ack(acked, newest, now, sample, self._in_flight)
+            self._cwnd = self._cc.cwnd
         if self._skipped and min(self._skipped) < self._largest_acked - 4096:
             # Long acknowledged around: they had their chance to lie about it.
             self._skipped = {s for s in self._skipped if s >= self._largest_acked - 4096}
@@ -714,23 +949,17 @@ class UdpConnection:
                 break
         if not lost:
             return
-        newest_lost_at = 0.0
         for pn in lost:
             info = self._sent.pop(pn)
             self._in_flight -= info.size
             if info.probe_size:
                 continue  # a too-big probe: just means big packets don't fit
             self.stats["lost"] += 1
+            self._cc.on_loss(info.size)
             for off, ln in info.ranges:
                 if off + ln > self._peer_cum:
                     self._retx.append((off, ln))
-            if info.eliciting:
-                newest_lost_at = max(newest_lost_at, info.at)
         self._retx.sort()
-        if newest_lost_at > self._recovery_start:
-            self._recovery_start = now
-            self._cwnd = max(float(MIN_WINDOW), self._cwnd * BACKOFF)
-            self._ssthresh = self._cwnd
 
     def _on_timer(self) -> None:
         self._timer = None
@@ -738,7 +967,7 @@ class UdpConnection:
             return
         now = time.monotonic()
         if now - self._last_rx > IDLE_TIMEOUT and self.opened.is_set():
-            self._abort("no answer from the contact")
+            self._abort("no answer from the contact", tell=False)
             return
         self._detect_loss(now)
         pto = self._pto_deadline()
@@ -781,12 +1010,10 @@ class UdpConnection:
             self._arm_timer(time.monotonic())
             return
         now = time.monotonic()
-        rate = (
-            self._cwnd / max(self._rtt.srtt, 0.001) * (2.0 if self._cwnd < self._ssthresh else 1.25)
-        )
+        rate = self._cc.pacing_rate(self._rtt.srtt)
         self._tokens = min(
             self._tokens + (now - self._tokens_at) * rate,
-            max(10 * self._max_datagram, rate * 0.002),
+            max(10 * self._max_datagram, rate * 0.003),
         )
         self._tokens_at = now
         sent_any = True
@@ -794,6 +1021,8 @@ class UdpConnection:
             if self._tokens < self._max_datagram and self._has_data():
                 break  # paced: continue when enough budget built up
             sent_any = self._send_one()
+        if not self._has_data() and self._in_flight + self._max_datagram <= self._cwnd:
+            self._cc.note_app_limited(self._in_flight)
         if self._ack_due and now >= self._ack_due:
             self._send_packet(b"", eliciting=False)  # an acknowledgement on its own
         if self.opened.is_set() and not self._pmtu_probed and self._rtt.sampled:
@@ -802,7 +1031,7 @@ class UdpConnection:
         self._arm_timer(now)
 
     def _has_data(self) -> bool:
-        return bool(self._retx or self._dgrams or self._snext < self._send_end)
+        return bool(self._retx or self._dgrams or self._snext < self._send_end or self._queued)
 
     def _send_one(self, *, force: bool = False) -> bool:
         """One packet of data (retransmissions first, then new bytes) if the
@@ -860,8 +1089,9 @@ class UdpConnection:
                 self._retx[0] = (off + take, ln - take)
             self.stats["retransmitted"] += 1
             return off, take
-        end = self._send_end
-        limit = min(end, self._peer_max)
+        if self._snext >= self._send_end and not self._commit_next():
+            return None
+        limit = min(self._send_end, self._peer_max)
         if self._snext >= limit:
             return None
         take = min(room, limit - self._snext)
@@ -921,15 +1151,18 @@ class UdpConnection:
         else:
             targets = self.punch.candidates if self.punch else []
         for addr in targets:
-            self.endpoint.sendto(packet, addr)
+            self.endpoint.sendto(packet, addr, self.socks)
         self.stats["sent"] += 1
         self._last_sent = now
         if with_ack and self._rx_ranges:
             self._ack_sent()
         size = len(packet)
-        self._tokens -= size
         if eliciting or ranges:
-            self._sent[pn] = _Sent(now, size, ranges or [], True, pad_to)
+            # (Acknowledgements aren't paced: they'd starve our own data.)
+            self._tokens = max(self._tokens - size, -10.0 * self._max_datagram)
+            info = _Sent(now, size, ranges or [], True, pad_to)
+            self._cc.on_send(info, now, self._in_flight)
+            self._sent[pn] = info
             self._in_flight += size
             self._last_eliciting_sent = now
 
@@ -946,7 +1179,7 @@ class UdpConnection:
             first = next(iter(self._sent.values()))
             due.append(first.at + self._loss_delay())
         if self._has_data() and self.remote is not None:
-            rate = self._cwnd / max(self._rtt.srtt, 0.001)
+            rate = self._cc.pacing_rate(self._rtt.srtt)
             if self._tokens < self._max_datagram:
                 due.append(now + (self._max_datagram - self._tokens) / max(rate, 1.0))
         at = max(min(due), now + 0.0005)
@@ -988,6 +1221,10 @@ class _Protocol(asyncio.DatagramProtocol):
         log.debug("UDP socket error: %r", exc)
 
 
+def _port_of(transport: asyncio.DatagramTransport) -> int:
+    return int(transport.get_extra_info("sockname")[1])
+
+
 class UdpEndpoint:
     """This device's UDP sockets (IPv4 and IPv6, same port), the STUN
     client and all UDP connections."""
@@ -998,7 +1235,8 @@ class UdpEndpoint:
         self.requested_port = port
         self.port = 0
         self.stun_servers = stun_servers
-        self._socks: dict[int, asyncio.DatagramTransport] = {}
+        self._socks: dict[int, asyncio.DatagramTransport] = {}  # for new punches and STUN
+        self._retired: list[dict[int, asyncio.DatagramTransport]] = []  # still used by connections
         self.ports: dict[int, int] = {}
         self._conns: dict[bytes, UdpConnection] = {}
         self._stun_waiting: dict[bytes, asyncio.Future[tuple[str, int]]] = {}
@@ -1007,7 +1245,46 @@ class UdpEndpoint:
         self.symmetric = False  # different ports towards different servers: punching rarely works
 
     async def start(self) -> None:
+        self._socks = await self._open(self.requested_port)
+        self.ports = {f: _port_of(t) for f, t in self._socks.items()}
+        self.port = next(iter(self.ports.values()), 0)
+        if self._socks:
+            log.info("Direct UDP connections on port %d", self.port)
+
+    async def rotate(self) -> bool:
+        """Move new punches to a fresh local port (and learn its public
+        mapping). After a failed round, routers on the way may hold stale
+        state for the old pair of ports for ~30 s, refreshed by every retry:
+        a new port is a new pair, so the next round can work at once.
+        Existing connections keep their sockets."""
+        fresh = await self._open(0)
+        if not fresh:
+            return False
+        self._retired.append(self._socks)
+        self._socks = fresh
+        self.ports = {f: _port_of(t) for f, t in fresh.items()}
+        self._close_unused()
+        self.mapped, self.mapped_at = {}, 0.0
+        await self.refresh_mapping()
+        log.info("UDP: new punches from port %s", ", ".join(map(str, self.ports.values())))
+        return True
+
+    def _close_unused(self) -> None:
+        used = {id(t) for c in self._conns.values() for t in c.socks.values()}
+        keep = []
+        for socks in self._retired:
+            if any(id(t) in used for t in socks.values()):
+                keep.append(socks)
+            else:
+                for transport in socks.values():
+                    transport.close()
+        self._retired = keep
+
+    async def _open(self, wanted: int) -> dict[int, asyncio.DatagramTransport]:
+        """An IPv4 and an IPv6 socket on one port (``wanted``, else any)."""
         loop = asyncio.get_running_loop()
+        out: dict[int, asyncio.DatagramTransport] = {}
+        bound = 0
         for family, host in ((socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")):
             try:
                 sock = socket.socket(family, socket.SOCK_DGRAM)
@@ -1019,7 +1296,7 @@ class UdpEndpoint:
                 with contextlib.suppress(OSError):
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
-                port = self.port or self.requested_port
+                port = bound or wanted
                 try:
                     sock.bind((host, port))
                 except OSError:
@@ -1034,26 +1311,31 @@ class UdpEndpoint:
                 )
                 continue
             transport, _ = await loop.create_datagram_endpoint(lambda: _Protocol(self), sock=sock)
-            self._socks[family] = transport
-            self.ports[family] = int(sock.getsockname()[1])
-            self.port = self.port or self.ports[family]
-        if self._socks:
-            log.info("Direct UDP connections on port %d", self.port)
+            out[family] = transport
+            bound = bound or int(sock.getsockname()[1])
+        return out
 
     def stop(self) -> None:
         for conn in list(self._conns.values()):
             conn._shutdown()
-        for transport in self._socks.values():
-            transport.close()
+        for socks in (self._socks, *self._retired):
+            for transport in socks.values():
+                transport.close()
         self._socks.clear()
+        self._retired.clear()
 
     @property
     def families(self) -> set[int]:
         return set(self._socks)
 
-    def sendto(self, packet: bytes, addr: tuple[str, int]) -> None:
+    def sendto(
+        self,
+        packet: bytes,
+        addr: tuple[str, int],
+        socks: dict[int, asyncio.DatagramTransport] | None = None,
+    ) -> None:
         family = socket.AF_INET6 if ":" in addr[0] else socket.AF_INET
-        sock = self._socks.get(family)
+        sock = (self._socks if socks is None else socks).get(family)
         if sock is not None:
             with contextlib.suppress(OSError):
                 sock.sendto(packet, addr)
@@ -1091,12 +1373,15 @@ class UdpEndpoint:
         return conn
 
     def prime(
-        self, candidates: list[tuple[str, int]], hops: tuple[int, ...] = PRIME_HOPS
+        self,
+        candidates: list[tuple[str, int]],
+        hops: tuple[int, ...] = PRIME_HOPS,
+        socks: dict[int, asyncio.DatagramTransport] | None = None,
     ) -> None:
         """Open our NAT towards each candidate without reaching theirs."""
         for host, port in candidates:
             family = socket.AF_INET6 if ":" in host else socket.AF_INET
-            transport = self._socks.get(family)
+            transport = (self._socks if socks is None else socks).get(family)
             if transport is None or getattr(transport, "get_write_buffer_size", lambda: 0)():
                 continue  # (queued packets would go out with the low hop limit)
             sock = transport.get_extra_info("socket")
@@ -1130,12 +1415,12 @@ class UdpEndpoint:
         usable = [
             c
             for c in candidates
-            if (socket.AF_INET6 if ":" in c[0] else socket.AF_INET) in self._socks
+            if (socket.AF_INET6 if ":" in c[0] else socket.AF_INET) in conn.socks
         ]
         if not usable:
             conn._shutdown()
             return False
-        self.prime(usable, hops)
+        self.prime(usable, hops, conn.socks)
         if delay:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(conn.opened.wait(), delay)

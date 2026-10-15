@@ -134,9 +134,40 @@ with keys only the two contacts know; packets that don't decrypt are dropped
 without an answer, so nobody can inject data, close the connection or use the
 phone to bounce traffic. The session inside adds its own end-to-end
 encryption. The connection is reliable and ordered like TCP (acknowledgements,
-retransmission, congestion control that watches delay as well as loss, so chat
-stays snappy during a big file), and call audio/video go as separate
-datagrams that never wait behind lost file data. If a phone's address changes
+retransmission), and call audio/video go as separate datagrams that never wait
+behind lost file data. Chat, file confirmations and other small messages go
+out ahead of queued file data, and files travel in 256 KiB pieces on this
+path, so a message never waits behind a video.
+
+**Speed on mobile networks.** The sending rate follows BBR, the congestion
+control YouTube and QUIC use on mobile: it measures how fast data actually
+arrives and the path's shortest round trip, and paces packets at that rate.
+Radio links lose packets at random without being congested; a loss-based
+controller (TCP Reno, which this transport used before 0.12.1) takes every
+loss as congestion and, at a 150-200 ms mobile round trip, ends up at about
+0.1 MB/s. BBR leaves the speed alone for random losses and only slows down
+for heavy loss. `scripts/bench_udp_path.py` emulates mobile paths (rate,
+deep radio buffer, delay, jitter, loss) without root:
+
+| Path (each way) | Link | Before (Reno) | Now (BBR) |
+|---|---|---|---|
+| LTE, 90 ms round trip, 0.2 % loss | 2.5 MB/s | 0.19 MB/s | 2.25 MB/s |
+| LTE, 140 ms, 1 % loss | 2.5 MB/s | 0.10 MB/s | 2.15 MB/s |
+| 5G far away, 200 ms, 0.5 % loss | 7.5 MB/s | 0.11 MB/s | 5.25 MB/s |
+| congested cell, 100 ms, 2 % loss | 0.62 MB/s | 0.10 MB/s | 0.56 MB/s |
+
+**Faster retries.** A punch round that fails is retried after 4 s with a
+lower hop limit for the priming packets, from a **fresh UDP port**: routers on
+the way may hold stale state for the old pair of ports for ~30 s, refreshed by
+every retry on the same ports. With a new port the next round works at once
+(two home routers in `scripts/simulate_nat.sh`: direct after 25 s instead of
+113 s). Connections already up keep their port.
+
+**One session at a time.** While the direct connection works, a session the
+contact opens over Tor is refused (it used to take over, so the link flipped
+between Tor and direct and transfers restarted); only after the direct one
+has been silent for 15 s does Tor ring again. A side that closes the UDP
+connection tells the other, so neither keeps a half-open link. If a phone's address changes
 (Wi-Fi to mobile data), authenticated packets from the new address move the
 connection there; if it goes quiet for 30 seconds, the phones find each other
 again over Tor (or the relay) and a new round starts.
@@ -153,7 +184,8 @@ otherwise messages and files wait (Tor never carries them):
 
 Tested in `scripts/simulate_udp.sh`: two phones behind separate carrier NATs,
 TCP between the networks blocked, 0.5% packet loss: direct UDP after about
-10 s, a 40 MB file at 14-21 MB/s with chat flowing meanwhile; with symmetric NAT
+10 s, a 40 MB file at about 10 MB/s with chat flowing meanwhile (no added
+delay there: see the table above for mobile round trips); with symmetric NAT
 on both sides they correctly stay on the relay.
 
 **TCP and IPv6.** The app also tries TCP hole punching (through home routers,

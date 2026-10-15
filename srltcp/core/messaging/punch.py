@@ -52,12 +52,12 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 PUNCH_WINDOW = 8.0  # seconds both sides keep dialing
-UDP_PUNCH_WINDOW = 6.0  # seconds both sides keep probing over UDP
-UDP_RETRY_SOON = 10.0  # after a failed UDP round with a lower priming hop limit left
+UDP_PUNCH_WINDOW = 4.0  # seconds both sides keep probing over UDP (it works within 1-2 s or not)
+UDP_RETRY_SOON = 4.0  # after a failed UDP round with a lower priming hop limit left
 STUN_FRESH = 20.0  # re-ask STUN before a round if the answer is older (carrier NATs forget)
 PUNCH_ATTEMPT_TIMEOUT = 1.5
 PUNCH_FOLLOWER_DELAY = 1.0  # the answering side starts dialing a moment later
-PUNCH_ANSWER_EVERY = 8.0  # a contact can start at most one round this often (each is small)
+PUNCH_ANSWER_EVERY = 6.0  # a contact can start at most one round this often (each is small)
 PUNCH_RETRY_EVERY = 120.0  # while on the relay
 PUNCH_BACKOFF = (15.0, 30.0, 60.0, 120.0)  # after 1, 2, 3, 4+ failed rounds
 MAX_CANDIDATES = 6
@@ -457,8 +457,8 @@ class PunchMixin:
         if conn is None:
             return None, [], {}
         conn.expected_hash = hash_id
-        self.udp.prime(targets, self._prime_hops(hash_id))  # before answering: the leader
-        # probes as soon as it hears
+        # Before answering: the leader probes as soon as it hears.
+        self.udp.prime(targets, self._prime_hops(hash_id), conn.socks)
         return conn, targets, {"w": [list(c) for c in mine], "k": secret.hex(), "i": my_id.hex()}
 
     def _udp_lead(
@@ -511,12 +511,18 @@ class PunchMixin:
                 else:
                     udp_conn._shutdown()
                     # Maybe our priming packets reached their router (a short
-                    # path, e.g. the same ISP): try again soon, lower hop limit.
+                    # path, e.g. the same ISP): try again soon, lower hop limit,
+                    # from a fresh port (routers hold stale state for the old
+                    # pair of ports for a while; every retry would refresh it).
                     current = self._prime_max.get(hash_id, 4)
                     if current > 2:
                         self._prime_max[hash_id] = current - 1
                         retry_soon = True
-            if not peer_id and targets:
+                        if self.udp:
+                            await self.udp.rotate()
+            if not peer_id and targets and not retry_soon:
+                # (Not while a UDP retry is coming: it nearly always works
+                # where TCP would, and the TCP round only delays it.)
                 peer_id = await self._race_dials(
                     targets, port, delay=0.0 if leader else PUNCH_FOLLOWER_DELAY
                 )

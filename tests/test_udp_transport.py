@@ -61,15 +61,15 @@ def _make_lossy(ep: UdpEndpoint, loss: float = 0.0, dup: float = 0.0, reorder: f
     rnd = random.Random(7)
     loop = asyncio.get_event_loop()
 
-    def sendto(packet: bytes, addr: tuple[str, int]) -> None:
+    def sendto(packet: bytes, addr: tuple[str, int], socks: Any = None) -> None:
         if rnd.random() < loss:
             return
         if rnd.random() < reorder:
-            loop.call_later(0.02, real, packet, addr)
+            loop.call_later(0.02, real, packet, addr, socks)
             return
-        real(packet, addr)
+        real(packet, addr, socks)
         if rnd.random() < dup:
-            real(packet, addr)
+            real(packet, addr, socks)
 
     ep.sendto = sendto  # type: ignore[method-assign]
 
@@ -167,9 +167,9 @@ async def test_attacker_cannot_inject_replay_or_reset() -> None:
     captured: list[bytes] = []
     real = p.a.sendto
 
-    def tap(packet: bytes, addr: tuple[str, int]) -> None:
+    def tap(packet: bytes, addr: tuple[str, int], socks: Any = None) -> None:
         captured.append(packet)
-        real(packet, addr)
+        real(packet, addr, socks)
 
     p.a.sendto = tap  # type: ignore[method-assign]
     await p.ca.send(b"hello")
@@ -232,6 +232,7 @@ async def test_path_follows_a_network_change() -> None:
     moved = UdpEndpoint(0, stun_servers=())
     await moved.start()
     p.a._socks, moved._socks = moved._socks, p.a._socks  # swap sockets
+    p.ca.socks = dict(p.a._socks)  # (on a phone: the same socket, a new address)
     for t in p.a._socks.values():
         t.get_protocol().endpoint = p.a  # type: ignore[attr-defined]
     for t in moved._socks.values():
@@ -361,3 +362,59 @@ async def test_optimistic_acks_end_the_connection() -> None:
     await p.cb.close()
     p.a.stop()
     p.b.stop()
+
+
+async def test_fast_and_responsive_on_a_lossy_mobile_path() -> None:
+    """A radio path: 2.5 MB/s, 140 ms round trip, jitter, a deep buffer and
+    1 % random loss. Loss-based congestion control (Reno) managed ~0.1 MB/s
+    here; BBR keeps the link full. Replies from the receiving side (chat,
+    file confirmations) must flow during the transfer (its acknowledgements
+    once used up its pacing budget and starved them)."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "bench_udp_path", Path(__file__).resolve().parents[1] / "scripts" / "bench_udp_path.py"
+    )
+    assert spec and spec.loader
+    bench = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = bench  # (dataclasses look the module up)
+    spec.loader.exec_module(bench)
+    res = await bench.run("lte-lossy", 6)
+    assert res["MB/s"] > 1.2, res  # (link: 2.5 MB/s; old controller: 0.1)
+    assert res["chat_msgs"] >= 4, res
+
+
+async def test_new_punches_from_a_fresh_port_existing_connection_keeps_its_own() -> None:
+    """After a failed round the endpoint moves new punches to a new port
+    (routers may hold stale state for the old pair of ports). A connection
+    made before keeps working on its socket; the old socket closes once
+    nothing uses it."""
+    p = await make_pair()
+    try:
+        old = p.a.ports[socket.AF_INET]
+        assert await p.a.rotate()
+        assert p.a.ports[socket.AF_INET] != old
+        await p.ca.send(b"still here")
+        await p.cb.send(b"me too")
+        assert await until(lambda: b"still here" in p.got_b and b"me too" in p.got_a)
+        # A new connection punched from the new port.
+        k1, k2 = derive_keys(secrets.token_bytes(32), "leader", "follower")
+        ida, idb = secrets.token_bytes(8), secrets.token_bytes(8)
+        ca2 = p.a.new_connection(idb, k1, k2, my_id=ida)
+        cb2 = p.b.new_connection(ida, k2, k1, my_id=idb)
+        assert ca2 and cb2
+        pa = ("127.0.0.1", p.a.ports[socket.AF_INET])
+        pb = ("127.0.0.1", p.b.ports[socket.AF_INET])
+        assert await asyncio.gather(p.a.punch(ca2, [pb], 5.0), p.b.punch(cb2, [pa], 5.0)) == [
+            True, True]
+        assert cb2.remote == pa  # (it came from the new port)
+        await ca2.close()
+        await cb2.close()
+        assert p.a._retired  # the first connection still uses the old socket
+        await p.ca.close()
+        p.a._close_unused()
+        assert not p.a._retired
+    finally:
+        await close(p)

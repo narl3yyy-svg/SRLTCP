@@ -434,6 +434,8 @@ class TransferMixin:
             )
         if link.transport == "relay":
             return PathParams(C.RELAY_CHUNK_SIZE, C.RELAY_WINDOW, C.TRANSFER_STALL_SLOW, 3)
+        if link.address.startswith("udp:"):
+            return PathParams(C.UDP_CHUNK_SIZE, C.CHUNK_WINDOW, C.TRANSFER_STALL, 1)
         return PathParams(C.CHUNK_SIZE, C.CHUNK_WINDOW, C.TRANSFER_STALL, 1)
 
     # ── Progress ──

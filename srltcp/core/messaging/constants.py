@@ -10,6 +10,7 @@ WEB_PORT = 9876
 # window keeps a fast link full and bounds what a broken path can lose.
 CHUNK_SIZE = 1024 * 1024  # direct TCP (LAN / VPN / punched)
 CHUNK_WINDOW = 24 * 1024 * 1024
+UDP_CHUNK_SIZE = 256 * 1024  # direct UDP: a message waits behind at most one chunk
 RELAY_CHUNK_SIZE = 128 * 1024  # stays under the relay's 256 KiB frame limit
 RELAY_WINDOW = 2 * 1024 * 1024
 SERIAL_CHUNK_SIZE = 8 * 1024  # serial/RF links have smaller frames
