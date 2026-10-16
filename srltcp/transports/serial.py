@@ -8,8 +8,8 @@ import contextlib
 import uuid
 from typing import Any
 
-from srltcp.core.protocol.framing import FrameReader, FrameWriter
 from srltcp.transports.base import Transport, TransportEvent, TransportPeer
+from srltcp.transports.serial_link import SerialLink
 from srltcp.utils.logging import get_logger
 from srltcp.utils.platform import default_serial_port
 
@@ -35,7 +35,7 @@ class SerialTransport(Transport):
         self._serial: Any = None
         self._peer: TransportPeer | None = None
         self._reader_task: asyncio.Task[None] | None = None
-        self._frame_reader = FrameReader()
+        self._link: SerialLink | None = None
         self._running = False
         self._write_lock = asyncio.Lock()
         self._frame_errors = 0
@@ -69,6 +69,8 @@ class SerialTransport(Transport):
                 timeout=self.timeout,
             )
         self._running = True
+        self._link = SerialLink(self._write_raw, self._on_message, self.baudrate)
+        self._link.start()
         peer_id = str(uuid.uuid4())
         self._peer = TransportPeer(
             peer_id=peer_id,
@@ -81,6 +83,8 @@ class SerialTransport(Transport):
 
     async def stop(self) -> None:
         self._running = False
+        if self._link:
+            await self._link.stop()
         if self._reader_task:
             self._reader_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -93,7 +97,7 @@ class SerialTransport(Transport):
         if self._peer:
             await self._emit_event(TransportEvent(kind="disconnected", peer=self._peer))
         self._peer = None
-        self._frame_reader = FrameReader()
+        self._link = None
 
     @property
     def alive(self) -> bool:
@@ -110,9 +114,8 @@ class SerialTransport(Transport):
                 if not data:
                     await asyncio.sleep(0.01)
                     continue
-                for frame in self._frame_reader.feed(data):
-                    if self._peer:
-                        await self._emit_frame(self._peer, frame)
+                if self._link:
+                    await self._link.feed(data)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -131,18 +134,31 @@ class SerialTransport(Transport):
             log.info("Serial device %s is gone", self.port)
             self._running = False
 
-    async def send(self, peer_id: str, payload: bytes) -> None:
+    async def _write_raw(self, data: bytes) -> None:
         if not self._serial or not self._serial.is_open:
             raise RuntimeError("serial port not open")
-        frame = FrameWriter.write(payload)
-        async with self._write_lock:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._serial.write, frame)
-            await loop.run_in_executor(None, self._serial.flush)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._serial.write, data)
+        await loop.run_in_executor(None, self._serial.flush)
+
+    async def _on_message(self, message: bytes) -> None:
+        if self._peer:
+            await self._emit_frame(self._peer, message)
+
+    async def send(self, peer_id: str, payload: bytes) -> None:
+        """Reliable (acknowledged, resent until it arrives)."""
+        if not self._link or not self.alive:
+            raise RuntimeError("serial port not open")
+        await self._link.send(payload)
 
     async def broadcast(self, payload: bytes) -> None:
-        if self._peer:
-            await self.send(self._peer.peer_id, payload)
+        """Once, unacknowledged (announces: maybe nobody is listening)."""
+        if not self._link or not self.alive:
+            raise RuntimeError("serial port not open")
+        await self._link.send(payload, reliable=False)
+
+    def link_stats(self) -> dict[str, float | int]:
+        return self._link.stats.to_dict() if self._link else {}
 
     def peers(self) -> list[TransportPeer]:
         return [self._peer] if self._peer else []

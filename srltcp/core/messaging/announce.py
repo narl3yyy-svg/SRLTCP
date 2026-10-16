@@ -92,7 +92,8 @@ class AnnounceMixin:
             "name": identity.name,
             "public_key": identity.public_bytes().hex(),
             "transport": transport,
-            "tcp_host": self._lan_ip(),
+            # (Not over the radio: anyone in range would learn our LAN address.)
+            "tcp_host": self._lan_ip() if transport == "tcp" else "",
             "tcp_port": self.config.tcp_port,
             "discovery_port": discovery_port,
             "ts": int(time.time()),
@@ -217,11 +218,7 @@ class AnnounceMixin:
                     "Serial is disabled — enable it in Settings → Serial",
                 )
             packet = build_header(MessageType.ANNOUNCE, body=payload)
-            peers = self.serial_transport.peers()
-            if peers:
-                await self.serial_transport.send(peers[0].peer_id, packet)
-            else:
-                await self.serial_transport.broadcast(packet)
+            await self.serial_transport.broadcast(packet)  # (once: maybe nobody listens)
         log.info("Announced on %s", transport_name)
 
     async def announce(
@@ -249,6 +246,47 @@ class AnnounceMixin:
                 await asyncio.sleep(ANNOUNCE_BURST_DELAY)
             announced.append(t)
         return announced
+
+    async def _on_serial_announce(
+        self: MessagingBackend, hash_id: str, is_reply: bool, trusted_fresh: bool
+    ) -> None:
+        """Someone announced on the radio: answer (so one side hearing the
+        other is enough) and, for a contact we have no working session with
+        (or only the Tor doorbell, which carries nothing), connect over it.
+        Only the lower identity hash dials, so the two don't cross."""
+        now = time.monotonic()
+        if not is_reply and now - self.__dict__.get("_serial_replied_at", 0.0) > 5.0:
+            self.__dict__["_serial_replied_at"] = now
+            payload = self.build_announce_payload("serial", reply=True)
+            with contextlib.suppress(Exception):
+                if self.serial_transport:
+                    await self.serial_transport.broadcast(
+                        build_header(MessageType.ANNOUNCE, body=payload)
+                    )
+        if not trusted_fresh or not self.serial_transport:
+            return
+        link = self.get_link(hash_id)
+        on_tor = bool(link and self._link_on_tor(link))
+        if link and link.handshake_complete and not on_tor:
+            return  # already connected (Wi-Fi, internet or this radio)
+        if self._me_hash() > hash_id:
+            return  # they dial
+        dialing: set[str] = self.__dict__.setdefault("_serial_dialing", set())
+        if hash_id in dialing:
+            return
+
+        async def dial() -> None:
+            dialing.add(hash_id)
+            try:
+                log.info("Contact %s in radio range — connecting over serial", hash_id[:8])
+                await self.connect_to_peer(hash_id, transport="serial", force=on_tor)
+                await self.wait_for_handshake(hash_id, timeout=90.0)
+            except (OSError, ConnectionError, RuntimeError, KeyError, TimeoutError) as exc:
+                log.info("Serial connect to %s failed: %s", hash_id[:8], exc)
+            finally:
+                dialing.discard(hash_id)
+
+        asyncio.create_task(dial())
 
     async def start_announce_loop(self: MessagingBackend) -> None:
         await self.stop_announce_loop()
@@ -353,6 +391,9 @@ class AnnounceMixin:
                 self._verify_link_soon(peer.hash_id)
         if trusted and fresh and peer.transport == "tcp" and peer.tcp_host:
             self.request_direct_upgrade(peer.hash_id)  # same Wi-Fi again: leave Tor
+        if peer.transport == "serial":
+            await self._on_serial_announce(peer.hash_id, bool(peer.metadata.get("reply")),
+                                           bool(trusted and fresh))
         # Answer so the sender discovers us too (one press on one phone is enough).
         src_ip = address.rsplit(":", 1)[0] if ":" in address else ""
         if (

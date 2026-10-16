@@ -38,13 +38,14 @@ async def test_announce_tcp_broadcasts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_announce_serial_sends_framed_packet() -> None:
+async def test_announce_serial_is_broadcast_once_per_burst() -> None:
+    """Announces on the radio are unacknowledged broadcasts (maybe nobody is
+    listening), never reliable sends that would be resent for 90 s."""
     backend = _AnnounceBackend()
-    backend.identities["serial"] = Identity.generate("node-b", "serial")
     announced = await backend.announce("serial")
     assert announced == ["serial"]
-    assert backend.serial_transport.broadcast.await_count == 0
-    assert backend.serial_transport.send.await_count == 3
+    assert backend.serial_transport.broadcast.await_count == 3
+    assert backend.serial_transport.send.await_count == 0
 
 
 @pytest.mark.asyncio

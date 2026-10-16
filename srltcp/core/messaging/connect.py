@@ -51,6 +51,7 @@ def _unb64(value: object, size: int) -> bytes:
     return raw
 
 PENDING_HANDSHAKE_TTL = 15.0
+SERIAL_HANDSHAKE_TTL = 90.0
 DIRECT_ALIVE_WINDOW = 15.0  # a direct session heard from this recently is working (pings: 10 s)
 HANDSHAKE_VERSION = 6  # v6: hybrid post-quantum (X25519+ML-KEM-768, Ed25519+ML-DSA-65)
 # v5: windowed file transfers (FILE_ACK), Tor lanes
@@ -564,7 +565,9 @@ class ConnectMixin:
         """True when our own outstanding handshake can still complete."""
         if not link or link.handshake_complete:
             return False
-        if time.time() - started > PENDING_HANDSHAKE_TTL:
+        # (A slow radio needs far longer for the ~9 KiB handshake each way.)
+        ttl = SERIAL_HANDSHAKE_TTL if link.transport == "serial" else PENDING_HANDSHAKE_TTL
+        if time.time() - started > ttl:
             return False
         return self._is_link_reachable(link)
 

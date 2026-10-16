@@ -124,8 +124,9 @@ object UsbSerialBridge {
             p.open(connection)
             p.setParameters(baud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
             try {
-                p.setDTR(true)  // many boards (Arduino, ESP32) only talk with DTR/RTS set
-                p.setRTS(true)
+                // Many boards (Arduino, CDC radios) only send with DTR set. RTS is
+                // left alone: on ESP32 boards RTS drives the reset/boot lines.
+                p.setDTR(true)
             } catch (_: Exception) {
             }
             port = p

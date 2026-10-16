@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.13.1 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.13.2 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -235,7 +235,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.1.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.2.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -243,7 +243,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.1.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.1.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.2.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -373,15 +373,26 @@ SRLTCP keeps running after you close it, like any messenger, so messages, calls 
 
 ### USB Serial P2P
 
-Connect two machines via USB-serial cable (or USB-OTG):
+Two devices over a USB-serial cable or a pair of **serial radios** (SiK/3DR
+telemetry radios, LoRa or ESP32 serial bridges), no network at all.
 
-```bash
-# Machine A
-./run.sh web --serial --serial-port /dev/ttyUSB0 --no-tcp
-
-# Machine B
-./run.sh web --serial --serial-port /dev/ttyACM0 --no-tcp
-```
+- **Android:** plug the adapter into the phone (USB-C OTG), *Settings → Serial*:
+  turn it on, pick the adapter, same baud rate on both phones, Save. Android
+  asks once to allow SRLTCP to use it. Supported: FTDI, CP210x, CH34x, PL2303,
+  Arduino/ESP32/RP2040/STM32 boards.
+- **PC:** `./run.sh web --serial --serial-port /dev/ttyUSB0` (or `COM3`).
+- Contacts are the **same contacts** as over Wi-Fi: phones in radio range
+  announce themselves, hear each other and connect by themselves (the header
+  shows **SERIAL**); chat, files and groups work over it, slowly.
+- The link is **reliable over lossy radios**: messages go in small packets
+  with a CRC-32, the receiver acknowledges what it got, missing packets are
+  sent again, and the sending rate adapts so the radio's buffer never
+  overflows (`srltcp/transports/serial_link.py`). Announces over the radio
+  don't include your LAN address.
+- *Settings → Serial* shows live stats (sent/received, good/bad packets,
+  resends, last heard) and says what's wrong: bad packets only means a baud
+  rate mismatch; nothing received means the radios aren't paired (channel,
+  net ID, air speed) or the other side is off.
 
 ### CLI messaging
 

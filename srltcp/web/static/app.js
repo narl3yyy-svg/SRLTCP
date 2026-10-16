@@ -718,6 +718,46 @@
     }
   }
 
+  /* Settings → Serial: what the radio link is doing (live). */
+  function renderSerialLink(serial) {
+    const el = $("#serial-link-status");
+    if (!el) return;
+    const link = serial?.link || {};
+    if (!serial || !serial.active || !Object.keys(link).length) {
+      el.textContent = "";
+      el.className = "net-status";
+      return;
+    }
+    const kb = (n) => (n >= 10240 ? `${Math.round(n / 1024)} KB` : `${n} B`);
+    const ago = link.last_rx ? Math.max(0, Math.round(Date.now() / 1000 - link.last_rx)) : null;
+    const peers = serial.peers || [];
+    const lines = [
+      peers.length
+        ? `Connected over the radio: ${peers.join(", ")}`
+        : link.packets_in
+          ? "Hearing the other radio — connecting…"
+          : "Port open — nothing heard from the other radio yet",
+      `Sent ${kb(link.bytes_out || 0)} · received ${kb(link.bytes_in || 0)} · ${link.packets_in || 0} good / ${link.bad_packets || 0} bad packets · ${link.resent || 0} resent`
+        + (ago !== null ? ` · last heard ${ago}s ago` : ""),
+    ];
+    if ((link.bytes_in || 0) > 200 && !link.packets_in) {
+      lines.push("Data arrives but none of it is readable: check both sides use the same baud rate, and the radios are in transparent serial mode.");
+    } else if ((link.bytes_out || 0) > 2000 && !(link.bytes_in || 0)) {
+      lines.push("Nothing comes back: is the other phone's serial on, with the same baud rate? Are the radios paired (same channel / net ID / air speed)?");
+    }
+    el.textContent = lines.join("\n");
+    el.className = `net-status ${peers.length ? "ok" : ""}`;
+  }
+
+  // Live radio stats while Settings → Serial is open.
+  setInterval(() => {
+    const panel = document.querySelector('.settings-panel[data-panel="serial"]');
+    const modal = $("#settings-window");
+    if (panel?.classList.contains("active") && modal && !modal.classList.contains("hidden")) {
+      fetchStatus();
+    }
+  }, 3000);
+
   /* Settings → Network: Tor. */
   function renderTorStatus(tor) {
     const el = $("#tor-status");
@@ -2893,6 +2933,7 @@
         : "TCP transport unavailable — restart the node";
     }
     renderTorStatus(transportStatus.tor);
+    renderSerialLink(transportStatus.serial);
 
     const serialBtn = $("#btn-announce-serial");
     if (serialBtn) {

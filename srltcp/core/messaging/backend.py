@@ -192,9 +192,8 @@ class MessagingBackend(
             self.tcp_transport.on_datagram(self._on_transport_datagram)
 
         if self.config.enable_serial:
-            self.identities["serial"] = self.identity_store.load_or_create(
-                self.config.name, "serial"
-            )
+            # (Serial uses the main identity: a contact is the same contact
+            # over Wi-Fi, the internet or the radio.)
             port = self.config.serial_port or None
             self.serial_transport = SerialTransport(port=port, baudrate=self.config.serial_baud)
             self._wire_transport(self.serial_transport)
@@ -283,11 +282,32 @@ class MessagingBackend(
             return
         transport = self.serial_transport
         if transport is not None and getattr(transport, "alive", True):
+            await self._serial_announce_if_alone()
             return
         if transport is not None:
             await transport.stop()
             self.serial_transport = None
         await self.apply_serial_transport(ask=False)  # (never nags: asks once per plug-in)
+        if self.serial_transport is not None:
+            await self._serial_announce_if_alone(force=True)
+
+    async def _serial_announce_if_alone(self, *, force: bool = False) -> None:
+        """Say who we are on the radio (when the port opens, then every 30 s
+        while no contact is connected over it), so contacts in range find us
+        without pressing Announce."""
+        if not self.serial_transport or not getattr(self.serial_transport, "alive", False):
+            return
+        if any(
+            link.transport == "serial" and link.handshake_complete
+            for link in self._links.values()
+        ):
+            return
+        now = time.monotonic()
+        if not force and now - self.__dict__.get("_serial_announced_at", 0.0) < 30.0:
+            return
+        self.__dict__["_serial_announced_at"] = now
+        with contextlib.suppress(Exception):
+            await self._send_announce("serial")
 
     async def ensure_serial_transport(self) -> dict[str, str]:
         """Open serial transport if enabled but not yet running."""
@@ -324,9 +344,6 @@ class MessagingBackend(
             needs_restart = True
 
         if needs_restart:
-            self.identities["serial"] = self.identity_store.load_or_create(
-                self.config.name, "serial"
-            )
             self.serial_transport = SerialTransport(port=port, baudrate=baud, ask=ask)
             self._wire_transport(self.serial_transport)
             try:
@@ -1043,11 +1060,19 @@ class MessagingBackend(
                 if self.serial_transport
                 else self.config.serial_port
             )
+            transport = self.serial_transport
             status["serial"] = {
-                "active": self.serial_transport is not None,
+                "active": transport is not None and getattr(transport, "alive", True),
                 "port": serial_port,
                 "baud": self.config.serial_baud,
                 "error": self._serial_error,
+                # Radio link counters (Settings → Serial shows them live).
+                "link": transport.link_stats() if transport is not None else {},
+                "peers": [
+                    link.peer_name or link.hash_id[:8]
+                    for link in self._links.values()
+                    if link.transport == "serial" and link.handshake_complete
+                ],
             }
         status["tor"] = self.tor_status()
         return status
