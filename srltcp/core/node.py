@@ -158,8 +158,12 @@ class SRLTCPNode:
         self.config.enable_serial = settings.enable_serial
         self.config.serial_port = settings.serial_port
         self.config.serial_baud = settings.serial_baud
-        direct_changed = self.config.direct_internet != settings.direct_internet
+        direct_changed = (
+            self.config.direct_internet != settings.direct_internet
+            or self.config.router_port_mapping != settings.router_port_mapping
+        )
         self.config.direct_internet = settings.direct_internet
+        self.config.router_port_mapping = settings.router_port_mapping
         tor_changed = (
             self.config.tor_enabled != settings.tor_enabled
             or self.config.tor_path != settings.tor_path
@@ -178,6 +182,7 @@ class SRLTCPNode:
             await self.backend.set_auto_announce(settings.auto_announce)
         await self.backend.apply_serial_transport()
         if direct_changed:
+            await self.backend.port_mapping_changed()
             await self.backend.addresses_changed()
         if tor_changed:
             await self.backend.tor_settings_changed()

@@ -38,13 +38,16 @@ async def test_announce_tcp_broadcasts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_announce_serial_is_broadcast_once_per_burst() -> None:
-    """Announces on the radio are unacknowledged broadcasts (maybe nobody is
-    listening), never reliable sends that would be resent for 90 s."""
+async def test_announce_serial_sends_private_beacons_only() -> None:
+    """Announce on the radio sends private beacons (unacknowledged broadcasts),
+    never our identity."""
     backend = _AnnounceBackend()
+    backend.send_radio_beacon = AsyncMock(return_value=True)  # type: ignore[attr-defined]
     announced = await backend.announce("serial")
     assert announced == ["serial"]
-    assert backend.serial_transport.broadcast.await_count == 3
+    assert backend.send_radio_beacon.await_count == 3  # type: ignore[attr-defined]
+    backend.send_radio_beacon.assert_awaited_with(force=True)  # type: ignore[attr-defined]
+    assert backend.serial_transport.broadcast.await_count == 0
     assert backend.serial_transport.send.await_count == 0
 
 

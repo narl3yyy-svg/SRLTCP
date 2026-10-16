@@ -26,6 +26,7 @@ from srltcp.core.messaging.pairing import PairingMixin
 from srltcp.core.messaging.paths import PathsMixin
 from srltcp.core.messaging.ping import PingMixin
 from srltcp.core.messaging.punch import PunchMixin
+from srltcp.core.messaging.radio import RadioMixin
 from srltcp.core.messaging.share_peer import SharePeerMixin
 from srltcp.core.messaging.store import MessageStore
 from srltcp.core.messaging.sync import SyncMixin
@@ -77,6 +78,7 @@ class NodeConfig:
     discovery_port: int = DISCOVERY_PORT
     strict_ports: bool = True
     direct_internet: bool = True  # hole punching; shares public IP with contacts
+    router_port_mapping: bool = True  # UPnP / NAT-PMP on the home router (portmap.py)
     stun_servers: str = ""  # for direct UDP ("host:port, ..."; empty = defaults)
     tor_enabled: bool = False  # reach contacts over Tor (onion service)
     tor_path: str = ""  # tor executable on a PC (empty: find it)
@@ -103,6 +105,7 @@ class MessagingBackend(
     PairingMixin,
     GroupMixin,
     PunchMixin,
+    RadioMixin,
     TorMixin,
     DisappearMixin,
     SyncMixin,
@@ -147,6 +150,7 @@ class MessagingBackend(
         self._init_share_peer()
         self._init_paths()
         self._init_punch()
+        self._init_radio()
         self._init_tor()
         self._init_pairing()
         self._init_groups()
@@ -249,6 +253,7 @@ class MessagingBackend(
         self._reconnect_tasks.clear()
         await self.stop_transfers()
         self._pending_handshakes.clear()
+        await self.port_mapper.close()  # (the router forwards nothing for us once we're gone)
         self.stop_udp()
         if self.tcp_transport:
             log.info(
@@ -282,32 +287,14 @@ class MessagingBackend(
             return
         transport = self.serial_transport
         if transport is not None and getattr(transport, "alive", True):
-            await self._serial_announce_if_alone()
+            await self.radio_tick()
             return
         if transport is not None:
             await transport.stop()
             self.serial_transport = None
         await self.apply_serial_transport(ask=False)  # (never nags: asks once per plug-in)
         if self.serial_transport is not None:
-            await self._serial_announce_if_alone(force=True)
-
-    async def _serial_announce_if_alone(self, *, force: bool = False) -> None:
-        """Say who we are on the radio (when the port opens, then every 30 s
-        while no contact is connected over it), so contacts in range find us
-        without pressing Announce."""
-        if not self.serial_transport or not getattr(self.serial_transport, "alive", False):
-            return
-        if any(
-            link.transport == "serial" and link.handshake_complete
-            for link in self._links.values()
-        ):
-            return
-        now = time.monotonic()
-        if not force and now - self.__dict__.get("_serial_announced_at", 0.0) < 30.0:
-            return
-        self.__dict__["_serial_announced_at"] = now
-        with contextlib.suppress(Exception):
-            await self._send_announce("serial")
+            await self.radio_tick(now_open=True)
 
     async def ensure_serial_transport(self) -> dict[str, str]:
         """Open serial transport if enabled but not yet running."""
@@ -385,6 +372,8 @@ class MessagingBackend(
                         return
                     if self.has_active_transfer_for(hash_id):
                         return
+                    if self.radio_contact_near(hash_id):
+                        return  # the radio reconnects it (radio.py)
                     trusted = self.trusted.get(hash_id)
                     transport = trusted.transport if trusted else "tcp"
                     log.info(
@@ -501,10 +490,13 @@ class MessagingBackend(
         try:
             if msg_type in SESSION_MESSAGE_TYPES:
                 await self._dispatch_session_message(peer, msg_type, flags, body)
-            elif msg_type == MessageType.ANNOUNCE:
+            elif msg_type == MessageType.RADIO_BEACON:
                 if peer.transport == "serial":
-                    log.info("Serial ANNOUNCE received on %s", peer.address)
-                await self._handle_discovered(peer.address, peer.transport, body)
+                    await self._handle_radio_beacon(body)
+            elif msg_type == MessageType.ANNOUNCE:
+                # Nobody is discovered over the radio (only contacts' beacons count).
+                if peer.transport != "serial":
+                    await self._handle_discovered(peer.address, peer.transport, body)
             elif msg_type == MessageType.HANDSHAKE:
                 await self._handle_handshake(peer.peer_id, body)
             elif msg_type == MessageType.HANDSHAKE_ACK:
@@ -891,6 +883,8 @@ class MessagingBackend(
         for hash_id, link in list(self._links.items()):
             if not link.handshake_complete or self.has_active_transfer_for(hash_id):
                 continue
+            if link.transport == "serial" and self.radio_alive():
+                continue  # a slow radio busy with a long message: pongs wait their turn
             if now - link.last_seen > max_silence:
                 dead.append(hash_id)
         for hash_id in dead:

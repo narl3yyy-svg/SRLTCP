@@ -8,7 +8,6 @@ import time
 from typing import TYPE_CHECKING
 
 from srltcp.core.messaging.constants import DISCOVERY_PORT
-from srltcp.core.protocol.messages import MessageType, build_header
 from srltcp.core.protocol.signed import sign_payload
 from srltcp.utils.logging import get_logger
 from srltcp.utils.network import in_vpn_subnet, on_our_network, primary_ipv4, sweep_targets
@@ -92,8 +91,7 @@ class AnnounceMixin:
             "name": identity.name,
             "public_key": identity.public_bytes().hex(),
             "transport": transport,
-            # (Not over the radio: anyone in range would learn our LAN address.)
-            "tcp_host": self._lan_ip() if transport == "tcp" else "",
+            "tcp_host": self._lan_ip(),
             "tcp_port": self.config.tcp_port,
             "discovery_port": discovery_port,
             "ts": int(time.time()),
@@ -190,11 +188,11 @@ class AnnounceMixin:
         if transport_name not in ("tcp", "serial"):
             raise AnnounceError(transport_name, f"Unknown transport: {transport_name}")
 
-        payload = self.build_announce_payload(transport_name)
         if transport_name == "tcp":
             if not self.tcp_transport:
                 raise AnnounceError(transport_name, "TCP transport is not enabled")
             else:
+                payload = self.build_announce_payload(transport_name)
                 if not await self.tcp_transport.broadcast_discovery(payload):
                     raise AnnounceError(
                         transport_name,
@@ -217,8 +215,8 @@ class AnnounceMixin:
                     transport_name,
                     "Serial is disabled — enable it in Settings → Serial",
                 )
-            packet = build_header(MessageType.ANNOUNCE, body=payload)
-            await self.serial_transport.broadcast(packet)  # (once: maybe nobody listens)
+            # Never our identity on the air: a private beacon only contacts can read.
+            await self.send_radio_beacon(force=True)
         log.info("Announced on %s", transport_name)
 
     async def announce(
@@ -247,47 +245,6 @@ class AnnounceMixin:
             announced.append(t)
         return announced
 
-    async def _on_serial_announce(
-        self: MessagingBackend, hash_id: str, is_reply: bool, trusted_fresh: bool
-    ) -> None:
-        """Someone announced on the radio: answer (so one side hearing the
-        other is enough) and, for a contact we have no working session with
-        (or only the Tor doorbell, which carries nothing), connect over it.
-        Only the lower identity hash dials, so the two don't cross."""
-        now = time.monotonic()
-        if not is_reply and now - self.__dict__.get("_serial_replied_at", 0.0) > 5.0:
-            self.__dict__["_serial_replied_at"] = now
-            payload = self.build_announce_payload("serial", reply=True)
-            with contextlib.suppress(Exception):
-                if self.serial_transport:
-                    await self.serial_transport.broadcast(
-                        build_header(MessageType.ANNOUNCE, body=payload)
-                    )
-        if not trusted_fresh or not self.serial_transport:
-            return
-        link = self.get_link(hash_id)
-        on_tor = bool(link and self._link_on_tor(link))
-        if link and link.handshake_complete and not on_tor:
-            return  # already connected (Wi-Fi, internet or this radio)
-        if self._me_hash() > hash_id:
-            return  # they dial
-        dialing: set[str] = self.__dict__.setdefault("_serial_dialing", set())
-        if hash_id in dialing:
-            return
-
-        async def dial() -> None:
-            dialing.add(hash_id)
-            try:
-                log.info("Contact %s in radio range — connecting over serial", hash_id[:8])
-                await self.connect_to_peer(hash_id, transport="serial", force=on_tor)
-                await self.wait_for_handshake(hash_id, timeout=90.0)
-            except (OSError, ConnectionError, RuntimeError, KeyError, TimeoutError) as exc:
-                log.info("Serial connect to %s failed: %s", hash_id[:8], exc)
-            finally:
-                dialing.discard(hash_id)
-
-        asyncio.create_task(dial())
-
     async def start_announce_loop(self: MessagingBackend) -> None:
         await self.stop_announce_loop()
         from srltcp.core.messaging.constants import ANNOUNCE_INTERVAL
@@ -304,12 +261,10 @@ class AnnounceMixin:
                     last_ips = ips
                     if moved:
                         log.info("Network address changed — announcing now")
-                    for t in ("tcp", "serial"):
-                        if (t == "tcp" and self.tcp_transport) or (
-                            t == "serial" and self.serial_transport
-                        ):
-                            sweep = t == "tcp" and (moved or n % SWEEP_EVERY_N_LOOPS == 0)
-                            await self._send_announce(t, sweep=sweep)
+                    # (The radio gets private beacons instead: radio.py.)
+                    if self.tcp_transport:
+                        sweep = moved or n % SWEEP_EVERY_N_LOOPS == 0
+                        await self._send_announce("tcp", sweep=sweep)
                 except Exception as exc:  # noqa: BLE001 - keep announcing after transient errors
                     log.debug("Auto-announce failed: %s", exc)
                 n += 1
@@ -335,23 +290,18 @@ class AnnounceMixin:
     async def _handle_discovered(
         self: MessagingBackend, address: str, transport: str, payload: bytes
     ) -> None:
-        if transport == "tcp":
-            src = address.rsplit(":", 1)[0] if ":" in address else address
-            if not on_our_network(src):
-                log.debug("Ignoring an announce from outside our networks (%s)", src)
-                return  # discovery stays on our own Wi-Fi/LAN and VPN
+        if transport != "tcp":
+            return  # nobody is discovered over the radio
+        src = address.rsplit(":", 1)[0] if ":" in address else address
+        if not on_our_network(src):
+            log.debug("Ignoring an announce from outside our networks (%s)", src)
+            return  # discovery stays on our own Wi-Fi/LAN and VPN
         own_hashes = {i.hash_id for i in self.identities.values()}
-        peer, is_new = self.discovery.upsert_from_announce(address, transport, payload)
+        peer, _is_new = self.discovery.upsert_from_announce(address, transport, payload)
         if not peer or peer.hash_id in own_hashes:
             if peer and peer.hash_id in own_hashes:
                 self.discovery.remove(peer.hash_id)
             return
-        if is_new and peer.transport == "serial":
-            log.info(
-                "Discovered serial peer %s (%s)",
-                peer.name,
-                peer.hash_id[:8],
-            )
         # Keep trusted contacts reachable when their IP changes (DHCP, VPN, roaming).
         trusted = self.trusted.get(peer.hash_id)
         ann_ts = float(peer.metadata.get("ts") or 0)
@@ -391,9 +341,6 @@ class AnnounceMixin:
                 self._verify_link_soon(peer.hash_id)
         if trusted and fresh and peer.transport == "tcp" and peer.tcp_host:
             self.request_direct_upgrade(peer.hash_id)  # same Wi-Fi again: leave Tor
-        if peer.transport == "serial":
-            await self._on_serial_announce(peer.hash_id, bool(peer.metadata.get("reply")),
-                                           bool(trusted and fresh))
         # Answer so the sender discovers us too (one press on one phone is enough).
         src_ip = address.rsplit(":", 1)[0] if ":" in address else ""
         if (

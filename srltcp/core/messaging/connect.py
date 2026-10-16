@@ -185,6 +185,8 @@ class ConnectMixin:
     def _resolve_transport(
         self: MessagingBackend, hash_id: str, requested: str
     ) -> str:
+        if requested == "serial" and self.serial_transport:
+            return "serial"  # (contacts aren't discovered over the radio: beacons only)
         discovered = self.discovery.get(hash_id, requested) or self.discovery.get(
             hash_id
         )
@@ -248,7 +250,8 @@ class ConnectMixin:
                 existing = None
             else:
                 pending = self._pending_handshakes.get(hash_id)
-                if pending is not None and time.time() - pending.timestamp < 10:
+                in_flight = SERIAL_HANDSHAKE_TTL if transport == "serial" else 10.0
+                if pending is not None and time.time() - pending.timestamp < in_flight:
                     # A handshake on this connection is already in flight. A
                     # second one would replace our key half while the peer
                     # answers the first: both sides end up with different
@@ -523,14 +526,15 @@ class ConnectMixin:
         return remote_hash, bytes.fromhex(pub_hex), ed_pub
 
     def _direct_alive(self: MessagingBackend, hash_id: str) -> bool:
-        """A direct session with this contact that carried something lately."""
+        """A direct session with this contact (LAN, internet or the radio)
+        that carried something lately."""
         link = self.get_link(hash_id)
-        return bool(
-            link
-            and link.handshake_complete
-            and link.transport == "tcp"
-            and not self._link_on_tor(link)
-            and self._is_link_reachable(link)
+        if not link or not link.handshake_complete or not self._is_link_reachable(link):
+            return False
+        if link.transport == "serial":
+            return self.radio_alive()
+        return (
+            not self._link_on_tor(link)
             and time.monotonic() - link.last_seen < DIRECT_ALIVE_WINDOW
         )
 

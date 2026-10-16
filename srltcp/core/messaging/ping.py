@@ -74,6 +74,7 @@ class PingMixin:
                     log.debug("Serial check failed: %s", exc)
                 try:
                     await self.maintain_paths()  # Tor-only sessions → direct
+                    self.kick_port_mapping()  # (renewal, new Wi-Fi; cheap when current)
                 except Exception as exc:  # noqa: BLE001 - keep the loop alive
                     log.debug("Path check failed: %s", exc)
                 if tick:

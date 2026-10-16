@@ -102,6 +102,7 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         discovery_port=discovery_port,
         strict_ports=settings.strict_ports,
         direct_internet=settings.direct_internet,
+        router_port_mapping=settings.router_port_mapping,
         stun_servers=settings.stun_servers,
         tor_enabled=settings.tor_enabled,
         tor_path=settings.tor_path,

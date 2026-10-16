@@ -37,6 +37,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from srltcp.core.protocol.messages import MessageType, decode_payload, encode_payload
+from srltcp.transports.portmap import PortMapper
 from srltcp.transports.udp import (
     STUN_SERVERS,
     UdpConnection,
@@ -169,6 +170,7 @@ class PunchMixin:
         # Recent punch rounds per contact, for the connection report:
         # (when, IPv4 tried, IPv6 tried, outcome). No addresses.
         self._punch_log: dict[str, list[tuple[float, bool, bool, str]]] = {}
+        self.port_mapper = PortMapper()
 
     def _prime_hops(self: MessagingBackend, hash_id: str) -> tuple[int, ...]:
         return tuple(range(2, self._prime_max.get(hash_id, 4) + 1))
@@ -192,10 +194,41 @@ class PunchMixin:
         if not endpoint.families:
             return
         self.udp = endpoint
+        self.kick_port_mapping()
         if self.direct_internet_enabled():
             task = asyncio.create_task(self._refresh_udp())
             self.__dict__.setdefault("_udp_tasks", set()).add(task)
             task.add_done_callback(self.__dict__["_udp_tasks"].discard)
+
+    def port_mapping_enabled(self: MessagingBackend) -> bool:
+        return self.direct_internet_enabled() and bool(
+            getattr(self.config, "router_port_mapping", True)
+        )
+
+    async def _ensure_port_mapping(self: MessagingBackend) -> None:
+        """Keep the home router's forwarding of our UDP port current (made
+        on a new Wi-Fi, renewed, moved after a port change, removed when
+        turned off); contacts learn a new address at once."""
+        import socket
+
+        udp = self.udp
+        if udp is None or not self.port_mapping_enabled():
+            await self.port_mapper.close()
+            return
+        before = self.port_mapper.external
+        await self.port_mapper.ensure(udp.ports.get(socket.AF_INET, 0))
+        if self.port_mapper.external != before:
+            await self.addresses_changed()
+
+    def kick_port_mapping(self: MessagingBackend) -> None:
+        """:meth:`_ensure_port_mapping` in the background (finding the router
+        can take a few seconds)."""
+        task = self.__dict__.get("_portmap_task")
+        if task is None or task.done():
+            self.__dict__["_portmap_task"] = asyncio.create_task(self._ensure_port_mapping())
+
+    async def port_mapping_changed(self: MessagingBackend) -> None:
+        await self._ensure_port_mapping()
 
     def stop_udp(self: MessagingBackend) -> None:
         if self.udp is not None:
@@ -228,8 +261,16 @@ class PunchMixin:
         from srltcp.utils.network import global_ipv6_addresses
 
         out: list[tuple[str, int]] = []
+        forwarded = self.port_mapper.external
+        mapping = self.port_mapper.mapping
+        if (
+            forwarded and mapping and self.port_mapping_enabled()
+            and mapping.internal_port == udp.ports.get(socket.AF_INET)
+            and _public_address(*forwarded)
+        ):
+            out.append(forwarded)  # the home router forwards it: reachable from any port
         mapped4 = udp.mapped.get(socket.AF_INET)
-        if mapped4 and _public_address(*mapped4):
+        if mapped4 and _public_address(*mapped4) and mapped4 not in out:
             out.append(mapped4)
         # IPv6 has no NAT: our own global addresses, never one built from the
         # hardware (MAC) address — global_ipv6_addresses() leaves those out
@@ -342,8 +383,9 @@ class PunchMixin:
         now = time.monotonic()
         if now < self._punch_next.get(hash_id, 0.0) or hash_id in self._punching:
             return
-        self._punch_next[hash_id] = now + PUNCH_RETRY_EVERY
         await self._refresh_udp(if_older=STUN_FRESH)
+        await self._ensure_port_mapping()
+        self._punch_next[hash_id] = now + PUNCH_RETRY_EVERY
         mine = self.public_candidates()
         mine_udp = self.udp_candidates()
         tcp_ok = bool(mine) and bool(_same_family(self._peer_public.get(hash_id, []), mine))
@@ -446,6 +488,7 @@ class PunchMixin:
         if not theirs or their_key is None or their_id is None or self.udp is None:
             return None, [], {}
         await self._refresh_udp(if_older=STUN_FRESH)
+        await self._ensure_port_mapping()
         mine = self.udp_candidates()
         targets = _same_family(theirs, mine)
         if not mine or not targets:
@@ -703,6 +746,17 @@ class PunchMixin:
                        "servers that find your public address).")
         return out
 
+    def _port_mapping_state(self: MessagingBackend) -> str:
+        if not self.port_mapping_enabled():
+            return "off"
+        if self.port_mapper.external:
+            return f"on ({self.port_mapper.method})"
+        if self.port_mapper.mapping:
+            return f"{self.port_mapper.method}, but the router has no public address (double NAT)"
+        from srltcp.transports.portmap import home_lan_ipv4
+
+        return "router doesn't offer UPnP / NAT-PMP" if home_lan_ipv4() else "not on Wi-Fi"
+
     def connection_report(self: MessagingBackend, hash_id: str, path: str) -> str:
         """Plain-text summary for troubleshooting a direct connection: what
         kind of NAT this network has, which address families each side
@@ -731,6 +785,7 @@ class PunchMixin:
             f"SRLTCP {__version__} connection report",
             f"Path now: {path or 'not connected'}",
             f"Direct internet connections: {'on' if self.direct_internet_enabled() else 'off'}",
+            f"Home router port mapping: {self._port_mapping_state()}",
             f"Tor (doorbell): {self.tor_status().get('state', 'off')}",
             f"This phone, IPv4 public address: {nat(socket.AF_INET)}",
             f"This phone, IPv6: {nat(socket.AF_INET6)}",

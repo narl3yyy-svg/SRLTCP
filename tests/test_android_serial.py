@@ -252,8 +252,8 @@ async def test_contacts_find_each_other_and_chat_over_the_radio(
     tmp_path: Any, monkeypatch: Any
 ) -> None:
     """Two phones, each with a USB radio, no network between them: they hear
-    each other's announce, connect (same identity as the contact they paired
-    over Wi-Fi) and chat; ~9 KiB handshakes cross a lossy air link."""
+    each other's private beacon, connect (same identity as the contact they
+    paired over Wi-Fi) and chat; ~9 KiB handshakes cross a lossy air link."""
     from srltcp.core.trusted import TrustedPeer
     from tests.test_e2e_nodes import make_node, wait_for
 
@@ -272,7 +272,7 @@ async def test_contacts_find_each_other_and_chat_over_the_radio(
                                       public_key=ident.public_bytes().hex()))
         ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
         assert a.serial_transport and a.serial_transport.alive
-        await a._serial_announce_if_alone(force=True)
+        assert await a.send_radio_beacon()
         assert await wait_for(lambda: (link := a.get_link(bh)) is not None
                               and link.handshake_complete and link.transport == "serial"
                               and (other := b.get_link(ah)) is not None

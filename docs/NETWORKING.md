@@ -91,6 +91,22 @@ standard technique video-call apps use (ICE/STUN, RFC 8445/5389).
    impostor can't take it over) and replaces the Tor session. What waited goes
    out at once.
 
+**Home Wi-Fi and mobile data.** Many carriers give a new public port for
+every destination, so the port a mobile phone learnt from STUN isn't the one
+its packets come from, and most home routers only let in replies from the
+exact address and port the phone inside sent to: neither side's packets get
+through, while two carriers connect fine. So a phone on a Wi-Fi asks its own
+router to forward the direct-connection port (**UPnP IGD** or **NAT-PMP**,
+the way video-call and game apps do) and offers that address first. The
+mobile phone's packets then get in from whatever port its carrier picked,
+the first authenticated one fixes the path, and the home phone answers it.
+Only routers on your own Wi-Fi are asked; the mapping points only at the
+phone's UDP socket (which drops anything that isn't an authenticated packet
+from a contact it's connecting to), expires by itself and is removed when the
+app stops. Routers with UPnP and NAT-PMP turned off still work for
+everything else. *Settings → Network → Open a port on my home router*
+(on by default).
+
 A round that fails is retried after 4 s from a fresh UDP port (routers can
 hold stale state for the old pair of ports for ~30 s), then after 15, 30, 60
 and 120 s, and at once whenever either phone's network changes.
@@ -133,6 +149,10 @@ works:
   the phones on Wi-Fi (most home and public Wi-Fi routers are "easy"), or IPv6
   on both (most US and EU carriers offer it on mobile data; on Android check
   *Settings → Network → SIM → Access Point Names → APN protocol: IPv4/IPv6*).
+- **Mobile data with a hard NAT, and a home router with UPnP and NAT-PMP
+  turned off.** The report on the home phone says "Home router port
+  mapping: router doesn't offer UPnP / NAT-PMP". **Fix:** turn UPnP on in
+  the router's settings.
 - **A Wi-Fi that keeps devices apart** (plane, hotel, guest Wi-Fi) for two
   phones on that same Wi-Fi, or both behind one public address (Starlink).
 - **Networks that block UDP** (some corporate and guest networks).
@@ -158,6 +178,7 @@ routers and a VPN phone with a home-Wi-Fi phone.
 | Setting | What it does | Default |
 |---|---|---|
 | **Direct internet connections** | Phone-to-phone UDP across networks, described above. Shares your public IP address **only with your contacts** (and a STUN server), inside the encrypted session. Off: only the same Wi-Fi or VPN; contacts never see your IP. | On |
+| **Open a port on my home router** | On Wi-Fi, asks your router (UPnP / NAT-PMP) to forward the direct-connection UDP port to this phone, so a contact on mobile data gets through. Only your own router is asked; removed when the app stops. | On |
 | **STUN servers** | Who tells this phone its public IPv4 address. `host:port`, separated by commas; empty for the defaults. | Google, Cloudflare |
 | **Find contacts on other networks (Tor)** | The doorbell, described above: only to find each other and set up the direct connection. | On |
 
@@ -186,7 +207,7 @@ routers and a VPN phone with a home-Wi-Fi phone.
 |---|---|---|---|
 | 7825 | TCP | Each device (peer connections) | Only inside your LAN/VPN firewall, never on the router |
 | 7826 | UDP | Each device (LAN/VPN discovery) | Same as above |
-| 7828 | UDP | Each device (direct connections between networks) | No. It only answers authenticated packets from contacts it's connecting to |
+| 7828 | UDP | Each device (direct connections between networks) | No (on Wi-Fi the app asks the router itself, UPnP / NAT-PMP). It only answers authenticated packets from contacts it's connecting to |
 | — | Tor | Each device (onion service) | No. Tor only dials out, and the onion listener is bound to 127.0.0.1 |
 | 9876 | TCP | Each device (local web UI, 127.0.0.1 only) | No |
 

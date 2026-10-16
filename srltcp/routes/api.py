@@ -842,6 +842,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         updated.tcp_port = max(1024, min(updated.tcp_port, 65535))
         updated.discovery_port = max(1024, min(updated.discovery_port, 65535))
         updated.direct_internet = bool(updated.direct_internet)
+        updated.router_port_mapping = bool(updated.router_port_mapping)
         updated.stun_servers = str(updated.stun_servers or "").strip()[:600]
         try:
             from srltcp.transports.udp import parse_stun_servers

@@ -33,6 +33,8 @@ class PeerLink:
     pq_public: bytes = b""
     # Their addresses (RENDEZVOUS) arrived on this session.
     have_their_addresses: bool = False
+    # monotonic time the session keys were (last) set
+    established: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -110,4 +112,4 @@ class PeerLinkMixin:
             link.crypto.set_keys(keys)
             link.handshake_complete = True
             link.connected = True
-            link.last_seen = time.monotonic()
+            link.last_seen = link.established = time.monotonic()

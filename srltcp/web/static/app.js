@@ -2598,6 +2598,7 @@
     setInputValue("set-shared", settings.shared_folder || "");
     setCheckbox("set-auto-announce", !!settings.auto_announce);
     setCheckbox("set-direct-internet", settings.direct_internet !== false);
+    setCheckbox("set-router-port-mapping", settings.router_port_mapping !== false);
     setInputValue("set-stun-servers", settings.stun_servers || "");
     setCheckbox("set-tor-enabled", settings.tor_enabled !== false);
     setCheckbox("set-shrink-photos", !!settings.shrink_photos);
@@ -4574,6 +4575,7 @@
       lan_ip: $(`#${prefix}-lan-ip`)?.value || "",
       auto_announce: $(`#${prefix}-auto-announce`)?.checked || false,
       direct_internet: $("#set-direct-internet")?.checked ?? true,
+      router_port_mapping: $("#set-router-port-mapping")?.checked ?? true,
       stun_servers: ($("#set-stun-servers")?.value || "").trim(),
       tor_enabled: $("#set-tor-enabled")?.checked ?? true,
       shrink_photos: $("#set-shrink-photos")?.checked || false,

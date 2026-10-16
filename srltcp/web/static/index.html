@@ -229,6 +229,11 @@
 <span>Direct internet connections</span>
 </label>
 <small class="field-hint">Phone to phone across networks (two mobile carriers, mobile data and a home Wi-Fi): the devices connect straight to each other over UDP, the way video calls do. No port forwarding. Your public IP address is shared only with your contacts, inside the encrypted connection, and a STUN server (below) learns it too; your network sees which IP you talk to. Off = only the same Wi-Fi or VPN: contacts never see your IP.</small>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-router-port-mapping" />
+<span>Open a port on my home router (UPnP / NAT-PMP)</span>
+</label>
+<small class="field-hint">On Wi-Fi, asks your router to pass direct connections to this device's UDP port, as video-call and game apps do. Needed by many home routers for a contact on mobile data to connect directly. Only your own router is asked; the port only answers your contacts' encrypted packets, and the mapping is removed when the app stops.</small>
 <label class="field">
 <span>STUN servers</span>
 <input type="text" id="set-stun-servers" placeholder="Default: Google and Cloudflare" autocomplete="off" spellcheck="false" />

@@ -19,6 +19,7 @@ class MessageType(IntEnum):
     PONG = 0x04
     ANNOUNCE = 0x10
     ANNOUNCE_ACK = 0x11
+    RADIO_BEACON = 0x12  # private "a contact is in range" on a serial radio (beacon.py)
     TEXT = 0x20
     FILE_OFFER = 0x30
     FILE_ACCEPT = 0x31

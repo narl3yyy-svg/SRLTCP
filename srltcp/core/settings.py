@@ -105,6 +105,9 @@ class AppSettings:
     # Direct connections across networks (hole punching). Shares your public
     # address with your contacts (only them, inside the encrypted session).
     direct_internet: bool = True
+    # Ask the home router (UPnP / NAT-PMP) to forward our UDP port while on
+    # Wi-Fi: lets a phone on mobile data connect to this one directly.
+    router_port_mapping: bool = True
     # STUN servers for direct UDP connections ("host:port, ..."; empty =
     # Google's and Cloudflare's public ones). They learn your IP address.
     stun_servers: str = ""
@@ -118,7 +121,7 @@ class AppSettings:
     # this many seconds (0 = keep). One of disappear.CHOICES.
     disappear_seconds: int = 0
     handshake_protocol: str = "identity"
-    version: str = "0.13.2"
+    version: str = "0.13.3"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

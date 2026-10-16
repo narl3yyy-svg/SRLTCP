@@ -87,6 +87,8 @@ Each contact has a **safety number**: 60 digits computed from both phones' ident
 - Peers on the same LAN or serial bus may observe traffic patterns.
 - A contact is only as trustworthy as the way you added them. Pairing **in person** (scanning their QR code, or an NFC tap) verifies their keys at once; for anyone added another way (pasted link, *Discovered*), compare the **safety number** (see *Verified contacts* below) before relying on the contact.
 - LAN announce signatures authenticate discovery metadata but do **not** encrypt it — anyone on the LAN can still observe that you exist and read names/endpoints.
+- On a serial radio nothing identifying is sent in the clear: devices send beacons whose tags only the named contact can compute (HMAC with a static X25519 key derived from both identity keys), padded with random filler. Someone in radio range can tell that *a* device is transmitting, not who, and can't start a session with you. The beacon key is classical (not post-quantum); it only hides presence, while sessions use the quantum-safe handshake.
+- On Wi-Fi the app asks your own router (UPnP / NAT-PMP, only routers on your LAN) to forward its direct-connection UDP port. That port drops every packet that isn't authenticated with keys from a contact it's connecting to. Turn it off under *Settings → Network → Open a port on my home router*.
 - Blocked peers are rejected at the application layer but may still appear in discovery until the entry expires.
 
 ## Hardening Guidelines for Operators
