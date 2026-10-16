@@ -18,18 +18,15 @@ cd SRLTCP
 
 Open the URL printed in the terminal (`https://127.0.0.1:9876/?token=…`; `srltcp url` prints it again).
 
-### Test the internet relay locally
+### Test connections between networks
 
 ```bash
-# Terminal 1 — relay (prints a srltcp-relay:// code)
-./run.sh relay --public-host 127.0.0.1
-
-# Terminal 2 & 3 — clients (different names / ports, see ./run.sh web --help)
-./run.sh web --name alice
-./run.sh web --name bob --port 9877 --tcp-port 7835 --discovery-port 7836
+sudo bash scripts/simulate_udp.sh   # two carrier NATs, private Tor network as the doorbell
+sudo bash scripts/simulate_nat.sh   # two home routers; VPN phone + home Wi-Fi phone
+python scripts/bench_udp_path.py    # direct UDP speed over emulated mobile paths (no root)
 ```
 
-Pair the clients, paste the relay code in one client (*Settings → Network → Internet relay*). Automated: `pytest tests/test_relay.py`, `sudo bash scripts/simulate_internet.sh` (real WireGuard + relay in network namespaces), `python scripts/pentest/pentest_relay.py` and `scripts/pentest/pentest_local.py`.
+Two local clients: `./run.sh web --name alice` and `./run.sh web --name bob --port 9877 --tcp-port 7835 --discovery-port 7836`. Penetration tests: `python scripts/pentest/pentest_local.py`.
 
 ## Development Setup
 
@@ -80,8 +77,8 @@ pre-commit run --all-files
 
 | Path | Purpose |
 |------|---------|
-| `srltcp/core/` | Messaging, handshake, transfers, discovery, relay protocol and server |
-| `srltcp/core/messaging/relay.py` | Internet relay client + direct/relay switching |
+| `srltcp/core/` | Messaging, handshake, transfers, discovery |
+| `srltcp/core/messaging/paths.py`, `punch.py` | Address exchange, Tor → direct switching, hole punching |
 | `srltcp/core/messaging/pairing.py` | Contact cards (QR / link / NFC) |
 | `srltcp/web/static/calls.js` | WebRTC voice/video calls |
 | `srltcp/transports/` | TCP and serial transports |

@@ -46,38 +46,45 @@ class UsbSerialPermissionError(PermissionError):
 
 
 class AndroidSerial:
-    """The subset of ``serial.Serial`` the serial transport uses."""
+    """The subset of ``serial.Serial`` the serial transport uses.
 
-    def __init__(self, port: str, baudrate: int, timeout: float = 0.1) -> None:
+    Each open has its own generation number in the bridge: closing (or a late
+    read error on) an old port never touches a newer one."""
+
+    def __init__(
+        self, port: str, baudrate: int, timeout: float = 0.1, *, ask: bool = True
+    ) -> None:
         self.port = port
         self.timeout_ms = max(1, int(timeout * 1000))
         self._bridge = _bridge()
-        result = str(self._bridge.open(port, int(baudrate)))
-        if result == "permission":
+        self._closed = False
+        gen = int(self._bridge.open(port, int(baudrate), bool(ask)))
+        if gen == -1:
             raise UsbSerialPermissionError(
-                "Allow SRLTCP to use this USB device (tap OK on Android's question); "
-                "it opens by itself then"
+                "Allow SRLTCP to use this USB device (tap OK on Android's question, or "
+                "press Save to be asked again); it opens by itself then"
             )
-        if result == "missing":
-            raise FileNotFoundError(f"USB serial device not connected: {port}")
-        if result:
-            raise OSError(f"Cannot open the USB serial device: {result}")
+        if gen == -2:
+            raise FileNotFoundError(f"USB serial adapter not connected ({port})")
+        if gen <= 0:
+            raise OSError(f"Cannot open the USB serial adapter: {self._bridge.getLastError()}")
+        self._gen = gen
 
     @property
     def is_open(self) -> bool:
-        return bool(self._bridge.isOpen())
+        return not self._closed and bool(self._bridge.isOpen(self._gen))
 
     def read(self, size: int = 1) -> bytes:
         try:
-            data = self._bridge.read(int(size), self.timeout_ms)
-        except Exception as exc:  # noqa: BLE001 - Java exception: unplugged
+            data = self._bridge.read(self._gen, int(size), self.timeout_ms)
+        except Exception as exc:  # noqa: BLE001 - Java exception: unplugged or replaced
             self.close()  # is_open turns False: the transport stops and is reopened later
-            raise OSError(f"USB serial device gone: {exc}") from exc
+            raise OSError(f"USB serial adapter gone: {exc}") from exc
         return bytes(data) if data is not None else b""
 
     def write(self, data: bytes) -> int:
         try:
-            self._bridge.write(bytes(data), 2000)
+            self._bridge.write(self._gen, bytes(data), 2000)
         except Exception as exc:  # noqa: BLE001
             raise OSError(f"USB serial write failed: {exc}") from exc
         return len(data)
@@ -86,4 +93,6 @@ class AndroidSerial:
         return
 
     def close(self) -> None:
-        self._bridge.close()
+        if not self._closed:
+            self._closed = True
+            self._bridge.close(self._gen)

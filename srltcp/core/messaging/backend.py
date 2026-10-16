@@ -287,7 +287,7 @@ class MessagingBackend(
         if transport is not None:
             await transport.stop()
             self.serial_transport = None
-        await self.apply_serial_transport()
+        await self.apply_serial_transport(ask=False)  # (never nags: asks once per plug-in)
 
     async def ensure_serial_transport(self) -> dict[str, str]:
         """Open serial transport if enabled but not yet running."""
@@ -297,8 +297,9 @@ class MessagingBackend(
             return {"serial": "disabled"}
         return await self.apply_serial_transport()
 
-    async def apply_serial_transport(self) -> dict[str, str]:
-        """Start, stop, or restart serial transport when settings change."""
+    async def apply_serial_transport(self, *, ask: bool = True) -> dict[str, str]:
+        """Start, stop, or restart serial transport when settings change.
+        ``ask``: on Android, show the USB permission question again."""
         want = self.config.enable_serial
         port = self.config.serial_port or None
         baud = self.config.serial_baud
@@ -326,7 +327,7 @@ class MessagingBackend(
             self.identities["serial"] = self.identity_store.load_or_create(
                 self.config.name, "serial"
             )
-            self.serial_transport = SerialTransport(port=port, baudrate=baud)
+            self.serial_transport = SerialTransport(port=port, baudrate=baud, ask=ask)
             self._wire_transport(self.serial_transport)
             try:
                 await self.serial_transport.start()

@@ -25,9 +25,11 @@ class SerialTransport(Transport):
         baudrate: int = 115200,
         *,
         timeout: float = 0.1,
+        ask: bool = True,
     ) -> None:
         super().__init__()
         self.port = port or default_serial_port()
+        self.ask = ask  # (Android) show the USB permission question again
         self.baudrate = baudrate
         self.timeout = timeout
         self._serial: Any = None
@@ -47,10 +49,13 @@ class SerialTransport(Transport):
             return
         from srltcp.transports.android_serial import PREFIX, AndroidSerial
 
+        if not self.port:
+            raise FileNotFoundError("No serial adapter connected")
         if self.port.startswith(PREFIX):
             loop = asyncio.get_running_loop()
             self._serial = await loop.run_in_executor(
-                None, AndroidSerial, self.port, self.baudrate, self.timeout
+                None,
+                lambda: AndroidSerial(self.port, self.baudrate, self.timeout, ask=self.ask),
             )
         else:
             try:
@@ -97,9 +102,11 @@ class SerialTransport(Transport):
 
     async def _read_loop(self) -> None:
         loop = asyncio.get_running_loop()
+        errors_in_a_row = 0
         while self._running and self._serial and self._serial.is_open:
             try:
                 data = await loop.run_in_executor(None, self._serial.read, 4096)
+                errors_in_a_row = 0
                 if not data:
                     await asyncio.sleep(0.01)
                     continue
@@ -116,8 +123,9 @@ class SerialTransport(Transport):
                 await self._emit_event(
                     TransportEvent(kind="error", error=str(exc), peer=self._peer)
                 )
-                if not self._serial or not self._serial.is_open:
-                    break
+                errors_in_a_row += 1
+                if not self._serial or not self._serial.is_open or errors_in_a_row >= 5:
+                    break  # (on a PC an unplugged adapter often still reads as open)
                 await asyncio.sleep(0.5)
         if self._running:  # the device went away (unplugged)
             log.info("Serial device %s is gone", self.port)

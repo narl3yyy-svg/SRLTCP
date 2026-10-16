@@ -22,6 +22,8 @@ class FakeBridge:
         self.allowed = False
         self.plugged = True
         self.opened = False
+        self.gen = 0
+        self.asks = 0  # permission questions shown
         self.rx: list[bytes] = []
         self.tx = bytearray()
         self.lock = threading.Lock()
@@ -29,22 +31,30 @@ class FakeBridge:
     def listPorts(self) -> str:  # noqa: N802 - Java names
         if not self.plugged:
             return "[]"
-        return json.dumps([{"device": "usb:0403:6001#0", "description": "FTDI FT232R (USB 0403:6001)",
-                            "accessible": self.allowed}])
+        return json.dumps([{
+            "device": "usb:0403:6001#0", "description": "FTDI FT232R (USB 0403:6001)",
+            "accessible": self.allowed,
+        }])
 
-    def open(self, port: str, baud: int) -> str:
+    def open(self, port: str, baud: int, ask: bool) -> int:
+        self.opened = False
         if not self.plugged or port != "usb:0403:6001#0":
-            return "missing"
+            return -2
         if not self.allowed:
-            return "permission"
+            self.asks += 1 if ask else 0
+            return -1
         self.opened = True
+        self.gen += 1
+        return self.gen
+
+    def getLastError(self) -> str:  # noqa: N802
         return ""
 
-    def isOpen(self) -> bool:  # noqa: N802
-        return self.opened
+    def isOpen(self, gen: int) -> bool:  # noqa: N802
+        return self.opened and gen == self.gen
 
-    def read(self, size: int, timeout_ms: int) -> bytes:
-        if not self.plugged:
+    def read(self, gen: int, size: int, timeout_ms: int) -> bytes:
+        if not self.plugged or gen != self.gen:
             raise RuntimeError("java.io.IOException: USB get_status request failed")
         with self.lock:
             if self.rx:
@@ -52,11 +62,12 @@ class FakeBridge:
         threading.Event().wait(timeout_ms / 1000)
         return b""
 
-    def write(self, data: bytes, timeout_ms: int) -> None:
+    def write(self, gen: int, data: bytes, timeout_ms: int) -> None:
         self.tx += data
 
-    def close(self) -> None:
-        self.opened = False
+    def close(self, gen: int) -> None:
+        if gen == self.gen:
+            self.opened = False
 
 
 @pytest.fixture
@@ -111,14 +122,20 @@ async def test_frames_go_both_ways_and_unplug_stops_the_transport(bridge: FakeBr
     await transport.stop()
 
 
-async def test_watchdog_reopens_after_permission_and_replug(bridge: FakeBridge, tmp_path: Any) -> None:
+async def test_watchdog_reopens_after_permission_and_replug(
+    bridge: FakeBridge, tmp_path: Any
+) -> None:
     from srltcp.core.messaging.backend import MessagingBackend, NodeConfig
 
     backend = MessagingBackend(NodeConfig(name="n", incoming_dir=str(tmp_path / "in"),
                                           enable_serial=True, serial_port="usb:0403:6001#0"))
     try:
         await backend.serial_watchdog()  # waiting for the user to allow it
+        await backend.serial_watchdog()
         assert backend.serial_transport is None and "Allow" in (backend._serial_error or "")
+        assert bridge.asks == 0  # the background retry never shows the question again
+        await backend.apply_serial_transport()  # Save in Settings: asks
+        assert bridge.asks == 1
         bridge.allowed = True
         await backend.serial_watchdog()
         assert backend.serial_transport is not None and backend.serial_transport.alive
@@ -135,3 +152,21 @@ async def test_watchdog_reopens_after_permission_and_replug(bridge: FakeBridge, 
     finally:
         if backend.serial_transport:
             await backend.serial_transport.stop()
+
+
+def test_closing_an_old_port_leaves_the_new_one_open(bridge: FakeBridge) -> None:
+    bridge.allowed = True
+    old = android_serial.AndroidSerial("usb:0403:6001#0", 57600)
+    new = android_serial.AndroidSerial("usb:0403:6001#0", 115200)  # baud changed
+    assert not old.is_open and new.is_open
+    with pytest.raises(OSError):
+        old.read(64)  # a late read from the old reader thread
+    old.close()
+    assert new.is_open
+
+
+async def test_no_adapter_gives_a_plain_message(monkeypatch: Any) -> None:
+    transport = SerialTransport(port="", baudrate=57600)
+    transport.port = ""
+    with pytest.raises(FileNotFoundError, match="No serial adapter"):
+        await transport.start()

@@ -6,8 +6,6 @@ import android.content.Intent
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
-import com.hoho.android.usbserial.driver.CdcAcmSerialDriver
-import com.hoho.android.usbserial.driver.ProbeTable
 import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
@@ -32,6 +30,11 @@ object UsbSerialBridge {
     private var appContext: Context? = null
     private var port: UsbSerialPort? = null
     private var openId: String = ""
+    // Each open gets a new number: a closing/old reader can't touch a newer port.
+    private var generation = 0
+    // Devices (by path, i.e. per plug-in) we already asked the user about: the
+    // background retry never asks twice; Save in Settings asks again.
+    private val asked = mutableSetOf<String>()
 
     @JvmStatic
     fun init(context: Context) {
@@ -41,20 +44,11 @@ object UsbSerialBridge {
     private fun usb(): UsbManager? =
         appContext?.getSystemService(Context.USB_SERVICE) as? UsbManager
 
-    /** Known chips, plus any device with a CDC-ACM interface listed by the
-     *  default prober; boards with unknown ids that still speak CDC-ACM are
-     *  tried as CDC-ACM too. */
-    private fun drivers(manager: UsbManager): List<UsbSerialDriver> {
-        val found = UsbSerialProber.getDefaultProber().findAllDrivers(manager).toMutableList()
-        val known = found.map { it.device.deviceName }.toSet()
-        for (device in manager.deviceList.values) {
-            if (device.deviceName in known) continue
-            val table = ProbeTable().addProduct(device.vendorId, device.productId, CdcAcmSerialDriver::class.java)
-            val driver = UsbSerialProber(table).probeDevice(device) ?: continue
-            if (driver.ports.isNotEmpty()) found.add(driver)
-        }
-        return found
-    }
+    /** Known serial chips and any device with a real CDC-ACM interface (the
+     *  default prober checks the interface class). Nothing else: a keyboard,
+     *  flash drive or USB-C headset must never be claimed as a serial port. */
+    private fun drivers(manager: UsbManager): List<UsbSerialDriver> =
+        UsbSerialProber.getDefaultProber().findAllDrivers(manager)
 
     /** JSON list: [{device, description, accessible}] for the settings UI. */
     @JvmStatic
@@ -111,18 +105,20 @@ object UsbSerialBridge {
         return false
     }
 
-    /** Open the port: "" on success, else a short reason ("permission", "missing", or an error). */
+    /** Open the port: the new generation (> 0) on success, else -1 "permission",
+     *  -2 "missing", -3 any other failure (see [lastError]). [ask]: show Android's
+     *  permission question even if we asked before for this plug-in. */
     @JvmStatic
     @Synchronized
-    fun open(id: String, baud: Int): String {
-        close()
-        val manager = usb() ?: return "no USB host support"
-        val (driver, index) = find(id) ?: return "missing"
+    fun open(id: String, baud: Int, ask: Boolean): Int {
+        closeCurrent()
+        val manager = usb() ?: return fail("no USB host support")
+        val (driver, index) = find(id) ?: return -2
         if (!manager.hasPermission(driver.device)) {
-            requestPermission(id)
-            return "permission"
+            if (asked.add(driver.device.deviceName) || ask) requestPermission(id)
+            return -1
         }
-        val connection = manager.openDevice(driver.device) ?: return "could not open the device"
+        val connection = manager.openDevice(driver.device) ?: return fail("could not open the device")
         val p = driver.ports[index]
         return try {
             p.open(connection)
@@ -134,36 +130,53 @@ object UsbSerialBridge {
             }
             port = p
             openId = id
-            ""
+            generation += 1
+            generation
         } catch (e: Exception) {
             try { p.close() } catch (_: Exception) {}
             connection.close()
-            e.message ?: e.javaClass.simpleName
+            fail(e.message ?: e.javaClass.simpleName)
         }
     }
 
     @JvmStatic
-    fun isOpen(): Boolean = port?.isOpen == true
+    var lastError: String = ""
+        private set
+
+    private fun fail(reason: String): Int {
+        lastError = reason
+        return -3
+    }
+
+    private fun current(gen: Int): UsbSerialPort? = if (gen == generation) port else null
+
+    @JvmStatic
+    fun isOpen(gen: Int): Boolean = current(gen)?.isOpen == true
 
     /** Up to [max] bytes, waiting at most [timeoutMs]; empty if nothing came.
-     *  Throws when the device is gone (unplugged). */
+     *  Throws when the device is gone (unplugged) or this open was replaced. */
     @JvmStatic
-    fun read(max: Int, timeoutMs: Int): ByteArray {
-        val p = port ?: throw IllegalStateException("not open")
+    fun read(gen: Int, max: Int, timeoutMs: Int): ByteArray {
+        val p = current(gen) ?: throw IllegalStateException("not open")
         val buf = ByteArray(maxOf(max, p.readEndpoint?.maxPacketSize ?: 64))
         val n = p.read(buf, timeoutMs)
         return if (n <= 0) ByteArray(0) else buf.copyOf(n)
     }
 
     @JvmStatic
-    fun write(data: ByteArray, timeoutMs: Int) {
-        val p = port ?: throw IllegalStateException("not open")
+    fun write(gen: Int, data: ByteArray, timeoutMs: Int) {
+        val p = current(gen) ?: throw IllegalStateException("not open")
         p.write(data, timeoutMs)
     }
 
+    /** Close the port opened as [gen] (nothing if a newer one replaced it). */
     @JvmStatic
     @Synchronized
-    fun close() {
+    fun close(gen: Int) {
+        if (gen == generation) closeCurrent()
+    }
+
+    private fun closeCurrent() {
         val p = port ?: return
         port = null
         openId = ""
