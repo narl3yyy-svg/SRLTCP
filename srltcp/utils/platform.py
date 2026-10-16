@@ -43,6 +43,11 @@ def data_dir() -> Path:
 
 
 def default_serial_port() -> str:
+    if is_android():
+        from srltcp.transports.android_serial import list_ports
+
+        ports = list_ports()
+        return str(ports[0]["device"]) if ports else ""
     system = platform.system()
     if system == "Windows":
         return "COM3"

@@ -1,4 +1,5 @@
-"""USB Serial transport using pyserial + asyncio."""
+"""USB Serial transport using pyserial + asyncio (on Android: the app's USB
+host bridge, see android_serial.py)."""
 
 from __future__ import annotations
 
@@ -44,16 +45,24 @@ class SerialTransport(Transport):
     async def start(self) -> None:
         if self._running:
             return
-        try:
-            import serial
-        except ImportError as exc:
-            raise RuntimeError("pyserial is required for serial transport") from exc
+        from srltcp.transports.android_serial import PREFIX, AndroidSerial
 
-        self._serial = serial.Serial(
-            port=self.port,
-            baudrate=self.baudrate,
-            timeout=self.timeout,
-        )
+        if self.port.startswith(PREFIX):
+            loop = asyncio.get_running_loop()
+            self._serial = await loop.run_in_executor(
+                None, AndroidSerial, self.port, self.baudrate, self.timeout
+            )
+        else:
+            try:
+                import serial
+            except ImportError as exc:
+                raise RuntimeError("pyserial is required for serial transport") from exc
+
+            self._serial = serial.Serial(
+                port=self.port,
+                baudrate=self.baudrate,
+                timeout=self.timeout,
+            )
         self._running = True
         peer_id = str(uuid.uuid4())
         self._peer = TransportPeer(
@@ -81,6 +90,11 @@ class SerialTransport(Transport):
         self._peer = None
         self._frame_reader = FrameReader()
 
+    @property
+    def alive(self) -> bool:
+        """Open and reading (False once the device was unplugged)."""
+        return bool(self._running and self._serial and self._serial.is_open)
+
     async def _read_loop(self) -> None:
         loop = asyncio.get_running_loop()
         while self._running and self._serial and self._serial.is_open:
@@ -105,6 +119,9 @@ class SerialTransport(Transport):
                 if not self._serial or not self._serial.is_open:
                     break
                 await asyncio.sleep(0.5)
+        if self._running:  # the device went away (unplugged)
+            log.info("Serial device %s is gone", self.port)
+            self._running = False
 
     async def send(self, peer_id: str, payload: bytes) -> None:
         if not self._serial or not self._serial.is_open:

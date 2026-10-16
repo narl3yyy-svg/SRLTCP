@@ -16,7 +16,14 @@ STANDARD_BAUD_RATES = (
 
 def list_serial_ports() -> list[dict[str, str | bool]]:
     """Return USB/serial devices currently available on the system."""
+    from srltcp.utils.platform import is_android
     from srltcp.utils.serial_access import user_can_access_serial
+
+    if is_android():
+        # Apps can't see /dev/ttyUSB* on Android: the USB host bridge lists them.
+        from srltcp.transports.android_serial import list_ports as android_ports
+
+        return android_ports()
 
     try:
         from serial.tools import list_ports

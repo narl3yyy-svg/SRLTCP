@@ -265,10 +265,29 @@ class MessagingBackend(
             self.serial_transport = None
 
     def _record_serial_failure(self, port: str, exc: Exception) -> None:
+        from srltcp.transports.android_serial import PREFIX
         from srltcp.utils.serial_access import format_serial_permission_help
 
-        self._serial_error = format_serial_permission_help(port, exc)
-        log.warning("%s", self._serial_error)
+        error = (
+            str(exc) if port.startswith(PREFIX) or not port
+            else format_serial_permission_help(port, exc)
+        ) or "No serial device selected"
+        if error != self._serial_error:  # (the watchdog retries: say it once)
+            log.warning("%s", error)
+        self._serial_error = error
+
+    async def serial_watchdog(self) -> None:
+        """Serial on but not open (device plugged in later, USB permission just
+        granted, adapter unplugged and back): open it again."""
+        if not self.config.enable_serial:
+            return
+        transport = self.serial_transport
+        if transport is not None and getattr(transport, "alive", True):
+            return
+        if transport is not None:
+            await transport.stop()
+            self.serial_transport = None
+        await self.apply_serial_transport()
 
     async def ensure_serial_transport(self) -> dict[str, str]:
         """Open serial transport if enabled but not yet running."""

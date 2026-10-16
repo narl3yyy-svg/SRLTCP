@@ -293,7 +293,10 @@
 </label>
 <label class="field">
 <span>Serial port</span>
-<select id="set-serial-port"></select>
+<div class="field-row">
+<select id="set-serial-port" class="grow"></select>
+<button type="button" class="btn btn-secondary btn-sm" id="btn-serial-refresh">Refresh</button>
+</div>
 <small id="set-serial-hint">Arch: <code>sudo usermod -aG uucp $USER</code> then log out/in. Both peers need serial open to discover.</small>
 </label>
 <label class="field">

@@ -2482,17 +2482,25 @@
       const baudData = baudRes.data || { rates: [115200] };
       const ports = portsData.ports || [];
       const group = portsData.group || {};
+      const android = isAndroidApp();
       portEl.innerHTML = ports.length
         ? ports.map((p) => {
-            const access = p.accessible ? "" : " — no permission";
+            const access = p.accessible ? "" : android ? " — allow when asked" : " — no permission";
             return `<option value="${escapeHtml(p.device)}" ${p.device === selectedPort ? "selected" : ""}>${escapeHtml(p.description)}${access}</option>`;
           }).join("")
-        : `<option value="">No serial devices detected</option>`;
+        : `<option value="">${android ? "No USB serial adapter found — plug it in, then Refresh" : "No serial devices detected"}</option>`;
       if (selectedPort && !ports.some((p) => p.device === selectedPort)) {
         portEl.innerHTML += `<option value="${escapeHtml(selectedPort)}" selected>${escapeHtml(selectedPort)} (saved)</option>`;
       }
       const hintEl = $("#set-serial-hint");
-      if (hintEl) {
+      const serialErr = state.transportStatus?.serial?.error;
+      if (hintEl && android) {
+        hintEl.textContent = serialErr && $("#set-enable-serial")?.checked
+          ? serialErr
+          : ports.some((p) => !p.accessible)
+            ? "Pick the adapter and save: Android asks once to allow SRLTCP to use it (or accept SRLTCP when you plug it in). It opens by itself then."
+            : "USB serial adapters (FTDI, CP210x, CH340, PL2303, Arduino/ESP32 boards) work through the phone's USB port (USB-C OTG). Both sides need serial on and the same baud rate.";
+      } else if (hintEl) {
         if (group.needs_relogin && group.group) {
           hintEl.textContent = `You are in '${group.group}' but this session has not picked it up — restart via ./run.sh web or log out/in.`;
         } else if (group.group && !group.in_session && !group.in_account) {
@@ -2511,6 +2519,12 @@
       baudEl.innerHTML = `<option value="57600">57600</option>`;
     }
   }
+
+  $("#btn-serial-refresh")?.addEventListener("click", async () => {
+    await fetchStatus();
+    await loadSerialSettings($("#set-serial-port")?.value || state.settings?.serial_port || "",
+      parseInt($("#set-serial-baud")?.value || state.settings?.serial_baud || "57600", 10));
+  });
 
   async function loadInterfaces(selectEl, selectedIp) {
     if (!selectEl) return;
@@ -4126,10 +4140,6 @@
     return document.documentElement.classList.contains("mobile-layout");
   }
 
-  function isAndroidApp() {
-    return document.documentElement.classList.contains("android-app");
-  }
-
   function blurComposer() {
     const input = $("#msg-input");
     if (input && typeof input.blur === "function") input.blur();
@@ -4429,7 +4439,10 @@
   $("#btn-menu")?.addEventListener("click", toggleSidebarMobile);
   $("#sidebar-backdrop")?.addEventListener("click", closeSidebarMobile);
   document.querySelectorAll(".settings-tab").forEach((tab) => {
-    tab.addEventListener("click", () => switchSettingsTab(tab.dataset.tab));
+    tab.addEventListener("click", () => {
+      switchSettingsTab(tab.dataset.tab);
+      if (tab.dataset.tab === "serial") $("#btn-serial-refresh")?.click();  // adapters come and go
+    });
   });
   $("#set-clock-source")?.addEventListener("change", toggleNtpField);
   $("#btn-back")?.addEventListener("click", () => {

@@ -14,6 +14,10 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Only for the USB serial driver library (not published elsewhere).
+        maven("https://jitpack.io") {
+            content { includeGroup("com.github.mik3y") }
+        }
     }
 }
 rootProject.name = "SRLTCP"

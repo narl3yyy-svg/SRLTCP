@@ -11,6 +11,7 @@ class SRLTCPApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        UsbSerialBridge.init(this)
         // Log crashes, then let the default handler end the process as usual.
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->

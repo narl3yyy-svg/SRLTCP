@@ -12,8 +12,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 91
-        versionName = "0.13.0"
+        versionCode = 92
+        versionName = "0.13.1"
 
         ndk {
             // One APK for phones (arm64). For an emulator or Chromebook add
@@ -86,6 +86,9 @@ dependencies {
     implementation("info.guardianproject:tor-android:0.4.9.5") {
         exclude(group = "org.jetbrains.kotlin")
     }
+    // USB serial adapters (FTDI, CP210x, CH34x, PL2303, CDC-ACM) through the
+    // Android USB host API: apps can't open /dev/ttyUSB* on Android (MIT).
+    implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
     testImplementation("junit:junit:4.13.2")
 }
 

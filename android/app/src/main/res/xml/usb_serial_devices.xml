@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- USB serial chips and boards SRLTCP can use (vendor ids, decimal). -->
+<resources>
+    <usb-device vendor-id="1027" />  <!-- FTDI (0x0403) -->
+    <usb-device vendor-id="4292" />  <!-- Silicon Labs CP210x (0x10C4) -->
+    <usb-device vendor-id="6790" />  <!-- WCH CH34x (0x1A86) -->
+    <usb-device vendor-id="1659" />  <!-- Prolific PL2303 (0x067B) -->
+    <usb-device vendor-id="9025" />  <!-- Arduino (0x2341) -->
+    <usb-device vendor-id="10755" /> <!-- Arduino.org (0x2A03) -->
+    <usb-device vendor-id="1155" />  <!-- STMicroelectronics (0x0483) -->
+    <usb-device vendor-id="11914" /> <!-- Raspberry Pi RP2040 (0x2E8A) -->
+    <usb-device vendor-id="12346" /> <!-- Espressif ESP32 (0x303A) -->
+    <usb-device vendor-id="5824" />  <!-- Van Ooijen / Teensy (0x16C0) -->
+    <usb-device vendor-id="9114" />  <!-- Adafruit (0x239A) -->
+</resources>

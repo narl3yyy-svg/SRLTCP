@@ -141,9 +141,6 @@ async def run_web(args: argparse.Namespace) -> None:
 
     config = _node_config_from_settings(settings, args)
 
-    if is_android():
-        config.enable_serial = False
-        config.serial_port = ""
     node = SRLTCPNode(config, settings)
 
     shutdown = GracefulShutdown()

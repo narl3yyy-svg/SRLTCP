@@ -69,6 +69,10 @@ class PingMixin:
                 except Exception as exc:  # noqa: BLE001 - keep the loop alive
                     log.debug("Stale offer check failed: %s", exc)
                 try:
+                    await self.serial_watchdog()
+                except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                    log.debug("Serial check failed: %s", exc)
+                try:
                     await self.maintain_paths()  # Tor-only sessions → direct
                 except Exception as exc:  # noqa: BLE001 - keep the loop alive
                     log.debug("Path check failed: %s", exc)
