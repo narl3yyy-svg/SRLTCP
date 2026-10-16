@@ -31,6 +31,8 @@ class PeerLink:
     last_seen: float = field(default_factory=time.monotonic)
     # Their ML-DSA-65 key, proven in this session's handshake.
     pq_public: bytes = b""
+    # Their addresses (RENDEZVOUS) arrived on this session.
+    have_their_addresses: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {

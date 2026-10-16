@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Different networks, no port forwarding anywhere.
 #
-# Part 1 — two homes:   phoneA - routerA (NAT) - internet (relay) - routerB (NAT) - phoneB
+# Part 1 — two homes:   phoneA - routerA (NAT) - internet (Tor doorbell, STUN) - routerB (NAT) - phoneB
 #   The phones pair in person (temporary shared link), then each goes home.
-#   Checks: they talk via the relay, then punch a DIRECT connection through
-#   both NATs (no port forwarding), and with a strict NAT on one side they
-#   stay on the relay and keep working.
+#   Checks: they find each other over a private Tor network and punch a DIRECT
+#   connection through both NATs (no port forwarding, no relay); with a strict
+#   NAT on one side the message waits, and goes out directly once it's normal.
 # Part 2 — one phone on the VPN, the other on the home Wi-Fi:
 #   phoneL (home LAN) - home router (WireGuard server + NAT) - internet - phoneV (VPN only)
 #   Checks: after pairing at home, phoneV away on the VPN reaches phoneL directly
 #   at its LAN address (learnt inside the encrypted session).
 #
-# Needs root, iproute2, iptables, wireguard-tools (+ wireguard-go or kmod).
+# Needs root, iproute2, iptables, tor + tor-gencert, wireguard-tools (+ wireguard-go or kmod).
 # Usage: sudo bash scripts/simulate_nat.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,8 +49,9 @@ start_node() {  # start_node NS NAME
   mkdir -p "$W/data-$1"
   [ -f "$W/data-$1/settings.json" ] ||  # keep settings across restarts
     echo '{"setup_complete": true, "auto_announce": false, "version": "0.6.0", "display_name": "'"$2"'",
-           "stun_servers": "198.51.100.1:3478"}' > "$W/data-$1/settings.json"
-  (cd "$ROOT" && SRLTCP_DATA_DIR="$W/data-$1" ip netns exec "$1" "$PY" -m srltcp web --name "$2" \
+           "tor_enabled": true, "stun_servers": "198.51.100.1:3478"}' > "$W/data-$1/settings.json"
+  (cd "$ROOT" && SRLTCP_DATA_DIR="$W/data-$1" SRLTCP_TOR_EXTRA_TORRC="$W/tornet/client.torrc" \
+     ip netns exec "$1" "$PY" -m srltcp web --name "$2" \
      >> "$W/$1.log" 2>&1 < /dev/null &)
   wait_for 30 test -s "$W/data-$1/web_token" && wait_for 30 api "$1" GET /api/version || fail "$2 did not start"
 }
@@ -65,7 +66,7 @@ pair_on() {  # pair_on NS1 NS2 IP2 : meet on a shared link, trust both ways
   api "$1" POST /api/trusted "{\"hash_id\":\"$h2\"}" >/dev/null || true
   api "$2" POST /api/trusted "{\"hash_id\":\"$h1\"}" >/dev/null || true
 }
-ready() { api "$1" GET /api/trusted | q "[p['relay_ready'] for p in d if p['hash_id']=='$2'][0]" | grep -q True; }
+ready() { api "$1" GET /api/trusted | q "[bool(p.get('onion')) for p in d if p['hash_id']=='$2'][0]" | grep -q True; }
 
 # ---------------- Part 1: two homes behind NAT ----------------
 for ns in inet ra rb ha hb; do ip netns add $ns; ip -n $ns link set lo up; done
@@ -100,45 +101,46 @@ ip -n ha addr add 10.9.9.1/24 dev meet; ip -n ha link set meet up
 ip -n hb addr add 10.9.9.2/24 dev meet; ip -n hb link set meet up
 
 (cd "$ROOT" && ip netns exec inet "$PY" scripts/stun_server.py --host 198.51.100.1 > "$W/stun.log" 2>&1 < /dev/null &)
-(cd "$ROOT" && ip netns exec inet "$PY" -m srltcp relay --port 7827 --public-host 198.51.100.1 \
-   --data-dir "$W/relay" > "$W/relay.log" 2>&1 < /dev/null &)
-wait_for 20 grep -q "srltcp-relay://" "$W/relay.log" || fail "relay did not start"
-CODE=$(grep -o "srltcp-relay://[^ ]*" "$W/relay.log" | head -1)
+ADDR=198.51.100.1 ip netns exec inet bash "$ROOT/scripts/tor_testnet.sh" start "$W/tornet" > "$W/tornet.log" 2>&1
+sleep 45  # (the private Tor network needs its first consensus)
 
 start_node ha PhoneA; start_node hb PhoneB
-api ha POST /api/settings "{\"relay_code\": \"$CODE\"}" >/dev/null
 pair_on ha hb 10.9.9.2
 HA=$(hash_of ha); HB=$(hash_of hb)
 api ha POST /api/messages "{\"recipient_hash\":\"$HB\",\"text\":\"met in person\"}" >/dev/null
 wait_for 20 got hb "$HA" "met in person" || fail "pairing in person"
-wait_for 30 ready ha "$HB" && wait_for 30 ready hb "$HA" || fail "pair secret exchange"
+wait_for 180 ready ha "$HB" && wait_for 180 ready hb "$HA" || fail "onion addresses exchanged"
 pass "paired in person (shared link)"
 
 # go home: the shared link disappears
 ip -n ha link del meet
 start=$(date +%s)
 api hb POST /api/messages "{\"recipient_hash\":\"$HA\",\"text\":\"home now, no port forwarding\"}" >/dev/null
-wait_for 60 got ha "$HB" "home now, no port forwarding" || fail "message after going home"
-pass "after leaving, delivered in $(( $(date +%s) - start ))s (path: $(path ha "$HB"))"
-# a direct path through both NATs should appear by hole punching
-start=$(date +%s)
-direct() { [ "$(path ha "$HB")" = "direct" ] && [ "$(path hb "$HA")" = "direct" ]; }
-wait_for 150 direct || fail "never punched a direct path through the two NATs"
-pass "direct connection through both home routers after $(( $(date +%s) - start ))s — A sees B at $(link_addr ha "$HB"), B sees A at $(link_addr hb "$HA")"
+wait_for 240 got ha "$HB" "home now, no port forwarding" || fail "message after going home"
+direct() { link_addr ha "$HB" | grep -q '^udp:' && link_addr hb "$HA" | grep -q '^udp:'; }
+wait_for 30 direct || fail "never punched a direct path through the two NATs"
+pass "found over Tor, direct through both home routers, message delivered after $(( $(date +%s) - start ))s — A sees B at $(link_addr ha "$HB"), B sees A at $(link_addr hb "$HA")"
 api ha POST /api/messages "{\"recipient_hash\":\"$HB\",\"text\":\"direct across networks\"}" >/dev/null
 wait_for 20 got hb "$HA" "direct across networks" || fail "message over the punched path"
-pass "messages flow over the punched direct path (relay not involved)"
+pass "messages flow over the punched direct path"
 
-# strict NAT (random ports, like many carrier NATs): punching can't work -> relay keeps it working
+# strict NAT (random ports, like many carrier NATs) on one side, port-dependent
+# filtering on the other: no direct technique gets through -> the message waits
 ip netns exec rb iptables -t nat -F POSTROUTING
 ip netns exec rb iptables -t nat -A POSTROUTING -o wan -j MASQUERADE --random-fully
 ip netns exec rb conntrack -F 2>/dev/null || true
 for ns in ha hb; do ip netns pids $ns | xargs -r kill; done; sleep 2
 start_node ha PhoneA; start_node hb PhoneB
 api hb POST /api/messages "{\"recipient_hash\":\"$HA\",\"text\":\"strict nat\"}" >/dev/null
-wait_for 60 got ha "$HB" "strict nat" || fail "relay fallback with a strict NAT"
-sleep 20
-pass "strict NAT on one side: still delivered (path: $(path ha "$HB"))"
+sleep 90
+got ha "$HB" "strict nat" && fail "strict NAT: delivered — over what? (test setup?)"
+pass "strict NAT on one side: the message waits (nothing goes over Tor)"
+ip netns exec rb iptables -t nat -F POSTROUTING  # back to a normal router
+ip netns exec rb iptables -t nat -A POSTROUTING -o wan -j MASQUERADE
+ip netns exec rb conntrack -F 2>/dev/null || true
+start=$(date +%s)
+wait_for 240 got ha "$HB" "strict nat" || fail "waiting message after the NAT became normal"
+pass "normal NAT again: the waiting message went out directly after $(( $(date +%s) - start ))s"
 for ns in ha hb inet; do ip netns pids $ns | xargs -r kill; done; sleep 1
 
 # ---------------- Part 2: one phone on the VPN, the other on the home Wi-Fi ----------------

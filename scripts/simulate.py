@@ -703,18 +703,16 @@ async def csp_flow() -> None:
             assert not csp, csp
         print("csp: no Content-Security-Policy violations on desktop and phone layouts")
 
-        # Relay settings: a damaged code is refused with a clear message.
+        # Network settings: direct only (no relay or call-server fields), saves fine.
         page = await open_ui(browser, "alice")
         await page.click("#btn-settings")
         await page.click(".settings-tab[data-tab=network]")
-        await page.fill("#set-relay-code", "srltcp-relay://relay.example.org:7827#broken")
-        await page.click("#settings-form button[type=submit]")
-        await page.wait_for_selector("text=Internet relay:", timeout=5000)
-        await page.fill("#set-relay-code", "")
+        for gone in ("#set-relay-code", "#set-relay-enabled", "#set-stun", "#set-turn-user"):
+            assert await page.locator(gone).count() == 0, gone
         await page.click("#settings-form button[type=submit]")
         await page.wait_for_selector("text=Settings saved", timeout=5000)
-        await page.locator(".relay-settings").first.screenshot(path=f"{OUT}/30-relay-settings.png")
-        print("relay settings: bad code rejected, empty code saved")
+        await page.locator(".net-settings").first.screenshot(path=f"{OUT}/30-network-settings.png")
+        print("network settings: no relay options, saved")
         await browser.close()
 
 

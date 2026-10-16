@@ -16,7 +16,6 @@ from aiohttp import web
 from srltcp import __version__
 from srltcp.core.messaging.groups import GroupError, is_valid_group_id
 from srltcp.core.protocol.messages import is_valid_transfer_id
-from srltcp.core.relay_proto import RelayCode, RelayCodeError
 from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.core.trusted import TrustedPeer, is_valid_hash_id
 from srltcp.utils.files import uploads_dir
@@ -238,7 +237,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         recipient = data.get("recipient_hash", "")
         text = str(data.get("text", ""))[:65536]
         transport = data.get("transport", "tcp")
-        if transport not in ("tcp", "serial", "relay"):
+        if transport not in ("tcp", "serial"):
             transport = "tcp"
         if not recipient or not text.strip():
             return web.json_response({"error": "recipient_hash and text required"}, status=400)
@@ -842,8 +841,6 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         updated.web_port = max(1024, min(updated.web_port, 65535))
         updated.tcp_port = max(1024, min(updated.tcp_port, 65535))
         updated.discovery_port = max(1024, min(updated.discovery_port, 65535))
-        updated.relay_enabled = bool(updated.relay_enabled)
-        updated.relay_first_restricted = bool(updated.relay_first_restricted)
         updated.direct_internet = bool(updated.direct_internet)
         updated.stun_servers = str(updated.stun_servers or "").strip()[:600]
         try:
@@ -866,29 +863,9 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                 {"error": "Tor path must point to the tor (tor.exe) program"}, status=400
             )
         updated.tor_path = tor_path
-        relay_text = str(updated.relay_code or "").strip()
-        if relay_text:
-            try:
-                relay_text = RelayCode.parse(relay_text).encode()
-            except RelayCodeError as exc:
-                return web.json_response({"error": f"Internet relay: {exc}"}, status=400)
-        updated.relay_code = relay_text
         if updated.clock_source not in ("system", "ntp"):
             updated.clock_source = "system"
         updated.handshake_protocol = "identity"  # the only supported handshake
-        stun = str(updated.call_stun_server or "").strip()
-        if stun and (
-            not stun.startswith(("stun:", "stuns:", "turn:", "turns:"))
-            or len(stun) > 255
-            or " " in stun
-        ):
-            return web.json_response(
-                {"error": "Call server must look like stun:host:3478 or turn:host:3478"},
-                status=400,
-            )
-        updated.call_stun_server = stun
-        updated.call_turn_username = str(updated.call_turn_username or "").strip()[:128]
-        updated.call_turn_password = str(updated.call_turn_password or "")[:256]
         if updated.ntp_server:
             updated.ntp_server = str(updated.ntp_server).strip()[:253]
 

@@ -56,9 +56,9 @@ class _Node(PunchMixin):
         self,
         me: str,
         trusted: set[str],
-        transport: str = "relay",
+        transport: str = "tcp",
         *,
-        tor: bool = False,
+        tor: bool = True,  # (punching starts from a session found over Tor)
         public: tuple[str, int] = ("198.51.100.2", 7828),
     ) -> None:
         self._init_punch()
@@ -118,7 +118,7 @@ def test_offers_from_strangers_or_the_wrong_side_are_ignored() -> None:
         node2 = _Node(me="0" * 32, trusted={"a" * 32})
         await node2._handle_punch("a" * 32, _offer([["198.51.101.2", 7828]]))  # type: ignore[arg-type]
         # Already direct: nothing to punch.
-        node3 = _Node(me="f" * 32, trusted={"a" * 32}, transport="tcp")
+        node3 = _Node(me="f" * 32, trusted={"a" * 32}, transport="tcp", tor=False)
         await node3._handle_punch("a" * 32, _offer([["198.51.101.2", 7828]]))  # type: ignore[arg-type]
         await asyncio.sleep(0)
         for n in (node, node2, node3):
@@ -366,7 +366,6 @@ def test_speed_advice_names_the_missing_piece() -> None:
     node.public_candidates = lambda: []  # type: ignore[method-assign]
     sp = node._speed_advice(peer, "tor")  # type: ignore[arg-type]
     assert not sp["my_public"] and "STUN" in sp["reason"]
-    assert any("relay" in t for t in sp["tips"])
     node.public_candidates = lambda: [("198.51.100.7", 7828)]  # type: ignore[method-assign]
     sp = node._speed_advice(peer, "tor")  # type: ignore[arg-type]
     assert sp["my_public"] and not sp["their_public"] and "contact" in sp["reason"]
@@ -499,39 +498,42 @@ async def test_udp_connection_only_takes_the_contact_it_was_made_for(
         await b.stop()
 
 
-def test_relay_first_only_when_turned_on_and_the_network_is_restricted() -> None:
-    """*Relay first on restricted networks* (off by default): a network that
-    can't carry a direct path to this contact sends it straight to the relay."""
+async def test_address_swap_completes_even_when_one_side_trusts_later(tmp_path: Path) -> None:
+    """Each side's addresses reach the other, even if the first RENDEZVOUS
+    arrived before the contact was trusted there (it said "I don't have
+    yours yet", so the other side answers)."""
+    a, b = make_node(tmp_path, "alice"), make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    try:
+        trust(a, b)  # only Alice trusts Bob for now
+        ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+        await a.connect_to_peer(bh)
+        assert await a.wait_for_handshake(bh, timeout=8)
+        await asyncio.sleep(1.0)
+        trust(b, a)
+        await b.notify_contact_accepted(ah)  # (what adding a contact does)
+        assert await wait_for(lambda: a.get_link(bh).have_their_addresses
+                              and b.get_link(ah).have_their_addresses, timeout=8)
+    finally:
+        await a.stop()
+        await b.stop()
+
+
+def test_connection_report_has_no_addresses() -> None:
+    import re
     import socket
 
     peer = "a" * 32
     node = _Node(me="f" * 32, trusted={peer})
-    node.config = SimpleNamespace(direct_internet=True, relay_first_restricted=False)  # type: ignore[attr-defined]
-    node.relay_link_reachable = lambda h: True  # type: ignore[attr-defined]
-    node.udp = None
-    assert node.restricted_reason(peer) == ""
-    # Their address on our own Wi-Fi didn't answer: the Wi-Fi keeps devices apart.
-    node.note_lan_unreachable(peer, [("8.8.8.8", 7825)])  # (not our network: no sign)
-    assert node.restricted_reason(peer) == ""
-    node.note_lan_unreachable(peer, [("127.0.0.1", 7825)])
-    assert "apart" in node.restricted_reason(peer)
-    assert not node.relay_first(peer)  # the option is off
-    node.config.relay_first_restricted = True  # type: ignore[attr-defined]
-    assert node.relay_first(peer)
-    node.relay_link_reachable = lambda h: False  # type: ignore[attr-defined]
-    assert not node.relay_first(peer)  # no relay: nothing changes
-    node.relay_link_reachable = lambda h: True  # type: ignore[attr-defined]
-    node.network_changed_for_paths()  # a new network
-    assert not node.relay_first(peer)
-    # Both behind one public address (plane Wi-Fi via Starlink, carrier NAT).
+    node.config = SimpleNamespace(direct_internet=True)  # type: ignore[attr-defined]
+    node.tor_status = lambda: {"state": "ready"}  # type: ignore[attr-defined]
     node.udp = SimpleNamespace(  # type: ignore[assignment]
-        mapped={socket.AF_INET: ("203.0.113.5", 40000)}, mapped_at=1.0,
-        stun_servers=(("stun", 3478),), ports={},
+        mapped={socket.AF_INET: ("203.0.113.5", 40000)}, mapped_at=1.0, symmetric=True,
+        stun_answers={socket.AF_INET: 2},
     )
-    node._peer_udp[peer] = [("203.0.113.5", 41000)]
-    assert "public address" in node.restricted_reason(peer) and node.relay_first(peer)
-    # UDP blocked alone: a VPN or the same Wi-Fi may still work over TCP.
-    node._peer_udp[peer] = []
-    node.udp.mapped = {}  # type: ignore[attr-defined]
-    node.udp_candidates = lambda: []  # type: ignore[method-assign]
-    assert node.restricted_reason(peer) == ""
+    node._peer_udp[peer] = [("198.51.100.9", 41000), ("2001:db8::9", 7828)]
+    node._note_round(peer, [("198.51.100.9", 41000), ("2001:db8::9", 7828)], "no answer")
+    report = node.connection_report(peer, "tor")
+    assert "hard NAT" in report and "IPv4, IPv6" in report and "no answer" in report
+    assert not re.search(r"\d+\.\d+\.\d+\.\d+|2001:db8|41000|40000", report)

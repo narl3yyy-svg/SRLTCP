@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# Direct UDP between two mobile networks (no port forwarding, no Tor speed).
+# Direct UDP between two mobile networks: no relay, no server in between.
 #
 #   phoneA - carrierA (NAT) - router - internet - router - carrierB (NAT) - phoneB
-#                                         |  relay (the "doorbell"), STUN server
+#                                         |  private Tor network (the doorbell), STUN server
 #
 # Like real carriers: each phone is behind NAT, TCP between the two networks
 # is blocked, the internet path has delay and some loss. Checks:
-#   1. the phones find each other through the relay, swap UDP addresses
-#      inside the encrypted session and move to a direct UDP connection;
+#   1. the phones find each other over Tor, swap UDP addresses inside the
+#      encrypted session and connect directly over UDP (the waiting message
+#      goes out then: nothing crosses Tor);
 #   2. a big file crosses it fast, messages flow while it does;
-#   3. with "symmetric" carrier NAT on both sides (different port per
-#      destination: punching can't work) they stay on the relay and work.
+#   3. with "symmetric" carrier NAT on both sides (a new port per
+#      destination: no direct technique crosses that) messages wait.
 #
-# Needs root, iproute2, iptables (and tc for the delay/loss).
+# Needs root, iproute2, iptables, tor and tor-gencert (and tc for delay/loss).
 # Usage: sudo bash scripts/simulate_udp.sh   (DELAY=25ms LOSS=0.5% RATE=100mbit)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,8 +50,9 @@ start_node() {  # start_node NS NAME
   mkdir -p "$W/data-$1"
   [ -f "$W/data-$1/settings.json" ] ||
     echo '{"setup_complete": true, "auto_announce": false, "display_name": "'"$2"'",
-           "tor_enabled": false, "stun_servers": "198.51.100.1:3478"}' > "$W/data-$1/settings.json"
-  (cd "$ROOT" && SRLTCP_DATA_DIR="$W/data-$1" ip netns exec "$1" "$PY" -m srltcp web --name "$2" \
+           "tor_enabled": true, "stun_servers": "198.51.100.1:3478"}' > "$W/data-$1/settings.json"
+  (cd "$ROOT" && SRLTCP_DATA_DIR="$W/data-$1" SRLTCP_TOR_EXTRA_TORRC="$W/tornet/client.torrc" \
+     ip netns exec "$1" "$PY" -m srltcp web --name "$2" \
      >> "$W/$1.log" 2>&1 < /dev/null &)
   wait_for 30 test -s "$W/data-$1/web_token" && wait_for 30 api "$1" GET /api/version || fail "$2 did not start"
 }
@@ -58,10 +60,10 @@ hash_of() { api "$1" GET /api/identities | q "d['tcp']['hash_id']"; }
 got() { api "$1" GET "/api/messages?peer=$2" | q "[m['text'] for m in d]" | grep -q "$3"; }
 link_addr() { api "$1" GET /api/status | q "[l['address'] for l in d['links'] if l['hash_id']=='$2'][0]"; }
 on_udp() { link_addr "$1" "$2" | grep -q '^udp:'; }
-ready() { api "$1" GET /api/trusted | q "[p['relay_ready'] for p in d if p['hash_id']=='$2'][0]" | grep -q True; }
+ready() { api "$1" GET /api/trusted | q "[bool(p.get('onion')) for p in d if p['hash_id']=='$2'][0]" | grep -q True; }
 
 setup() {  # setup cone|symmetric : fresh networks, phones paired in person
-  cleanup; rm -rf "$W"/data-* "$W"/relay
+  cleanup; rm -rf "$W"/data-* "$W"/tornet
   NATOPT=""; [ "$1" = symmetric ] && NATOPT="--random-fully"  # new port per destination
 for ns in $NSS; do ip netns add $ns; ip -n $ns link set lo up; done
 # (Routers between the carriers: like the real internet, the other NAT is
@@ -111,21 +113,19 @@ ip link add meet netns pa type veth peer name meet netns pb
 ip -n pa addr add 10.9.9.1/24 dev meet; ip -n pa link set meet up
 ip -n pb addr add 10.9.9.2/24 dev meet; ip -n pb link set meet up
 
-(cd "$ROOT" && ip netns exec inet "$PY" -m srltcp relay --port 7827 --public-host 198.51.100.1 \
-   --data-dir "$W/relay" > "$W/relay.log" 2>&1 < /dev/null &)
+# The doorbell: a private Tor network on the internet side (no real Tor).
+ADDR=198.51.100.1 ip netns exec inet bash "$ROOT/scripts/tor_testnet.sh" start "$W/tornet" > "$W/tornet.log" 2>&1
 (cd "$ROOT" && ip netns exec inet "$PY" scripts/stun_server.py --host 198.51.100.1 --port 3478 > "$W/stun.log" 2>&1 < /dev/null &)
-wait_for 20 grep -q "srltcp-relay://" "$W/relay.log" || fail "relay did not start"
-CODE=$(grep -o "srltcp-relay://[^ ]*" "$W/relay.log" | head -1)
+sleep 45  # (the private Tor network needs its first consensus)
 
 start_node pa PhoneA; start_node pb PhoneB
-api pa POST /api/settings "{\"relay_code\": \"$CODE\"}" >/dev/null
 api pa POST "/api/announce?target=10.9.9.2" >/dev/null; sleep 2
 HA=$(hash_of pa); HB=$(hash_of pb)
 api pa POST /api/trusted "{\"hash_id\":\"$HB\"}" >/dev/null || true
 api pb POST /api/trusted "{\"hash_id\":\"$HA\"}" >/dev/null || true
 api pa POST /api/messages "{\"recipient_hash\":\"$HB\",\"text\":\"met in person\"}" >/dev/null
 wait_for 20 got pb "$HA" "met in person" || fail "pairing in person"
-wait_for 30 ready pa "$HB" && wait_for 30 ready pb "$HA" || fail "pair secret exchange"
+wait_for 180 ready pa "$HB" && wait_for 180 ready pb "$HA" || fail "onion addresses exchanged"
 }
 
 setup cone
@@ -134,13 +134,11 @@ pass "paired in person"
 ip -n pa link del meet  # each goes back to their own carrier
 start=$(date +%s)
 api pb POST /api/messages "{\"recipient_hash\":\"$HA\",\"text\":\"on mobile data now\"}" >/dev/null
-wait_for 60 got pa "$HB" "on mobile data now" || fail "message through the relay"
-pass "on different carriers: delivered through the relay in $(( $(date +%s) - start ))s"
-
-start=$(date +%s)
-wait_for 150 sh -c "$(declare -f api q link_addr on_udp); W=$W PY=$PY; on_udp pa $HB && on_udp pb $HA" \
-  || fail "never moved to a direct UDP connection"
-pass "direct UDP through both carrier NATs after $(( $(date +%s) - start ))s — A sees B at $(link_addr pa "$HB"), B sees A at $(link_addr pb "$HA")"
+wait_for 240 got pa "$HB" "on mobile data now" || fail "message after the carriers split"
+pass "on different carriers: found over Tor, delivered directly after $(( $(date +%s) - start ))s"
+wait_for 30 sh -c "$(declare -f api q link_addr on_udp); W=$W PY=$PY; on_udp pa $HB && on_udp pb $HA" \
+  || fail "not on a direct UDP connection"
+pass "direct UDP through both carrier NATs — A sees B at $(link_addr pa "$HB"), B sees A at $(link_addr pb "$HA")"
 
 head -c 40000000 /dev/urandom > "$W/data-pa/video.bin"
 start=$(date +%s.%N)
@@ -155,17 +153,15 @@ cmp -s "$W/data-pa/video.bin" "$(find "$W/data-pb" -name 'video*.bin' | head -1)
 pass "40 MB file over direct UDP in ${took}s (${rate} MB/s; $NET); chat kept flowing"
 on_udp pa "$HB" || fail "left the UDP path during the transfer"
 
-# Symmetric carrier NAT on both sides (a new port for every destination):
-# punching can't work, the relay keeps them talking. Fresh networks so no
-# NAT remembers the earlier connection.
+# Symmetric carrier NAT on both sides (a new port for every destination): no
+# direct technique gets through; messages wait (nothing goes over Tor). Fresh
+# networks so no NAT remembers the earlier connection.
 for ns in $NSS; do ip netns pids $ns 2>/dev/null | xargs -r kill 2>/dev/null || true; done; sleep 2
 setup symmetric
 ip -n pa link del meet
 api pb POST /api/messages "{\"recipient_hash\":\"$HA\",\"text\":\"symmetric nat\"}" >/dev/null
-wait_for 60 got pa "$HB" "symmetric nat" || fail "relay fallback with symmetric NAT"
-sleep 40
+sleep 90
+got pa "$HB" "symmetric nat" && fail "symmetric NAT: delivered — over what? (test setup?)"
 on_udp pa "$HB" && fail "symmetric NAT should not punch (test setup?)"
-api pa POST /api/messages "{\"recipient_hash\":\"$HB\",\"text\":\"still talking\"}" >/dev/null
-wait_for 30 got pb "$HA" "still talking" || fail "messages after failed punching"
-pass "symmetric NAT on both sides: no direct path possible, still delivered via $(link_addr pa "$HB")"
+pass "symmetric NAT on both sides: no direct path, the message waits (nothing went over Tor)"
 echo "All UDP checks passed."

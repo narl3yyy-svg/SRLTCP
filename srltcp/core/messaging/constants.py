@@ -11,13 +11,11 @@ WEB_PORT = 9876
 CHUNK_SIZE = 1024 * 1024  # direct TCP (LAN / VPN / punched)
 CHUNK_WINDOW = 24 * 1024 * 1024
 UDP_CHUNK_SIZE = 256 * 1024  # direct UDP: a message waits behind at most one chunk
-RELAY_CHUNK_SIZE = 128 * 1024  # stays under the relay's 256 KiB frame limit
-RELAY_WINDOW = 2 * 1024 * 1024
 SERIAL_CHUNK_SIZE = 8 * 1024  # serial/RF links have smaller frames
 SERIAL_CHUNK_DELAY = 0.02  # seconds between serial chunks
 SERIAL_WINDOW = 64 * 1024
 TRANSFER_STALL = 12.0  # no confirmation this long: resend from the last confirmed byte
-TRANSFER_STALL_SLOW = 40.0  # the same over the relay or serial
+TRANSFER_STALL_SLOW = 40.0  # the same over serial
 PROGRESS_EMIT_INTERVAL = 0.3  # seconds between UI progress updates
 COMPRESS_THRESHOLD = 64 * 1024  # compress chat payloads >= 64 KiB
 OFFER_TIMEOUT = 30.0  # unanswered file offer: re-offer once, then queue

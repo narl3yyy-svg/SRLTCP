@@ -158,9 +158,6 @@ class SRLTCPNode:
         self.config.enable_serial = settings.enable_serial
         self.config.serial_port = settings.serial_port
         self.config.serial_baud = settings.serial_baud
-        self.config.relay_enabled = settings.relay_enabled
-        self.config.relay_code = settings.relay_code
-        self.config.relay_first_restricted = settings.relay_first_restricted
         direct_changed = self.config.direct_internet != settings.direct_internet
         self.config.direct_internet = settings.direct_internet
         tor_changed = (
@@ -180,7 +177,6 @@ class SRLTCPNode:
         if settings.auto_announce != old_announce:
             await self.backend.set_auto_announce(settings.auto_announce)
         await self.backend.apply_serial_transport()
-        await self.backend.apply_relay_settings()
         if direct_changed:
             await self.backend.addresses_changed()
         if tor_changed:
@@ -248,7 +244,6 @@ class SRLTCPNode:
     def status(self) -> dict[str, Any]:
         return {
             "name": self.config.name,
-            "relay": self.backend.relay_status(),
             "tor": self.backend.tor_status(),
             "identities": self.backend.get_identities(),
             "links": self.backend.list_links(),

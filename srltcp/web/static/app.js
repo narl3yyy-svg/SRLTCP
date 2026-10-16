@@ -422,7 +422,7 @@
 
   function transportBadge(transport) {
     const t = (transport || "tcp").toLowerCase();
-    const label = t === "serial" ? "SERIAL" : t === "relay" ? "RELAY" : "TCP";
+    const label = t === "serial" ? "SERIAL" : "TCP";
     return `<span class="transport-badge ${t}">${label}</span>`;
   }
 
@@ -718,36 +718,6 @@
     }
   }
 
-  /* Settings → Network: what the internet relay is doing right now. */
-  function renderRelayStatus(relay) {
-    const el = $("#relay-status");
-    if (!el || !relay) return;
-    if (!relay.enabled) {
-      el.textContent = "Off — contacts are only reached over LAN / VPN.";
-      el.className = "relay-status";
-      return;
-    }
-    const rows = (relay.relays || []).map((r) => {
-      const who = r.own ? "your relay" : "a contact's relay";
-      const state = r.connected ? "connected" : r.error ? `not connected: ${r.error}` : "connecting…";
-      const n = r.contacts ? ` · ${r.contacts} contact${r.contacts === 1 ? "" : "s"}` : "";
-      return `${r.address} (${who}) — ${state}${n}`;
-    });
-    if (rows.length && relay.direct_internet) {
-      rows.push(
-        relay.public && relay.public.length
-          ? `Direct internet: on — contacts can reach you at ${relay.public.join(", ")} (shared only with them)`
-          : "Direct internet: on — waiting for the relay to tell us our public address"
-      );
-    } else if (rows.length) {
-      rows.push("Direct internet: off — everything over the internet goes through the relay");
-    }
-    el.textContent = rows.length
-      ? rows.join("\n")
-      : "No relay yet: paste a code here, or a contact with one shares it automatically.";
-    el.className = `relay-status ${(relay.relays || []).some((r) => r.connected) ? "ok" : ""}`;
-  }
-
   /* Settings → Network: Tor. */
   function renderTorStatus(tor) {
     const el = $("#tor-status");
@@ -763,7 +733,7 @@
     else if (tor.state === "error") text = `Tor: problem — ${tor.detail || "retrying"}`;
     else text = "Tor: starting…";
     el.textContent = text;
-    el.className = `relay-status ${ok ? "ok" : ""}`;
+    el.className = `net-status ${ok ? "ok" : ""}`;
   }
 
   /* ── Group chats ── */
@@ -1351,34 +1321,6 @@
     }, 400);
   }
 
-  const RELAY_PREFIX = "srltcp-relay://";
-
-  /* A relay code from the QR the relay installer shows: fill it in and save. */
-  async function applyRelayCode(code) {
-    const input = $("#set-relay-code");
-    if (!input) return;
-    input.value = code.trim();
-    const enabled = $("#set-relay-enabled");
-    if (enabled) enabled.checked = true;
-    if (await saveSettings(settingsPayload("set"), false)) toast("Relay added");
-  }
-
-  $("#btn-scan-relay")?.addEventListener("click", () => {
-    if (!androidHas("scanQrCode") && !("BarcodeDetector" in window)) {
-      toast("QR scanning is not supported in this browser — paste the code instead", "error");
-      return;
-    }
-    scanQr($("#relay-camera"), RELAY_PREFIX, applyRelayCode);
-  });
-  $("#btn-copy-relay-cmd")?.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText($("#relay-cmd")?.textContent || "");
-      toast("Command copied");
-    } catch (_) {
-      toast("Copy failed — select the command and copy it");
-    }
-  });
-
   function scanPairQr() {
     if (!androidHas("scanQrCode") && !("BarcodeDetector" in window)) {
       toast("QR scanning is not supported in this browser — paste the link instead", "error");
@@ -1428,9 +1370,7 @@
   // Called by the Android app (MainActivity) — see SRLTCPBridge.kt.
   window.onAndroidQrResult = (text) => {
     if (!text) return;
-    if (text.startsWith(RELAY_PREFIX)) {
-      applyRelayCode(text);
-    } else if (text.startsWith(VERIFY_PREFIX)) {
+    if (text.startsWith(VERIFY_PREFIX)) {
       submitVerifyCode(text);
     } else {
       importPairCode(text, { source: "qr" });
@@ -1853,11 +1793,9 @@
     }
     const transport = activeLinkTransport(hashId);
     const onTor = transport === "tcp" && isTorAddress(activeLinkForPeer(hashId)?.address);
-    const label = transport === "serial" ? "SERIAL" : transport === "relay" ? "RELAY" : onTor ? "CONNECTING" : "DIRECT";
+    const label = transport === "serial" ? "SERIAL" : onTor ? "CONNECTING" : "DIRECT";
     badge.textContent = label;
-    badge.title = transport === "relay"
-      ? "Through your internet relay (it can't read anything). Switches to direct when possible."
-      : onTor ? "Found over Tor, setting up a direct connection. Tor is only used to find each other: messages, files and calls wait for the direct connection."
+    badge.title = onTor ? "Found over Tor, setting up a direct connection. Tor is only used to find each other: messages, files and calls wait for the direct connection."
       : transport === "serial" ? "Serial / radio link" : "Direct connection, no server in between";
     badge.className = `transport-badge header-badge ${onTor ? "connecting" : transport}`;
     badge.removeAttribute("aria-hidden");
@@ -2605,9 +2543,6 @@
     setInputValue("set-incoming", settings.incoming_files_dir || "");
     setInputValue("set-shared", settings.shared_folder || "");
     setCheckbox("set-auto-announce", !!settings.auto_announce);
-    setCheckbox("set-relay-enabled", settings.relay_enabled !== false);
-    setInputValue("set-relay-code", settings.relay_code || "");
-    setCheckbox("set-relay-first", settings.relay_first_restricted === true);
     setCheckbox("set-direct-internet", settings.direct_internet !== false);
     setInputValue("set-stun-servers", settings.stun_servers || "");
     setCheckbox("set-tor-enabled", settings.tor_enabled !== false);
@@ -2623,10 +2558,7 @@
     setCheckbox("set-show-clock", settings.show_clock !== false);
     setSelectValue("set-clock-source", settings.clock_source || "system");
     setInputValue("set-ntp-server", settings.ntp_server || "pool.ntp.org");
-    setInputValue("set-stun", settings.call_stun_server || "");
     document.dispatchEvent(new Event("srltcp-settings-loaded"));
-    setInputValue("set-turn-user", settings.call_turn_username || "");
-    setInputValue("set-turn-pass", settings.call_turn_password || "");
     toggleNtpField();
     applyClockVisibility();
     if (!$("#settings-window")?.classList.contains("hidden") || !state.interfacesLoaded) {
@@ -2946,7 +2878,6 @@
         ? "Announce on TCP/LAN"
         : "TCP transport unavailable — restart the node";
     }
-    renderRelayStatus(transportStatus.relay);
     renderTorStatus(transportStatus.tor);
 
     const serialBtn = $("#btn-announce-serial");
@@ -3423,7 +3354,7 @@
   }
 
   const STATUS_HINTS = {
-    pending: "Waiting to send — goes out automatically when they are reachable (same Wi-Fi, VPN or internet relay)",
+    pending: "Waiting to send — goes out automatically when they are reachable (same Wi-Fi, VPN or a direct internet connection)",
     sent: "Sent — not confirmed yet; resent automatically until they receive it",
     delivered: "Delivered",
     not_trusted: "They have not accepted you yet",
@@ -4588,9 +4519,6 @@
       shared_folder: $(`#${prefix}-shared`)?.value.trim() || "",
       lan_ip: $(`#${prefix}-lan-ip`)?.value || "",
       auto_announce: $(`#${prefix}-auto-announce`)?.checked || false,
-      relay_enabled: $("#set-relay-enabled")?.checked ?? true,
-      relay_code: ($("#set-relay-code")?.value || "").trim(),
-      relay_first_restricted: $("#set-relay-first")?.checked || false,
       direct_internet: $("#set-direct-internet")?.checked ?? true,
       stun_servers: ($("#set-stun-servers")?.value || "").trim(),
       tor_enabled: $("#set-tor-enabled")?.checked ?? true,
@@ -4606,9 +4534,6 @@
       show_clock: $("#set-show-clock")?.checked !== false,
       clock_source: $("#set-clock-source")?.value || "system",
       ntp_server: $("#set-ntp-server")?.value.trim() || "pool.ntp.org",
-      call_stun_server: ($("#set-stun")?.value || "").trim(),
-      call_turn_username: ($("#set-turn-user")?.value || "").trim(),
-      call_turn_password: $("#set-turn-pass")?.value || "",
     };
   }
 
@@ -4786,14 +4711,6 @@
   $("#btn-share-folder")?.addEventListener("click", () => openShareModal("offer"));
   $("#share-close")?.addEventListener("click", closeShareModal);
   $("#share-submit")?.addEventListener("click", submitShare);
-  // TURN username/password only mean something with a TURN server address.
-  const syncTurnFields = () => {
-    const url = ($("#set-stun")?.value || "").trim();
-    $("#turn-credentials")?.classList.toggle("hidden", !url.startsWith("turn"));
-  };
-  $("#set-stun")?.addEventListener("input", syncTurnFields);
-  document.addEventListener("srltcp-settings-loaded", syncTurnFields);
-  setTimeout(syncTurnFields, 0);
   $("#edit-contact-check")?.addEventListener("click", async () => {
     const hashId = state.editContactTarget;
     const out = $("#edit-contact-check-result");
@@ -4808,7 +4725,6 @@
     const rows = (data.addresses || []).map((a) =>
       `<li class="${a.ok ? "ok" : "bad"}">${a.ok ? "✓" : "✗"} ${escapeHtml(a.address)} — ${escapeHtml(a.detail)}</li>`
     ).join("");
-    const relay = data.relay?.connected ? "connected" : data.relay?.configured ? "not connected" : "not set up";
     const tor = !data.tor?.enabled ? "off" : data.tor.state === "ready"
       ? (data.tor.contact_has_address ? "ready" : "ready (contact's Tor address not known yet)")
       : `${data.tor.state}${data.tor.detail ? ` — ${data.tor.detail}` : ""}`;
@@ -4817,8 +4733,18 @@
       : "";
     out.innerHTML = signIn + `<p>${escapeHtml(data.summary || "")}</p>` +
       (rows ? `<ul>${rows}</ul>` : "") +
-      `<p class="muted">Now: ${escapeHtml(data.path || "not connected")} · Relay: ${escapeHtml(relay)} · Tor: ${escapeHtml(tor)} · Your addresses: ${escapeHtml((data.my_addresses || []).join(", ") || "none")}</p>` +
-      speedHtml(data.speed);
+      `<p class="muted">Now: ${escapeHtml(data.path || "not connected")} · Tor: ${escapeHtml(tor)} · Your addresses: ${escapeHtml((data.my_addresses || []).join(", ") || "none")}</p>` +
+      speedHtml(data.speed) +
+      (data.report ? `<button type="button" class="btn btn-secondary btn-sm" id="btn-copy-conn-report">Copy connection report</button>
+        <small class="muted"> (no IP addresses in it: send it along when something doesn't connect)</small>` : "");
+    $("#btn-copy-conn-report")?.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(data.report);
+        toast("Report copied");
+      } catch (_) {
+        window.SRLTCPAndroid?.shareText?.("SRLTCP connection report", data.report);
+      }
+    });
   });
   // Why a contact on another network isn't on the fast (direct) path.
   function speedHtml(sp) {

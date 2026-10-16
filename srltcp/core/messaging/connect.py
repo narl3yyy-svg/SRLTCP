@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from srltcp.core.messaging.links import PeerLink
-from srltcp.core.messaging.relay import RELAY_PEER_PREFIX, relay_peer_hash
 from srltcp.core.messaging.tor import ONION_VIRTUAL_PORT
 from srltcp.core.protocol import pq
 from srltcp.core.protocol.crypto import HANDSHAKE_MAX_SKEW, KeyExchange, SessionKeys
@@ -191,19 +190,13 @@ class ConnectMixin:
         if discovered and discovered.transport in ("tcp", "serial"):
             return discovered.transport
         trusted = self.trusted.get(hash_id)
-        # Direct (LAN / VPN / port-forward) first; the relay when that's all we have.
-        # A failed direct dial also falls back to the relay (see below).
         if trusted and (trusted.tcp_host or trusted.wan_host or trusted.alt_hosts):
             return "tcp"
-        if self.relay_link_reachable(hash_id):
-            return "relay"
         if trusted:
             return trusted.transport if trusted.transport in ("tcp", "serial") else "tcp"
         return requested
 
     def _is_link_reachable(self: MessagingBackend, link: PeerLink) -> bool:
-        if link.transport == "relay":
-            return self.relay_link_reachable(link.hash_id)
         if link.transport == "tcp" and self.tcp_transport:
             return self.tcp_transport.has_peer(link.transport_peer_id)
         if link.transport == "serial" and self.serial_transport:
@@ -211,8 +204,6 @@ class ConnectMixin:
         return False
 
     def _infer_transport(self: MessagingBackend, peer_id: str) -> str:
-        if peer_id.startswith(RELAY_PEER_PREFIX):
-            return "relay"
         if self.serial_transport and self.serial_transport.has_peer(peer_id):
             return "serial"
         if self.tcp_transport and self.tcp_transport.has_peer(peer_id):
@@ -243,8 +234,8 @@ class ConnectMixin:
         existing = self.get_link(hash_id)
         if existing and existing.handshake_complete and not force:
             if self._is_link_reachable(existing):
-                # Working session (direct or relay): keep it. Moving from the
-                # relay back to a direct path is done by maintain_paths().
+                # Working session: keep it. Moving from the Tor doorbell to a
+                # direct path is done by maintain_paths().
                 await self.ping_peer(hash_id)
                 return True
             await self._teardown_link(hash_id)
@@ -290,9 +281,6 @@ class ConnectMixin:
         )
         pub_bytes = bytes.fromhex(pub_hex) if pub_hex else b"\x00" * 32
 
-        if transport == "relay":
-            return await self.open_relay_link(hash_id)
-
         if transport == "tcp" and self.tcp_transport:
             endpoint = self._resolve_tcp_endpoint(
                 hash_id,
@@ -305,8 +293,6 @@ class ConnectMixin:
                 # Only addresses learnt from the contact (no saved main address).
                 endpoint = (trusted.alt_hosts[0], trusted.tcp_port or self.config.tcp_port)
             if not endpoint:
-                if not host and self.relay_link_reachable(hash_id):
-                    return await self.open_relay_link(hash_id)
                 if not host and self._tor_path_to(hash_id):
                     return await self._connect_via_tor(hash_id, pub_bytes, peer_name)
                 log.warning("No host for peer %s", hash_id[:8])
@@ -317,27 +303,17 @@ class ConnectMixin:
                     cand = (alt, endpoint[1])
                     if cand not in candidates:
                         candidates.append(cand)
-            if not host and self.relay_first(hash_id):
-                # (Opt-in) this network can't carry a direct path: don't wait.
-                log.info("Restricted network (%s) — straight to the relay for %s",
-                         self.restricted_reason(hash_id), hash_id[:8])
-                return await self.open_relay_link(hash_id)
             peer_id = ""
             target_host, target_port = endpoint
-            # With a relay (or Tor) to fall back on, don't wait long for a dead
+            # With Tor to fall back on (to set up a direct path), don't wait long for a dead
             # VPN/LAN path.
-            relay_fallback = not host and self.relay_link_reachable(hash_id)
-            tor_fallback = not host and not relay_fallback and self._tor_path_to(hash_id)
-            fallback = relay_fallback or tor_fallback
+            tor_fallback = not host and self._tor_path_to(hash_id)
+            fallback = tor_fallback
             timeout = 3.0 if fallback else (8.0 if len(candidates) == 1 else 5.0)
             # All addresses at once (LAN, VPN, the other network's address learnt
             # from the contact…), slightly staggered; the first to answer wins.
             peer_id, target_host, target_port = await self._dial_first(candidates, timeout)
             if not peer_id:
-                self.note_lan_unreachable(hash_id, candidates)
-                if relay_fallback:
-                    log.info("No direct path to %s — using the relay", hash_id[:8])
-                    return await self.open_relay_link(hash_id)
                 if tor_fallback:
                     log.info("No direct path to %s — trying Tor", hash_id[:8])
                     return await self._connect_via_tor(hash_id, pub_bytes, peer_name)
@@ -607,11 +583,6 @@ class ConnectMixin:
         remote_name: str,
     ) -> PeerLink | None:
         """Attach a verified identity to a transport connection."""
-        relay_hash = relay_peer_hash(peer_id)
-        if peer_id.startswith(RELAY_PEER_PREFIX) and relay_hash != remote_hash:
-            # A relay mailbox belongs to one contact; nobody else may use it.
-            log.warning("Identity %s arrived on %s's relay mailbox", remote_hash[:8], peer_id[6:14])
-            return None
         link = self.get_link_by_peer_id(peer_id)
         if link and link.hash_id != remote_hash:
             log.warning(
@@ -635,10 +606,7 @@ class ConnectMixin:
         if link is None:
             transport = self._infer_transport(peer_id)
             address = ""
-            if transport == "relay":
-                code = self.pair_relay(remote_hash)
-                address = f"relay {code.display}" if code else "relay"
-            elif self.tcp_transport and transport == "tcp":
+            if self.tcp_transport and transport == "tcp":
                 for p in self.tcp_transport.peers():
                     if p.peer_id == peer_id:
                         address = p.address
@@ -713,8 +681,8 @@ class ConnectMixin:
     async def _send_upgrade_handshake(
         self: MessagingBackend, hash_id: str, peer_id: str
     ) -> KeyExchange | None:
-        """Open a session on a new direct connection while the relay session
-        keeps working; it replaces the relay link only once it's proven."""
+        """Open a session on a new direct connection while the Tor session
+        keeps working; it replaces the Tor link only once it's proven."""
         identity = self._identity_for_transport("tcp")
         kx = KeyExchange(identity.private_key, identity.pq)
         kx.start_kem()
@@ -951,7 +919,7 @@ class ConnectMixin:
             peer_name=str(data.get("name", ""))[:64] or (old.peer_name if old else ""),
             pq_public=hello.pq_public,
         )
-        self.register_link(link)  # replaces the relay (or Tor) link
+        self.register_link(link)  # replaces the Tor link
         if (
             old and old.transport == "tcp" and old.transport_peer_id != peer_id
             and self.tcp_transport
@@ -959,5 +927,5 @@ class ConnectMixin:
             # The Tor connection it replaces isn't needed any more.
             await self.tcp_transport.disconnect(old.transport_peer_id)
         self.set_link_keys(remote_hash, keys)
-        log.info("Switched %s from the relay to a direct path (%s)", remote_hash[:8], address)
+        log.info("Switched %s from Tor to a direct path (%s)", remote_hash[:8], address)
         await self._complete_handshake(remote_hash, link.peer_name, from_ack=True)

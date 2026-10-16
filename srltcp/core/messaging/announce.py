@@ -297,7 +297,7 @@ class AnnounceMixin:
     async def _handle_discovered(
         self: MessagingBackend, address: str, transport: str, payload: bytes
     ) -> None:
-        if transport == "tcp" and address != "relay":
+        if transport == "tcp":
             src = address.rsplit(":", 1)[0] if ":" in address else address
             if not on_our_network(src):
                 log.debug("Ignoring an announce from outside our networks (%s)", src)
@@ -352,12 +352,11 @@ class AnnounceMixin:
                 # Our session points at the old address: check it still answers.
                 self._verify_link_soon(peer.hash_id)
         if trusted and fresh and peer.transport == "tcp" and peer.tcp_host:
-            self.request_direct_upgrade(peer.hash_id)  # same Wi-Fi again: leave relay/Tor
+            self.request_direct_upgrade(peer.hash_id)  # same Wi-Fi again: leave Tor
         # Answer so the sender discovers us too (one press on one phone is enough).
         src_ip = address.rsplit(":", 1)[0] if ":" in address else ""
         if (
             peer.transport == "tcp"
-            and address != "relay"
             and not peer.metadata.get("reply")
             and (self.is_discoverable() or (src_ip and in_vpn_subnet(src_ip)))
         ):

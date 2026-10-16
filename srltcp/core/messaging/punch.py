@@ -1,28 +1,29 @@
 """Direct connections across networks without port forwarding (hole punching).
 
-Two devices behind ordinary home routers (NAT) or IPv6 firewalls can't accept
-incoming connections, but each router lets an *outgoing* connection's replies
-back in. If both devices dial each other at the same moment from the same
-local port, each router sees the other's packets as replies to its own
-connection and lets them through: a direct TCP connection (TCP simultaneous
-open), no relay in the path and nothing to configure on either router.
+Two devices behind ordinary routers or carrier NAT (or IPv6 firewalls) can't
+accept incoming connections, but each NAT lets an *outgoing* flow's replies
+back in. If both send to each other at the same moment, each NAT sees the
+other's packets as replies to its own and lets them through: a direct
+connection, no server in the path and nothing to configure on either side.
 
-How the two agree on "the same moment" and where to dial, privately:
+How the two agree on "the same moment" and where to send, privately:
 
-1. Each phone connects to its relay from its *punch port* (listen port + 3);
-   the relay tells it its public address as seen from the internet.
-2. While the contacts already have a session (over Tor or a relay), they
-   swap addresses inside the E2EE session: ``RENDEZVOUS`` carries LAN/VPN
-   addresses (for plain direct dials) and, if *direct internet connections*
-   is on, the public ones; ``PUNCH`` offer/answer starts a round.
-3. Both dial all of the other's public candidates from the punch port for a
-   few seconds; the first connection that opens is turned into a session
-   with the normal signed handshake, which replaces the relay session.
+1. Each phone asks a public STUN server which public address and port its UDP
+   socket has (IPv6 needs no STUN: the phone's own global address).
+2. While the contacts have a session over Tor (the doorbell), they swap those
+   addresses inside the E2EE session: ``RENDEZVOUS`` carries LAN/VPN
+   addresses (for plain direct dials) and the public ones; ``PUNCH``
+   offer/answer starts a round (with fresh keys for the UDP connection).
+3. Both send to each other's candidates for a few seconds (IPv4 and IPv6 at
+   once); the first authenticated packet fixes the path, and the normal
+   signed handshake inside it replaces the Tor session.
 
-What it can't do: carrier-grade NAT with per-destination ports ("symmetric")
-won't open — then the relay keeps carrying the traffic. Addresses are shared
-only with trusted contacts, inside the encrypted session; turning off *direct
-internet connections* keeps your public IP away from them (relay only).
+What it can't do: carrier NAT that gives a new random port for every
+destination ("symmetric") on *both* sides can't be crossed by any direct
+technique; then the phones need IPv6, or one of them on Wi-Fi. *Check
+connection* says when that's the case. Addresses are shared only with trusted
+contacts, inside the encrypted session; turning off *direct internet
+connections* keeps your public IP away from them.
 """
 
 from __future__ import annotations
@@ -58,7 +59,7 @@ STUN_FRESH = 20.0  # re-ask STUN before a round if the answer is older (carrier 
 PUNCH_ATTEMPT_TIMEOUT = 1.5
 PUNCH_FOLLOWER_DELAY = 1.0  # the answering side starts dialing a moment later
 PUNCH_ANSWER_EVERY = 6.0  # a contact can start at most one round this often (each is small)
-PUNCH_RETRY_EVERY = 120.0  # while on the relay
+PUNCH_RETRY_EVERY = 120.0  # while only Tor connects us
 PUNCH_BACKOFF = (15.0, 30.0, 60.0, 120.0)  # after 1, 2, 3, 4+ failed rounds
 MAX_CANDIDATES = 6
 
@@ -165,8 +166,9 @@ class PunchMixin:
         self._udp_offers: dict[str, tuple[bytes, bytes, float]] = {}  # our secret, id, when
         self._prime_max: dict[str, int] = {}  # highest priming hop limit per contact
         self._punch_asked: dict[str, float] = {}
-        self._lan_unreachable: set[str] = set()  # their address on our Wi-Fi didn't answer
-        self._tor_to_relay_busy: set[str] = set()
+        # Recent punch rounds per contact, for the connection report:
+        # (when, IPv4 tried, IPv6 tried, outcome). No addresses.
+        self._punch_log: dict[str, list[tuple[float, bool, bool, str]]] = {}
 
     def _prime_hops(self: MessagingBackend, hash_id: str) -> tuple[int, ...]:
         return tuple(range(2, self._prime_max.get(hash_id, 4) + 1))
@@ -265,16 +267,12 @@ class PunchMixin:
         return out[:MAX_CANDIDATES]
 
     def public_candidates(self: MessagingBackend) -> list[tuple[str, int]]:
-        """Where contacts can punch through to us: the public address relays
-        report for our punch port, and our global IPv6 addresses."""
+        """Where contacts can punch TCP through to us: our global IPv6
+        addresses (TCP over IPv4 NAT isn't tried; UDP covers it)."""
         port = self.punch_port()
         if not port:
             return []
         out: list[tuple[str, int]] = []
-        for conn in self._relay_conns.values():
-            obs = conn.observed
-            if conn.connected and obs and obs not in out and punchable_candidate(*obs):
-                out.append(obs)
         from srltcp.utils.network import global_ipv6_addresses
 
         for ip in global_ipv6_addresses():
@@ -397,7 +395,7 @@ class PunchMixin:
         phase = data.get("ph")
         theirs = _clean_candidates(data.get("c"))
         link = self.get_link(hash_id)
-        if not link or (link.transport != "relay" and not self._link_on_tor(link)):
+        if not link or not self._link_on_tor(link):
             return  # already direct (or no session): nothing to punch
         if phase == "r":
             if self._me_hash() < hash_id:  # we lead: start a round (rate-limited there)
@@ -510,8 +508,10 @@ class PunchMixin:
                 ):
                     peer_id = await self.tcp_transport.adopt_udp(udp_conn)
                     log.info("Direct UDP connection to %s via %s", hash_id[:8], udp_conn.address)
+                    self._note_round(hash_id, udp_targets or [], "direct")
                 else:
                     udp_conn._shutdown()
+                    self._note_round(hash_id, udp_targets or [], "no answer")
                     # Maybe our priming packets reached their router (a short
                     # path, e.g. the same ISP): try again soon, lower hop limit,
                     # from a fresh port (routers hold stale state for the old
@@ -540,8 +540,8 @@ class PunchMixin:
                 fails = self._punch_failures.get(hash_id, 0)
                 self._punch_failures[hash_id] = fails + 1
                 wait = PUNCH_BACKOFF[min(fails, len(PUNCH_BACKOFF) - 1)]
-                log.info("No direct path through the NATs to %s — staying on the relay or "
-                         "Tor (next try in %d s)", hash_id[:8], wait)
+                log.info("No direct path through the NATs to %s yet "
+                         "(next try in %d s)", hash_id[:8], wait)
                 self._punch_next[hash_id] = time.monotonic() + wait
                 return
             self._punch_failures.pop(hash_id, None)
@@ -562,6 +562,16 @@ class PunchMixin:
             self._upgrades[hash_id] = (peer_id, kx, time.monotonic())
         finally:
             self._punching.discard(hash_id)
+
+    def _note_round(
+        self: MessagingBackend, hash_id: str, targets: list[tuple[str, int]], outcome: str
+    ) -> None:
+        log_ = self._punch_log.setdefault(hash_id, [])
+        log_.append((
+            time.time(), any(":" not in h for h, _p in targets), any(":" in h for h, _p in targets),
+            outcome,
+        ))
+        del log_[:-8]
 
     async def _prime(self: MessagingBackend, targets: list[tuple[str, int]]) -> None:
         port = self.punch_port()
@@ -622,8 +632,8 @@ class PunchMixin:
     # ── "Check connection" (Edit contact) ──
 
     def _speed_advice(self: MessagingBackend, hash_id: str, path: str) -> dict[str, Any]:
-        """Why a contact on another network is on Tor/the relay rather than
-        direct (the fast path), in plain words. Across networks the devices
+        """Why a contact on another network isn't connected directly yet, in
+        plain words. Across networks the devices
         connect directly over UDP (IPv4 through carrier NAT, or IPv6); each
         needs a public address (STUN, or IPv6) to give the other."""
         mine = self.udp_candidates() + self.public_candidates()
@@ -652,10 +662,9 @@ class PunchMixin:
                         "SIM → Access Point Names → APN protocol: IPv4/IPv6), often works.")
         else:
             reason = "Both devices have public addresses: a direct connection is being tried."
-        if path in ("tor", "relay"):
-            tips.append("Works on any network at full speed: run your own relay "
-                        "(Settings → Network → Internet relay) or put both phones on the same "
-                        "VPN (WireGuard, or Tailscale which works through carrier NAT).")
+        if path == "tor" and failed:
+            tips.append("Turn on Wi-Fi on one of the phones (any home or public Wi-Fi that "
+                        "allows normal internet use): most Wi-Fi routers can be crossed.")
         return {
             "my_ipv6": any(":" in h for h, _p in mine),
             "their_ipv6": any(":" in h for h, _p in theirs),
@@ -663,47 +672,6 @@ class PunchMixin:
             "symmetric_nat": symmetric, "direct_tries_failed": failed,
             "reason": reason, "tips": tips,
         }
-
-    # ── Restricted networks (planes, hotels): relay first, if the user wants ──
-
-    def note_lan_unreachable(
-        self: MessagingBackend, hash_id: str, candidates: list[tuple[str, int]]
-    ) -> None:
-        """A dial to the contact's address on our own Wi-Fi went unanswered:
-        the network keeps devices apart (or they left it). Forgotten when our
-        network changes."""
-        from srltcp.utils.network import same_network
-
-        if any(same_network(h) for h, _p in candidates):
-            self._lan_unreachable.add(hash_id)
-
-    def network_changed_for_paths(self: MessagingBackend) -> None:
-        self._lan_unreachable.clear()
-
-    def restricted_reason(self: MessagingBackend, hash_id: str) -> str:
-        """Why a direct connection to this contact can't work on this network
-        ("" = no sign of that). Only from what the app already knows."""
-        import socket
-
-        if hash_id in self._lan_unreachable:
-            return "the Wi-Fi keeps devices apart"
-        udp = self.udp
-        mapped = udp.mapped.get(socket.AF_INET) if udp else None
-        theirs = self._peer_udp.get(hash_id, []) + self._peer_public.get(hash_id, [])
-        if mapped and any(h == mapped[0] for h, _p in theirs):
-            return "you share one public address"
-        # (UDP blocked alone isn't enough: a VPN or the same Wi-Fi still works
-        # over TCP. Check connection reports it.)
-        return ""
-
-    def relay_first(self: MessagingBackend, hash_id: str) -> bool:
-        """*Relay first on restricted networks* is on, this network is
-        restricted for the contact, and the relay can reach them."""
-        return bool(
-            getattr(self.config, "relay_first_restricted", False)
-            and self.restricted_reason(hash_id)
-            and self.relay_link_reachable(hash_id)
-        )
 
     def _network_blockers(
         self: MessagingBackend, hash_id: str, results: list[dict[str, Any]]
@@ -734,6 +702,50 @@ class PunchMixin:
             out.append("This network blocks the UDP that direct connections use (or the STUN "
                        "servers that find your public address).")
         return out
+
+    def connection_report(self: MessagingBackend, hash_id: str, path: str) -> str:
+        """Plain-text summary for troubleshooting a direct connection: what
+        kind of NAT this network has, which address families each side
+        offers, and how recent attempts ended. No IP addresses or ports."""
+        import socket
+
+        from srltcp import __version__
+
+        udp = self.udp
+        answers = udp.stun_answers if udp else {}
+
+        def nat(family: int) -> str:
+            if not udp or not udp.mapped_at:
+                return "not checked yet"
+            if not answers.get(family):
+                return "no answer (no address of this kind, or blocked)"
+            if family == socket.AF_INET6:
+                return "yes (no NAT)"
+            if answers[family] < 2:
+                return "yes (type unknown: only one STUN server answered)"
+            return ("yes, hard NAT (a new port for every destination)" if udp.symmetric
+                    else "yes, easy NAT (same port for every destination)")
+
+        theirs = self._peer_udp.get(hash_id, [])
+        lines = [
+            f"SRLTCP {__version__} connection report",
+            f"Path now: {path or 'not connected'}",
+            f"Direct internet connections: {'on' if self.direct_internet_enabled() else 'off'}",
+            f"Tor (doorbell): {self.tor_status().get('state', 'off')}",
+            f"This phone, IPv4 public address: {nat(socket.AF_INET)}",
+            f"This phone, IPv6: {nat(socket.AF_INET6)}",
+            "Contact offers: "
+            + (", ".join(
+                n for n, ok in (("IPv4", any(':' not in h for h, _p in theirs)),
+                                ("IPv6", any(':' in h for h, _p in theirs))) if ok
+            ) or "nothing yet (not connected over Tor, or their STUN failed)"),
+            f"Failed rounds in a row: {self._punch_failures.get(hash_id, 0)}",
+        ]
+        now = time.time()
+        for when, v4, v6, outcome in self._punch_log.get(hash_id, [])[-5:]:
+            fams = "+".join(f for f, ok in (("IPv4", v4), ("IPv6", v6)) if ok) or "-"
+            lines.append(f"  {int(now - when)} s ago: tried {fams} -> {outcome}")
+        return "\n".join(lines)
 
     async def diagnose_contact(
         self: MessagingBackend, hash_id: str, *, probe_tor: bool = True
@@ -772,14 +784,12 @@ class PunchMixin:
             on_tor = self.tcp_transport is not None and self.tcp_transport.is_tor(
                 link.transport_peer_id
             )
-            path = "relay" if link.transport == "relay" else ("tor" if on_tor else "direct")
+            path = "tor" if on_tor else "direct"
             if path == "direct" and link.address.startswith("udp:"):
                 path = "direct (udp)"
-        relay_ok = self.relay_available_for(hash_id)
-        relay_known = self.pair_relay(hash_id) is not None
         direct_ok = any(r["ok"] for r in results)
         tor_ok, tor_problem = (path == "tor"), self.tor_problem(hash_id)
-        if not direct_ok and not relay_ok and not tor_ok and not tor_problem and probe_tor:
+        if not direct_ok and not tor_ok and not tor_problem and probe_tor:
             try:  # a real test over Tor (only when you press Check connection)
                 tor_peer = await self.dial_onion(hash_id)
                 tor_ok = True
@@ -791,13 +801,11 @@ class PunchMixin:
         blockers = [] if direct_ok or path.startswith("direct") else self._network_blockers(
             hash_id, results
         )
-        if direct_ok:
-            summary = "Reachable directly — no relay needed."
-        elif relay_ok:
-            summary = ("Not reachable directly from this network, but your relay connects you "
-                       "(messages, files and calls all work).")
+        if direct_ok or path.startswith("direct"):
+            summary = "Connected directly."
         elif tor_ok:
-            summary = "Not on the same network, but reachable over Tor."
+            summary = ("Found over Tor; connecting directly (messages and files wait for the "
+                       "direct connection).")
         else:
             summary = "Can't reach this contact right now."
             if tor_problem:
@@ -805,8 +813,6 @@ class PunchMixin:
             if hosts:
                 summary += (" If one of you is on a VPN and the other on the home Wi-Fi, the VPN "
                             "must include the home network (WireGuard AllowedIPs).")
-            if relay_known and not relay_ok:
-                summary += " Your relay isn't connected right now — check Settings → Network."
         if blockers:
             summary += " " + " ".join(blockers)
         return {
@@ -814,9 +820,9 @@ class PunchMixin:
             "path": path,
             "speed": self._speed_advice(hash_id, path),
             "addresses": results,
-            "relay": {"configured": relay_known, "connected": relay_ok},
             "my_addresses": self.local_candidates(),
             "tor": {**self.tor_status(), "contact_has_address": bool(self.peer_onion(hash_id))},
             "network": blockers,
             "summary": summary,
+            "report": self.connection_report(hash_id, path),
         }

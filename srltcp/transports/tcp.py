@@ -28,9 +28,8 @@ log = get_logger(__name__)
 
 def bound_socket(family: int, local_port: int) -> socket.socket:
     """A TCP socket bound to a fixed local port that other outgoing sockets may
-    share (SO_REUSEADDR, never listening): the relay connection and the hole
-    punching dials all leave from the same port, so the NAT maps them the same
-    way and the address the relay reports is the one contacts must dial."""
+    share (SO_REUSEADDR, never listening): the hole punching dials all leave
+    from the same port, so the NAT (or IPv6 firewall) maps them the same way."""
     sock = socket.socket(family, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

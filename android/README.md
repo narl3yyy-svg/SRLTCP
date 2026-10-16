@@ -108,8 +108,8 @@ Incoming and shared files default to `Downloads/SRLTCP/` when storage access is 
 
 ## Internet / network on Android
 
-- **Internet relay:** paste the relay code into **Settings → Network → Internet relay** on one phone; contacts learn it automatically. The app then switches by itself between direct (Wi-Fi / VPN) and the relay. See `docs/INTERNET_RELAY.md`.
-- The foreground service keeps the relay connection (a small ping every 25 s) so messages arrive with the app closed. Swipe the notification away (Android 14+) or tap **Quit** to stop everything.
+- **Other networks:** phones connect directly (UDP over IPv4 and IPv6), finding each other through the built-in Tor; no relays or servers. See `docs/NETWORKING.md`.
+- The foreground service keeps the node running so messages arrive with the app closed. Swipe the notification away (Android 14+) or tap **Quit** to stop everything.
 - Serial transport is disabled on Android (`srltcp/app.py` sets `enable_serial=False`).
 
 ## Troubleshooting

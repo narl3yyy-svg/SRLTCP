@@ -26,7 +26,7 @@ We will acknowledge valid reports, work on a fix, and coordinate disclosure once
 
 ## Security Model
 
-SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over TCP (LAN, VPN, WAN), USB serial, and an optional self-hosted **internet relay**.
+SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over TCP and UDP (LAN, VPN, directly across the internet) and USB serial, with **no relays and no servers** carrying anything; Tor is used only to find contacts on other networks.
 
 ### What is protected
 
@@ -36,12 +36,11 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 - **Session keys** are derived via HKDF-SHA256 from both shared secrets, salted with both ephemeral keys and the ML-KEM transcript, with direction-specific labels.
 - **Replay / reordering** — 64-bit counter nonces with a sliding replay window; the message type and flags are authenticated as AAD. Unencrypted application messages are dropped.
 - **Trust gate** — only trusted contacts' messages, files and share requests are processed; others become contact requests.
-- **Calls** — WebRTC DTLS-SRTP; SDP (with DTLS fingerprints) is exchanged inside the authenticated session, and the media packets are carried inside the session too (a per-device TURN relay bound to the device itself, with per-call credentials, accepting traffic only for the contact being called). No outside STUN/TURN unless you configure one.
+- **Calls** — WebRTC DTLS-SRTP; SDP (with DTLS fingerprints) is exchanged inside the authenticated session, and the media packets are carried inside the session too (a per-device media forwarder bound to the device itself, with per-call credentials, accepting traffic only for the contact being called). No outside STUN/TURN servers.
 - **Address updates** — a contact's stored address is only changed by a fresh (≤ 5 min old) announce signed by that contact's key and newer than any announce seen from it; replayed announces are ignored.
-- **Group chats** — no group key or server: every group message is signed by its author (Ed25519) and sent over the pairwise sessions; the creator relays to members who aren't each other's contacts but cannot alter or forge messages. Member lists are versioned and only accepted from the creator; invites only from trusted contacts; group traffic only from current members. The creator (and every member) sees all group messages and the member list, including members' public keys and names.
+- **Group chats** — no group key or server: every group message is signed by its author (Ed25519) and sent over the pairwise sessions; the creator's phone passes messages on to members who aren't each other's contacts but cannot alter or forge them. Member lists are versioned and only accepted from the creator; invites only from trusted contacts; group traffic only from current members. The creator (and every member) sees all group messages and the member list, including members' public keys and names.
 - **Pairing codes** — signed contact cards; a one-time token (15 min) lets the scanner be trusted back automatically.
-- **Internet relay** (self-hosted, untrusted): TLS 1.3 with the certificate pinned by the relay code and an access key; phones subscribe to daily-rotating mailbox tokens derived from a per-contact secret (exchanged inside the E2EE session), so the relay never learns names, identity hashes or keys; every relayed packet is sealed again with the pair key (ChaCha20-Poly1305, per-direction keys, replay window) and padded to 256 B / 4 KiB buckets. A relay mailbox accepts only the contact it belongs to. The relay stores nothing. Details: docs/INTERNET_RELAY.md.
-- **Pair secrets** live in `trusted.json` (encrypted at rest, owner-only, written atomically) and are never returned by the local API.
+- **Contacts** live in `trusted.json` (encrypted at rest, owner-only, written atomically).
 - **Data at rest** — identity keys, contacts, chats, groups, settings, shares and transfer state are sealed with AES-256-GCM under a random data key (file name bound as associated data). Android: the data key is wrapped by a non-exportable Android Keystore key. Windows: DPAPI (your Windows account). Linux/macOS: an owner-only key file in the data folder (use full-disk encryption). If the data key can't be loaded, or your identity or contacts can't be decrypted, the app stops with an error instead of starting empty (it never creates a new identity over the old one); another damaged file (say, chat history) is moved aside, never overwritten.
 - **Backups** — *Settings → Privacy → Backup*: one file sealed with your password (scrypt N=2¹⁶, r=8 → AES-256-GCM, header authenticated). It holds your identity, contacts, chats, groups and settings; keep it and its password safe, since together they let someone use your identity. Restoring stops the app, replaces those files and restarts.
 - **Folder sync** — a sync exists only between you and one contact, set up by an invitation you accept; sync messages from anyone else are ignored. Every path a contact sends is checked (no `..`, absolute paths, drive letters or the internal `.srltcp-sync` folder), a file is only sent if it's in our index with exactly the requested hash, an incoming file is only accepted if we asked for that exact version, and it's verified by SHA-256 before it replaces anything. Deletes from the contact move files to a 30-day trash instead of erasing them.
@@ -59,29 +58,25 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 | Data | Visibility |
 |------|------------|
 | LAN UDP discovery (7826) | Plaintext names, IPs, ports on the local network — **signed** (Ed25519) since v0.1.57; spoofing without the private key is rejected |
-| Direct internet connections | Your contacts learn your public IP address (shared inside the encrypted session, only with trusted contacts, only while the setting is on), and the STUN server (Google/Cloudflare by default, or yours) learns that your IP uses it — nothing about contacts or content. Network observers see a direct UDP connection between two addresses. Turn it off for Tor/relay only |
-| Internet relay | The relay operator sees your IP address, when you're connected, and roughly how much you send and when; it can delay or drop traffic. It can't see names, identities, who you talk to (beyond guessing from timing), content or message types |
-| WAN / relay TCP | Observers see connection endpoints, timing, and volume — not decrypted payloads |
-| Relay code | Contains the access key: anyone with it can use your relay's bandwidth (but can't read or join anyone's conversations). Rotate by deleting `access.key` |
+| Direct internet connections | Your contacts learn your public IP address (shared inside the encrypted session, only with trusted contacts, only while the setting is on), and the STUN server (Google/Cloudflare by default, or yours) learns that your IP uses it — nothing about contacts or content. Network observers see a direct UDP connection between two addresses. Turn it off to connect only on the same Wi-Fi/VPN |
+| Direct internet traffic | Observers see connection endpoints, timing, and volume — not decrypted payloads |
 | Local disk | Encrypted at rest (see above). Not encrypted: received files in your incoming folder (other apps must open them), the Tor onion key (Tor reads it), the localhost certificate and web token, logs |
 | Android WebView | Pins the app's own localhost certificate (SHA-256); user-installed CAs are not trusted for it; the JavaScript bridge only answers the app's own page |
 | NFC pairing | Contact cards (public data) are exchanged in the clear over a few centimetres |
 | VPN discovery | With discovery on (or after pressing Announce), your signed announce (name, hash ID, public key, addresses) is sent to every address in your VPN subnet, and you answer announces from inside that subnet |
-| External call relay (TURN/STUN) | Only if you configure one (not needed since 0.3.1): it sees both devices' IP addresses and traffic volume, never call content |
 
 ### Connection modes
 
 | Mode | When it's used | Port-forward? |
 |------|----------------|---------------|
 | **LAN / VPN direct** | Whenever it works (always tried first) | No |
-| **Direct across networks (hole punching)** | Two networks whose NATs allow it (most home routers and many carriers), with *Try direct internet connections* on: UDP (encrypted per packet) or TCP; addresses exchanged only inside the E2EE session (over Tor or the relay), so contacts (never strangers) learn your public IP; connection authenticated by the signed handshake | No (sends out only) |
-| **Internet relay** | Automatically when there's no direct path | Only on the relay server (TCP 7827) |
+| **Direct across networks (hole punching)** | Two networks whose NATs allow it (most home routers and many carriers), with *Try direct internet connections* on: UDP (encrypted per packet) or TCP; addresses exchanged only inside the E2EE session (over Tor), so contacts (never strangers) learn your public IP; connection authenticated by the signed handshake | No (sends out only) |
 | **Tor onion service (doorbell)** | Only to find a contact on another network and set up the direct connection: handshake, keep-alives, address swap and hole punching; messages, files, calls, groups, shares and sync are refused over it (they wait for a direct path). Between mutually trusted contacts only (onion address shared inside the E2EE session; Tor connections from non-contacts refused) | No |
 | **Direct WAN** | Advanced: you forward TCP 7825 | Yes, on the reachable peer |
 
 ### Verified contacts
 
-Each contact has a **safety number**: 60 digits computed from both phones' identity keys (Ed25519 and the post-quantum ML-DSA-65 key), the same on both phones. If the numbers match, nobody swapped keys between you, not even when you first connected over Tor, a relay or a network someone else controls.
+Each contact has a **safety number**: 60 digits computed from both phones' identity keys (Ed25519 and the post-quantum ML-DSA-65 key), the same on both phones. If the numbers match, nobody swapped keys between you, not even when you first connected over Tor or a network someone else controls.
 
 - **Automatic when you pair in person.** A pairing QR code (or NFC card) carries a fingerprint of both keys. The phone that scans it marks the contact verified, and the first session must then present exactly that post-quantum key or it is refused. The phone that *showed* the code marks the scanner verified too, because only someone who saw its screen (or touched it, for NFC) had the one-time secret; if you pressed *Copy link* or *Share…* for that code, it doesn't, since the link could have gone anywhere.
 - **Otherwise:** tap the shield next to the contact's name. Scan the code on their phone (they open *Verify* in their chat with you), or compare the numbers in person or on a call and tap *The numbers match*. A code meant for another contact, or one that doesn't match, is refused with a warning.
@@ -92,7 +87,6 @@ Each contact has a **safety number**: 60 digits computed from both phones' ident
 - Peers on the same LAN or serial bus may observe traffic patterns.
 - A contact is only as trustworthy as the way you added them. Pairing **in person** (scanning their QR code, or an NFC tap) verifies their keys at once; for anyone added another way (pasted link, *Discovered*), compare the **safety number** (see *Verified contacts* below) before relying on the contact.
 - LAN announce signatures authenticate discovery metadata but do **not** encrypt it — anyone on the LAN can still observe that you exist and read names/endpoints.
-- Pair locally (or compare the hash ID out of band); the relay is only used between contacts that are already paired.
 - Blocked peers are rejected at the application layer but may still appear in discovery until the entry expires.
 
 ## Hardening Guidelines for Operators
@@ -104,13 +98,6 @@ Each contact has a **safety number**: 60 digits computed from both phones' ident
 - Run the web UI on localhost; **do not** expose port **9876** to the internet.
 - File chunks use the same session keys as chat — larger TCP chunks do not reduce encryption strength.
 - Shared-folder grants are recipient-bound and time-limited; use E2EE peer share for sensitive folders.
-
-### Internet relay server
-
-- Open only the relay port (TCP 7827, or 443) on the server; never port 9876.
-- Run it as an unprivileged user with the sandboxed systemd unit in `scripts/srltcp-relay.service`; keep the OS and Python patched.
-- Keep the relay code private (it has the access key); rotate it by deleting `access.key` and restarting.
-- Don't add logging of tokens or packet sizes — the relay only logs counters by design.
 
 ### Direct WAN (advanced)
 

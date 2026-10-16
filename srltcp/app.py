@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
 import sys
 
 from srltcp import __version__
@@ -15,7 +14,6 @@ from srltcp.core.messaging.constants import (
     WEB_PORT,
 )
 from srltcp.core.node import SRLTCPNode
-from srltcp.core.relay_proto import DEFAULT_RELAY_PORT
 from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.utils.logging import get_logger, setup_logging
 from srltcp.utils.platform import default_serial_port
@@ -78,21 +76,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Verbose debug logging (all backend activity)",
     )
 
-    for name in ("relay", "hub"):  # "hub" kept as an alias for older docs
-        relay = sub.add_parser(
-            name,
-            help="Run an internet relay (on a server with a public address)"
-            if name == "relay"
-            else "Alias for 'relay'",
-        )
-        relay.add_argument("--bind", default="0.0.0.0", help="Bind address (:: for IPv6 too)")
-        relay.add_argument("--port", type=int, default=DEFAULT_RELAY_PORT, help="TCP port")
-        relay.add_argument(
-            "--public-host", default="", help="Public IP or hostname to put in the relay code"
-        )
-        relay.add_argument("--data-dir", default="", help="Where the relay keeps its keys")
-        relay.add_argument("--log-level", default="INFO", help="Log level")
-
     send = sub.add_parser("send", help="Send a message (CLI)")
     send.add_argument("--recipient", required=True, help="Recipient hash ID")
     send.add_argument("--text", required=True, help="Message text")
@@ -118,9 +101,6 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         tcp_port=tcp_port,
         discovery_port=discovery_port,
         strict_ports=settings.strict_ports,
-        relay_enabled=settings.relay_enabled,
-        relay_code=settings.relay_code,
-        relay_first_restricted=settings.relay_first_restricted,
         direct_internet=settings.direct_internet,
         stun_servers=settings.stun_servers,
         tor_enabled=settings.tor_enabled,
@@ -242,12 +222,6 @@ def migrate_settings(settings: AppSettings, *, android: bool) -> bool:
             settings.auto_announce = True
             changed = True
     return changed
-
-
-async def run_relay_command(args: argparse.Namespace) -> None:
-    from srltcp.core.relay_server import run_relay
-
-    await run_relay(args.bind, args.port, args.public_host, args.data_dir or None)
 
 
 async def run_send(args: argparse.Namespace) -> None:
@@ -454,9 +428,6 @@ def main() -> None:
 
     if args.command == "web":
         asyncio.run(run_web(args))
-    elif args.command in ("relay", "hub"):
-        with contextlib.suppress(KeyboardInterrupt):
-            asyncio.run(run_relay_command(args))
     elif args.command == "send":
         asyncio.run(run_send(args))
     elif args.command == "identity":

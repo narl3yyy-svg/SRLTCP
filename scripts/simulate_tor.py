@@ -75,7 +75,7 @@ def node(base: Path, name: str, tor: bool = True) -> MessagingBackend:
     os.environ["SRLTCP_DATA_DIR"] = str(data)
     backend = MessagingBackend(NodeConfig(
         name=name, bind_host="127.0.0.1", tcp_port=0, discovery_port=0, strict_ports=True,
-        incoming_dir=str(data / "in"), tor_enabled=tor, relay_enabled=False,
+        incoming_dir=str(data / "in"), tor_enabled=tor,
     ))
     if ANDROID_STYLE and name == "alice":
         _mimic_android(backend)

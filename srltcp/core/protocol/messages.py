@@ -33,7 +33,7 @@ class MessageType(IntEnum):
     SYNC = 0x42  # folder sync (sync.py)
     RECEIPT = 0x21
     PAIR = 0x22
-    RENDEZVOUS = 0x23  # pair-secret contribution + relay code + addresses
+    RENDEZVOUS = 0x23  # our current addresses (LAN/VPN, public, onion)
     PUNCH = 0x24  # hole punching offer/answer (punch.py)
     CALL_SIGNAL = 0x60
     CALL_MEDIA = 0x61
@@ -46,7 +46,7 @@ class MessageType(IntEnum):
 class Flags:
     COMPRESSED = 0x01
     ENCRYPTED = 0x02
-    RELAY = 0x04
+    RELAY = 0x04  # (retired: was the internet relay)
     E2EE = 0x08
 
 

@@ -68,6 +68,10 @@ class PingMixin:
                     await self.expire_messages()
                 except Exception as exc:  # noqa: BLE001 - keep the loop alive
                     log.debug("Stale offer check failed: %s", exc)
+                try:
+                    await self.maintain_paths()  # Tor-only sessions → direct
+                except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                    log.debug("Path check failed: %s", exc)
                 if tick:
                     try:
                         await self.reap_dead_links(LINK_DEAD_AFTER)
@@ -89,7 +93,7 @@ class PingMixin:
     async def _watch_network(self: MessagingBackend) -> None:
         """Notice right away when an interface goes away (VPN switched off,
         Wi-Fi lost): drop direct sessions that used it so they move to the
-        relay within seconds instead of waiting ~50 s for pings to fail."""
+        other paths within seconds instead of waiting ~50 s for pings to fail."""
         last: set[str] = set()
         while self._running:
             await asyncio.sleep(NETWORK_CHECK_EVERY)
@@ -109,8 +113,6 @@ class PingMixin:
                         if self._on_link_down:
                             await self._on_link_down(hash_id, name)
                         self._kick_connect(hash_id)
-                self.network_changed_for_paths()  # (a new Wi-Fi may not keep devices apart)
-                await self.relay_network_changed(ips)
                 await self.addresses_changed()
                 await self._refresh_udp()  # new network: new public UDP address
                 if ips - last:

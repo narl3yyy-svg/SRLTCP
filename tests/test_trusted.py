@@ -120,7 +120,6 @@ def test_contact_with_generic_name_and_pinned_key_survives_reload(tmp_path: Path
     store = TrustedStore(tmp_path / "trusted.json")
     key = ident.public_bytes().hex()
     store.add(TrustedPeer(hash_id=ident.hash_id, name="peer", public_key=key))
-    store.update(ident.hash_id, pair_own="ab" * 32, pair_peer="cd" * 32)
     reloaded = TrustedStore(tmp_path / "trusted.json")
     assert reloaded.get(ident.hash_id) is not None
 

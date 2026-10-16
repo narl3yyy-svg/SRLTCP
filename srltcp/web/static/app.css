@@ -1717,12 +1717,11 @@ html, body { touch-action: pan-x pan-y; }
 .contact .group-avatar svg { width: 18px; height: 18px; }
 #chat-active.group-chat .status-dot { display: none; }
 
-/* ── Internet relay settings ── */
-.relay-settings, .settings-group { border: 1px solid var(--border, rgba(255,255,255,0.08)); border-radius: 10px; padding: 0.75rem 0.9rem; margin: 0.75rem 0; }
-.relay-settings legend, .settings-group legend { padding: 0 0.35rem; font-weight: 600; }
-.relay-status { white-space: pre-line; font-size: 0.8rem; color: var(--text-muted, #8b93a8); margin: 0.25rem 0 0.5rem; overflow-wrap: anywhere; }
-.relay-status.ok { color: var(--success, #3ecf8e); }
-.transport-badge.relay { background: rgba(176, 132, 255, 0.15); color: #b084ff; }
+/* ── Network settings ── */
+.net-settings, .settings-group { border: 1px solid var(--border, rgba(255,255,255,0.08)); border-radius: 10px; padding: 0.75rem 0.9rem; margin: 0.75rem 0; }
+.net-settings legend, .settings-group legend { padding: 0 0.35rem; font-weight: 600; }
+.net-status { white-space: pre-line; font-size: 0.8rem; color: var(--text-muted, #8b93a8); margin: 0.25rem 0 0.5rem; overflow-wrap: anywhere; }
+.net-status.ok { color: var(--success, #3ecf8e); }
 .transport-badge.connecting { background: rgba(240, 180, 60, 0.15); color: #f0b43c; }
 
 /* ── Share window ── */
@@ -1773,14 +1772,3 @@ html, body { touch-action: pan-x pan-y; }
   background: #111; color: var(--warning, #e0a63b); font-weight: 600;
 }
 
-.relay-guide { margin: 0.6rem 0; font-size: 0.85rem; }
-.relay-guide summary { cursor: pointer; font-weight: 600; }
-.relay-guide ol { padding-left: 1.2rem; line-height: 1.5; }
-.relay-guide li { margin: 0.4rem 0; }
-.relay-cmd {
-  margin: 0.4rem 0; padding: 0.5rem 0.6rem; border-radius: 6px; overflow-x: auto;
-  white-space: pre-wrap; word-break: break-all; font-size: 0.75rem;
-  background: var(--bg-secondary, #111); border: 1px solid var(--border);
-}
-#relay-camera { width: 100%; max-height: 240px; border-radius: 8px; margin-top: 0.5rem; }
-#relay-camera.hidden { display: none; }

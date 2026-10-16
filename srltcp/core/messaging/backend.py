@@ -23,9 +23,9 @@ from srltcp.core.messaging.groups import GroupMixin
 from srltcp.core.messaging.links import PeerLink, PeerLinkMixin
 from srltcp.core.messaging.models import ChatMessage, FileTransfer
 from srltcp.core.messaging.pairing import PairingMixin
+from srltcp.core.messaging.paths import PathsMixin
 from srltcp.core.messaging.ping import PingMixin
 from srltcp.core.messaging.punch import PunchMixin
-from srltcp.core.messaging.relay import RelayMixin, relay_peer_hash
 from srltcp.core.messaging.share_peer import SharePeerMixin
 from srltcp.core.messaging.store import MessageStore
 from srltcp.core.messaging.sync import SyncMixin
@@ -76,9 +76,6 @@ class NodeConfig:
     tcp_port: int = 7825
     discovery_port: int = DISCOVERY_PORT
     strict_ports: bool = True
-    relay_enabled: bool = True
-    relay_code: str = ""
-    relay_first_restricted: bool = False  # restricted network: relay at once (opt-in)
     direct_internet: bool = True  # hole punching; shares public IP with contacts
     stun_servers: str = ""  # for direct UDP ("host:port, ..."; empty = defaults)
     tor_enabled: bool = False  # reach contacts over Tor (onion service)
@@ -102,7 +99,7 @@ class MessagingBackend(
     PingMixin,
     TransferMixin,
     SharePeerMixin,
-    RelayMixin,
+    PathsMixin,
     PairingMixin,
     GroupMixin,
     PunchMixin,
@@ -148,7 +145,7 @@ class MessagingBackend(
         self._init_ping()
         self._init_transfer()
         self._init_share_peer()
-        self._init_relay()
+        self._init_paths()
         self._init_punch()
         self._init_tor()
         self._init_pairing()
@@ -222,17 +219,15 @@ class MessagingBackend(
         await self.start_call_relay()
         if self.tcp_transport:
             await self.start_udp()
-            await self.start_relay_client()
         await self.start_tor()
         self.connect_known_contacts()
         if self._syncs:
             self._ensure_sync_loop()
 
         log.info(
-            "MessagingBackend started (tcp=%s, serial=%s, relay=%s)",
+            "MessagingBackend started (tcp=%s, serial=%s)",
             bool(self.tcp_transport),
             bool(self.serial_transport),
-            bool(self.own_relay_code()),
         )
 
     async def stop(self) -> None:
@@ -246,7 +241,6 @@ class MessagingBackend(
         self._dial_tasks.clear()
         await self.stop_sync_loop()
         await self.stop_tor()
-        await self.stop_relay_client()
         await self.stop_announce_loop()
         await self.stop_ping_loop()
         for task in list(self._reconnect_tasks.values()):
@@ -471,8 +465,6 @@ class MessagingBackend(
             if msg_type in SESSION_MESSAGE_TYPES:
                 await self._dispatch_session_message(peer, msg_type, flags, body)
             elif msg_type == MessageType.ANNOUNCE:
-                if peer.transport == "relay":
-                    return  # addresses only come from the local network
                 if peer.transport == "serial":
                     log.info("Serial ANNOUNCE received on %s", peer.address)
                 await self._handle_discovered(peer.address, peer.transport, body)
@@ -849,7 +841,6 @@ class MessagingBackend(
                 continue
             if (
                 peer.tcp_host or peer.alt_hosts or peer.wan_host
-                or self.relay_available_for(peer.hash_id)
                 or (self.tor_ready() and peer.onion)
             ):
                 self._kick_connect(peer.hash_id)
@@ -996,12 +987,7 @@ class MessagingBackend(
         await self._on_event({"kind": "call_signal", "hash_id": hash_id, "signal": data})
 
     async def _send_raw(self, peer_id: str, transport: str, packet: bytes) -> None:
-        if transport == "relay":
-            dest_hash = relay_peer_hash(peer_id)
-            if not dest_hash:
-                raise KeyError("bad relay peer")
-            await self.send_via_relay(dest_hash, packet)
-        elif transport == "tcp" and self.tcp_transport:
+        if transport == "tcp" and self.tcp_transport:
             await self.tcp_transport.send(peer_id, packet)
         elif transport == "serial" and self.serial_transport:
             await self.serial_transport.send(peer_id, packet)
@@ -1043,7 +1029,6 @@ class MessagingBackend(
                 "baud": self.config.serial_baud,
                 "error": self._serial_error,
             }
-        status["relay"] = self.relay_status()
         status["tor"] = self.tor_status()
         return status
 
@@ -1166,11 +1151,7 @@ class MessagingBackend(
             d["name"] = name
             d["verified"] = self.contact_verified(p.hash_id)
             link = self.get_link(p.hash_id)
-            d["path"] = (
-                ("relay" if link.transport == "relay" else "direct")
-                if link and link.handshake_complete
-                else ""
-            )
+            d["path"] = "direct" if link and link.handshake_complete else ""
             if link:
                 if link.rtt_ms is not None:
                     d["rtt_ms"] = link.rtt_ms

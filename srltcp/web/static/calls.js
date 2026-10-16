@@ -3,8 +3,8 @@
  * WebRTC (DTLS-SRTP). Call setup (SDP offer/answer + ICE candidates) is
  * relayed through the existing end-to-end encrypted SRLTCP session, so the
  * DTLS fingerprints are authenticated by the contact's identity key. The media
- * goes through this node's local TURN relay, which carries it inside the same
- * encrypted session — no third-party signalling or relay servers.
+ * goes through this phone's own local media forwarder (127.0.0.1), which carries
+ * it inside the same encrypted session — no third-party signalling, STUN/TURN or relay servers.
  */
 (() => {
   "use strict";
@@ -78,26 +78,16 @@
     setTimeout(() => earlyIce.delete(key), 30000);
   }
 
-  // ICE config for one call. Normally our node's local relay: media then
-  // travels inside the encrypted SRLTCP session, so calls work wherever text
-  // does (LAN, VPN, hub) without depending on WebRTC finding a direct path.
+  // ICE config for one call: this phone's own local media forwarder (on
+  // 127.0.0.1). Media then travels inside the encrypted SRLTCP session over
+  // the direct connection, so calls work wherever text does; no outside
+  // STUN/TURN servers.
   async function iceConfig(peer) {
     try {
       const res = await fetch(`/api/call/ice?peer=${encodeURIComponent(peer)}`, { credentials: "same-origin" });
       if (res.ok) return await res.json();
     } catch (_) { /* fall through */ }
-    const st = app().getSettings?.() || {};
-    const url = (st.call_stun_server || "").trim();
-    const servers = [];
-    if (url) {
-      const server = { urls: url };
-      if (/^turns?:/.test(url) && st.call_turn_username) {
-        server.username = st.call_turn_username;
-        server.credential = st.call_turn_password || "";
-      }
-      servers.push(server);
-    }
-    return { iceServers: servers };
+    return { iceServers: [] };
   }
 
   function newCallId() {

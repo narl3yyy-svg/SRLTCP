@@ -14,7 +14,7 @@ Protocol (every message travels inside the session)::
 - Window: the sender keeps at most one path's window of unconfirmed bytes in
   flight. That keeps a fast link busy, bounds the receiver's memory and makes
   the sender's progress bar show what has really arrived.
-- Recovery: no confirmation for a while or a path switch (relay -> direct)
+- Recovery: no confirmation for a while or a path switch (e.g. a new network)
   makes the sender go back to the last confirmed byte; the
   receiver drops what it already has. A transfer survives link drops and
   path changes without corrupting the file.
@@ -470,8 +470,6 @@ class TransferMixin:
                 C.SERIAL_CHUNK_SIZE, C.SERIAL_WINDOW, C.TRANSFER_STALL_SLOW, 0,
                 C.SERIAL_CHUNK_DELAY,
             )
-        if link.transport == "relay":
-            return PathParams(C.RELAY_CHUNK_SIZE, C.RELAY_WINDOW, C.TRANSFER_STALL_SLOW, 3)
         if link.address.startswith("udp:"):
             return PathParams(C.UDP_CHUNK_SIZE, C.CHUNK_WINDOW, C.TRANSFER_STALL, 1)
         return PathParams(C.CHUNK_SIZE, C.CHUNK_WINDOW, C.TRANSFER_STALL, 1)

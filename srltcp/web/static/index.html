@@ -221,57 +221,27 @@
 </fieldset>
 </div>
 <div class="settings-panel" data-panel="network">
-<p class="hint">Most people never need to change anything here. SRLTCP picks the best path by itself: same Wi-Fi or VPN first, then a direct internet connection, then your relay. Tor only helps devices on different networks find each other; nothing is sent over it.</p>
-<fieldset class="relay-settings">
+<p class="hint">Most people never need to change anything here. SRLTCP connects phones straight to each other — no relays, no servers in between: same Wi-Fi or VPN first, otherwise directly across the internet (IPv4 through carrier NAT, and IPv6). Tor only helps two phones on different networks find each other and swap addresses; nothing you send goes over it.</p>
+<fieldset class="net-settings">
 <legend>Over the internet</legend>
 <label class="field checkbox-field">
-<input type="checkbox" id="set-relay-enabled" />
-<span>Use the internet when there's no LAN/VPN path</span>
-</label>
-<label class="field">
-<span>Relay code</span>
-<input type="text" id="set-relay-code" placeholder="srltcp-relay://… (from the srltcp relay command)" autocomplete="off" spellcheck="false" />
-<small>Run <code>srltcp relay</code> on a server you control and paste its code on <strong>one</strong> phone — contacts get it automatically, inside the encrypted connection. Leave empty if a contact already has one.</small>
-</label>
-<button type="button" class="btn btn-secondary btn-sm" id="btn-scan-relay">Scan relay code</button>
-<video id="relay-camera" class="hidden" playsinline muted></video>
-<details class="relay-guide">
-<summary>Set up your own relay (5 minutes)</summary>
-<ol>
-<li>Rent the smallest Linux server any cloud provider offers (Ubuntu or Debian, a public IPv4 address; about $4–6 a month) or use one you have.</li>
-<li>Log in to it and run:
-<pre class="relay-cmd" id="relay-cmd">curl -fsSLO https://raw.githubusercontent.com/narl3yyy-svg/SRLTCP/main/scripts/install-relay.sh &amp;&amp; sudo bash install-relay.sh</pre>
-<button type="button" class="btn btn-secondary btn-sm" id="btn-copy-relay-cmd">Copy command</button>
-It installs the relay as a service on port 443 (the standard web port), starts it after every reboot, and at the end shows the relay code and a QR code. Running it again updates the relay.</li>
-<li>Here, tap <strong>Scan relay code</strong> and scan that QR code (or paste the code above). One phone is enough: your contacts get it inside the encrypted connection.</li>
-</ol>
-<small>The relay only passes on sealed, padded packets between your phones: it can't read messages or files, see names or fake anything. It sees IP addresses, timing and amounts. Keep the code private (it contains the access key).</small>
-</details>
-<label class="field checkbox-field">
-<input type="checkbox" id="set-relay-first" />
-<span>Relay first on restricted networks</span>
-</label>
-<small class="field-hint">Off by default. When this network can't carry a direct connection to a contact (a Wi-Fi that keeps devices apart, like plane or hotel Wi-Fi, or both of you behind the same public address, like Starlink), go straight to your relay instead of trying direct first, and stop direct tries that can't work there (saves time and battery). Back to normal on the next network. Needs your relay, and a network that allows ordinary internet traffic.</small>
-<label class="field checkbox-field">
 <input type="checkbox" id="set-direct-internet" />
-<span>Try direct internet connections</span>
+<span>Direct internet connections</span>
 </label>
-<small class="field-hint">Full speed between different networks (two mobile carriers, home Wi-Fi): the devices connect straight to each other over UDP, the way video calls do, finding each other through Tor or your relay. No port forwarding. Your public IP address is shared only with your contacts, inside the encrypted connection, and a STUN server (below) learns it too; on a direct connection your network can see which IP you talk to. Off = only the same network or your relay carry messages (never Tor): contacts never see your IP.</small>
+<small class="field-hint">Phone to phone across networks (two mobile carriers, mobile data and a home Wi-Fi): the devices connect straight to each other over UDP, the way video calls do. No port forwarding. Your public IP address is shared only with your contacts, inside the encrypted connection, and a STUN server (below) learns it too; your network sees which IP you talk to. Off = only the same Wi-Fi or VPN: contacts never see your IP.</small>
 <label class="field">
 <span>STUN servers</span>
 <input type="text" id="set-stun-servers" placeholder="Default: Google and Cloudflare" autocomplete="off" spellcheck="false" />
-<small>Tell this device its public address for direct connections; they see your IP address, nothing else. <code>host:port</code>, separated by commas. Leave empty for the defaults.</small>
+<small>Only tell this device its public address (they see your IP address, nothing you send). <code>host:port</code>, separated by commas. Leave empty for the defaults.</small>
 </label>
-<div class="relay-status" id="relay-status" aria-live="polite"></div>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-tor-enabled" />
 <span>Find contacts on other networks (Tor)</span>
 </label>
-<small class="field-hint">How two devices on different networks find each other, with no server and no port forwarding: Tor is used only to set up the direct connection. Messages, files and calls never go over Tor; they wait for the direct connection (the chat shows CONNECTING meanwhile). Only your trusted contacts get your Tor address (inside the encrypted connection), and only they can connect through it. Both of you need it on. Tor is built into the Android app; on a PC install Tor Browser.</small>
-<div class="relay-status" id="tor-status" aria-live="polite"></div>
-<small class="field-hint">The relay only forwards sealed, padded packets: it can't read messages, see names or who you talk to, or fake anything. See the Networking guide in the docs for details.</small>
+<small class="field-hint">How two phones on different networks find each other with no server of anyone's: only to swap addresses and set up the direct connection. Messages, files and calls never go over Tor; they wait for the direct connection (the header shows CONNECTING meanwhile). Only your trusted contacts get your Tor address (inside the encrypted connection), and only they can connect through it. Both of you need it on. Built into the Android app; on a PC install Tor Browser.</small>
+<div class="net-status" id="tor-status" aria-live="polite"></div>
 </fieldset>
-<fieldset class="relay-settings">
+<fieldset class="net-settings">
 <legend>Same Wi-Fi / VPN</legend>
 <label class="field">
 <span>Network interface / IP</span>
@@ -285,7 +255,7 @@ It installs the relay as a service on port 443 (the standard web port), starts i
 </fieldset>
 <button type="button" class="action-btn" id="btn-network-viz">Network map</button>
 <details class="edit-advanced">
-<summary>More network options (ports, protocol, call relay)</summary>
+<summary>More network options (ports, Tor program)</summary>
 <label class="field">
 <span>Web UI port (HTTPS)</span>
 <input type="number" id="set-web-port" min="1024" max="65535" />
@@ -306,22 +276,13 @@ It installs the relay as a service on port 443 (the standard web port), starts i
 <span>Use exact ports (fail if busy instead of trying the next free one)</span>
 </label>
 <label class="field">
-<span>External call relay — TURN/STUN server (leave empty)</span>
-<input type="text" id="set-stun" placeholder="Leave empty — calls already work without it" spellcheck="false" />
-<small>You don't need this: voice and video calls travel inside SRLTCP's own encrypted connection, so they work wherever messages work (Wi-Fi, VPN, direct internet connections, relay). Only fill it in if you run your own TURN server (for example coturn) and want calls to use it as a last resort: enter its address like <code>turn:your.server:3478</code>, then the username and password you configured on that server. Calls stay end-to-end encrypted (DTLS-SRTP); the server only sees encrypted traffic and both IP addresses.</small>
-</label>
-<div class="field-row" id="turn-credentials">
-<label class="field grow"><span>TURN username</span><input type="text" id="set-turn-user" autocomplete="off" spellcheck="false" /></label>
-<label class="field grow"><span>TURN password</span><input type="password" id="set-turn-pass" autocomplete="new-password" /></label>
-</div>
-<label class="field">
 <span>Tor program (PC only, optional)</span>
 <input type="text" id="set-tor-path" placeholder="Found automatically (Tor Browser, Tor Expert Bundle, or tor on PATH)" spellcheck="false" />
 <small>Full path to tor.exe if it's somewhere unusual, e.g. <code>C:\Tor\tor\tor.exe</code>.</small>
 </label>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-wan-expose" />
-<span>I port-forward TCP 7825 on my router (old manual setup; not needed with the relay)</span>
+<span>I port-forward TCP 7825 on my router (optional; direct connections work without it)</span>
 </label>
 </details>
 </div>

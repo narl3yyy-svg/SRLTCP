@@ -11,7 +11,7 @@ def test_settings_defaults(tmp_path: Path) -> None:
     store = SettingsStore(path=tmp_path / "settings.json")
     settings = store.load()
     assert settings.auto_announce is True
-    assert settings.version == "0.12.3"
+    assert settings.version == "0.13.0"
     assert settings.tcp_port == 7825
     assert settings.discovery_port == 7826
     assert settings.strict_ports is True
@@ -38,17 +38,18 @@ def test_settings_persist(tmp_path: Path) -> None:
     assert loaded.message_retention_hours == 24
 
 
-def test_relay_settings_persist_and_old_hub_keys_are_ignored(tmp_path: Path) -> None:
+def test_old_relay_and_hub_keys_are_ignored(tmp_path: Path) -> None:
+    """Relays are gone (0.13): settings files from older versions still load."""
     import json
 
     path = tmp_path / "settings.json"
-    path.write_text(json.dumps({"hub_enabled": True, "hub_host": "old.example.com"}))
-    store = SettingsStore(path=path)
-    settings = store.load()
-    assert not hasattr(settings, "hub_host")
-    settings.relay_code = "srltcp-relay://relay.example.com:443#x.y"
-    store.save(settings)
-    assert store.load().relay_code == settings.relay_code
+    path.write_text(json.dumps({
+        "hub_enabled": True, "hub_host": "old.example.com", "relay_enabled": True,
+        "relay_code": "srltcp-relay://relay.example.com:443#x.y", "call_stun_server": "turn:x:1",
+    }))
+    settings = SettingsStore(path=path).load()
+    for key in ("hub_host", "relay_code", "relay_enabled", "call_stun_server"):
+        assert not hasattr(settings, key)
 
 
 def test_handshake_protocol_persist(tmp_path: Path) -> None:

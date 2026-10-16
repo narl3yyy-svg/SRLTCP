@@ -1,3 +1,5 @@
+> **Note (0.13.0):** the internet relay audited below was removed in 0.13.0; SRLTCP no longer has relays or servers. The rest of this audit still applies.
+
 # Security audit and penetration test (v0.7.2)
 
 Scope: the whole app — local web UI/API, peer protocol, file transfers and shared

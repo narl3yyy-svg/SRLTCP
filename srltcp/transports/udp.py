@@ -8,7 +8,7 @@ firewalls drop it. UDP gets through far more often, the way video calls do:
    socket has on the internet (``refresh_mapping``). IPv6 needs no STUN.
 2. The devices swap those candidates, a random key contribution each and a
    connection id inside the end-to-end encrypted session they already have
-   (Tor or a relay: see ``punch.py``).
+   (Tor, the doorbell: see ``punch.py``).
 3. Both send probes to each other's candidates at once. Each NAT sees the
    other's packets as replies to its own and lets them in (hole punching).
    The first authenticated packet that arrives fixes the path.
@@ -1243,6 +1243,7 @@ class UdpEndpoint:
         self.mapped: dict[int, tuple[str, int]] = {}  # family -> public address:port
         self.mapped_at = 0.0
         self.symmetric = False  # different ports towards different servers: punching rarely works
+        self.stun_answers: dict[int, int] = {}  # family -> how many STUN servers answered
 
     async def start(self) -> None:
         self._socks = await self._open(self.requested_port)
@@ -1478,6 +1479,7 @@ class UdpEndpoint:
             symmetric = symmetric or len(ports) > 1
             mapped[family] = found[0]
         self.mapped, self.mapped_at, self.symmetric = mapped, time.monotonic(), symmetric
+        self.stun_answers = {family: len(found) for family, found in results.items()}
         return mapped
 
     def _on_stun(self, data: bytes, addr: tuple[str, int]) -> None:

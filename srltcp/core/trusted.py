@@ -29,10 +29,10 @@ _FIXTURE_HASHES = frozenset(
 def is_fixture_peer(peer: TrustedPeer) -> bool:
     """Detect pytest/dev fixture peers that leaked into the live data dir.
 
-    A contact that ever completed a handshake has a pinned public key (and
-    usually pair secrets); those are never fixtures, whatever their name —
-    a real contact added before its name was known is still a contact."""
-    if peer.public_key or peer.pair_own or peer.pair_peer:
+    A contact that ever completed a handshake has a pinned public key; those
+    are never fixtures, whatever their name — a real contact added before its
+    name was known is still a contact."""
+    if peer.public_key or peer.pq_key:
         return False
     return peer.hash_id in _FIXTURE_HASHES or (
         peer.name.strip().lower() in _GENERIC_NAMES
@@ -60,11 +60,8 @@ class TrustedPeer:
     added_at: float = field(default_factory=time.time)
     # Other addresses from the contact card (e.g. Wi-Fi + WireGuard), tried in order.
     alt_hosts: list[str] = field(default_factory=list)
-    # Internet relay (relay.py): our and their random contribution to the pair
-    # secret, and their relay code. Secret material — never sent to the UI.
-    pair_own: str = ""
-    pair_peer: str = ""
-    relay_code_peer: str = ""
+    # (Relay pair secrets and relay codes, used before 0.13, are no longer
+    # kept: files with them still load and lose them on the next save.)
     # One-time token from their QR/link that we still have to send back
     # (inside the encrypted session) so they add us too. Cleared once sent.
     pair_token_out: str = ""
@@ -84,15 +81,11 @@ class TrustedPeer:
         return asdict(self)
 
     def public_dict(self) -> dict[str, Any]:
-        """What the local UI/API may see: no pair secrets or relay keys."""
+        """What the local UI/API may see: no tokens or pinned keys."""
         data = asdict(self)
-        for key in (
-            "pair_own", "pair_peer", "relay_code_peer", "pair_token_out", "pq_key",
-            "pq_expect", "verified",
-        ):
+        for key in ("pair_token_out", "pq_key", "pq_expect", "verified"):
             data.pop(key, None)
         data["pq_pinned"] = bool(self.pq_key)
-        data["relay_ready"] = bool(self.pair_own and self.pair_peer)
         return data
 
 
@@ -136,7 +129,7 @@ class TrustedStore:
             self.save()
 
     def save(self) -> None:
-        # Encrypted, owner-only and atomic: the file holds the relay pair secrets.
+        # Encrypted, owner-only and atomic: it says who your contacts are.
         data: dict[str, Any] = {"peers": [p.to_dict() for p in self._peers.values()]}
         if self.removed:
             data["removed"] = self.removed
@@ -216,9 +209,6 @@ class TrustedStore:
         wan_enabled: bool | None = None,
         connection_mode: str | None = None,
         alt_hosts: list[str] | None = None,
-        pair_own: str | None = None,
-        pair_peer: str | None = None,
-        relay_code_peer: str | None = None,
         pair_token_out: str | None = None,
         onion: str | None = None,
         pq_key: str | None = None,
@@ -246,12 +236,6 @@ class TrustedStore:
             peer.connection_mode = connection_mode
         if alt_hosts is not None:
             peer.alt_hosts = [h.strip() for h in alt_hosts if h.strip()][:4]
-        if pair_own is not None:
-            peer.pair_own = pair_own
-        if pair_peer is not None:
-            peer.pair_peer = pair_peer
-        if relay_code_peer is not None:
-            peer.relay_code_peer = relay_code_peer
         if pair_token_out is not None:
             peer.pair_token_out = pair_token_out
         if onion is not None:

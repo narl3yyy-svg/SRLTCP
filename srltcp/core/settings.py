@@ -102,14 +102,6 @@ class AppSettings:
     clock_source: str = "system"
     ntp_server: str = "pool.ntp.org"
     wan_expose_port: bool = False
-    # Internet relay (srltcp relay): code pasted by the user; contacts get it
-    # inside the encrypted session. Direct LAN/VPN paths are always preferred.
-    relay_enabled: bool = True
-    relay_code: str = ""
-    # Off by default. On networks that keep devices apart or share one public
-    # address with the contact (planes, hotels): go straight to your relay and
-    # skip direct attempts that can't work there.
-    relay_first_restricted: bool = False
     # Direct connections across networks (hole punching). Shares your public
     # address with your contacts (only them, inside the encrypted session).
     direct_internet: bool = True
@@ -126,10 +118,7 @@ class AppSettings:
     # this many seconds (0 = keep). One of disappear.CHOICES.
     disappear_seconds: int = 0
     handshake_protocol: str = "identity"
-    call_stun_server: str = ""  # stun:/turn:/turns: URL (empty = direct only)
-    call_turn_username: str = ""
-    call_turn_password: str = ""
-    version: str = "0.12.3"
+    version: str = "0.13.0"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:
