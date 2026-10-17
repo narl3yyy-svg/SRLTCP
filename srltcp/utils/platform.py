@@ -42,6 +42,22 @@ def data_dir() -> Path:
     return base
 
 
+def resolve_serial_port(saved: str) -> str:
+    """The adapter to open. Android: the saved one while it's plugged in;
+    otherwise ("Automatic", or the saved one is gone) the adapter plugged in
+    most recently, so a new radio is used as soon as it's plugged in. PC:
+    the saved port, else the default one."""
+    if is_android():
+        from srltcp.transports.android_serial import list_ports
+
+        ports = list_ports()
+        if saved and any(p["device"] == saved for p in ports):
+            return saved
+        newest = max(ports, key=lambda p: int(p.get("attached") or 0), default=None)
+        return str(newest["device"]) if newest else ""
+    return saved or default_serial_port()
+
+
 def default_serial_port() -> str:
     if is_android():
         from srltcp.transports.android_serial import list_ports

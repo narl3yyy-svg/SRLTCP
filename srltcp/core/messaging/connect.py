@@ -51,7 +51,7 @@ def _unb64(value: object, size: int) -> bytes:
     return raw
 
 PENDING_HANDSHAKE_TTL = 15.0
-SERIAL_HANDSHAKE_TTL = 90.0
+SERIAL_HANDSHAKE_TTL = 180.0
 DIRECT_ALIVE_WINDOW = 15.0  # a direct session heard from this recently is working (pings: 10 s)
 HANDSHAKE_VERSION = 6  # v6: hybrid post-quantum (X25519+ML-KEM-768, Ed25519+ML-DSA-65)
 # v5: windowed file transfers (FILE_ACK), Tor lanes
@@ -65,6 +65,9 @@ class ConnectMixin:
 
     def _init_connect(self: MessagingBackend) -> None:
         self._pending_handshakes = {}
+        # Our last few handshake tries per contact: on a slow radio, the
+        # answer to an earlier try can arrive after we tried again.
+        self._recent_tries: dict[str, list[KeyExchange]] = {}
         self._seen_handshake_nonces: dict[bytes, float] = {}
         self._connect_locks: dict[str, asyncio.Lock] = {}
         self._last_wan_dial: dict[str, float] = {}
@@ -245,11 +248,16 @@ class ConnectMixin:
             existing = None
 
         if existing and not existing.handshake_complete and not force:
+            pending = self._pending_handshakes.get(hash_id)
+            if (
+                existing.transport == "serial" and transport != "serial" and pending is not None
+                and self._pending_is_live(existing, pending.timestamp)
+            ):
+                return True  # a handshake on the radio is under way (slow): let it finish
             if existing.transport != transport or not self._is_link_reachable(existing):
                 await self._teardown_link(hash_id)
                 existing = None
             else:
-                pending = self._pending_handshakes.get(hash_id)
                 in_flight = SERIAL_HANDSHAKE_TTL if transport == "serial" else 10.0
                 if pending is not None and time.time() - pending.timestamp < in_flight:
                     # A handshake on this connection is already in flight. A
@@ -460,6 +468,8 @@ class ConnectMixin:
             return  # re-key on an existing link
         link.link_up_announced = True
         self._cancel_reconnect(remote_hash)
+        if link.transport == "serial":
+            self._radio_waiting.pop(remote_hash, None)  # (a later wait starts afresh)
         if not self.has_active_transfer_for(remote_hash):
             await self.ping_peer(remote_hash)
         await self._resume_paused_transfers_for_peer(remote_hash)
@@ -474,6 +484,11 @@ class ConnectMixin:
         except Exception as exc:  # noqa: BLE001
             log.warning("Link-up UI callback failed for %s: %s", remote_hash[:8], exc)
         await self._send_pending_pair(remote_hash)
+        if link.transport == "serial" and self.is_trusted(remote_hash):
+            # The first encrypted message tells them the session works on our
+            # side too (see confirm_link); our addresses let a shared Wi-Fi
+            # take over from the radio later.
+            await self.send_rendezvous(remote_hash)
         if self.is_trusted(remote_hash):
             await self.send_pending_share_offers(remote_hash)
             await self.sync_link_up(remote_hash)
@@ -652,6 +667,9 @@ class ConnectMixin:
         kx = KeyExchange(identity.private_key, identity.pq)
         kx.start_kem()
         self._pending_handshakes[hash_id] = kx
+        tries = self._recent_tries.setdefault(hash_id, [])
+        tries.append(kx)
+        del tries[:-4]
         packet = await asyncio.to_thread(
             self._identity_hello, MessageType.HANDSHAKE, kx, link.transport, hash_id
         )
@@ -667,11 +685,17 @@ class ConnectMixin:
                 self._pending_handshakes.pop(hash_id, None)
 
     def _identity_hello(
-        self: MessagingBackend, kind: MessageType, kx: KeyExchange, transport: str, peer_hash: str
+        self: MessagingBackend, kind: MessageType, kx: KeyExchange, transport: str,
+        peer_hash: str, answering: bytes = b"",
     ) -> bytes:
         identity = self._identity_for_transport(transport)
+        # An answer names the handshake it answers (its ephemeral key): on a
+        # slow radio with retries, an answer to an earlier try must not
+        # complete the latest one (the keys would differ and nothing decrypt).
+        answers = {"re": answering.hex()} if answering else {}
         body = encode_payload(
             {
+                **answers,
                 "protocol": "identity",
                 "version": HANDSHAKE_VERSION,
                 **self._identity_fields(transport),
@@ -686,18 +710,20 @@ class ConnectMixin:
         return build_header(kind, body=body)
 
     async def _send_upgrade_handshake(
-        self: MessagingBackend, hash_id: str, peer_id: str
+        self: MessagingBackend, hash_id: str, peer_id: str, transport: str = "tcp"
     ) -> KeyExchange | None:
-        """Open a session on a new direct connection while the Tor session
-        keeps working; it replaces the Tor link only once it's proven."""
-        identity = self._identity_for_transport("tcp")
+        """Open a session on a better connection (direct instead of Tor, the
+        radio instead of the internet, the same Wi-Fi instead of the radio)
+        while the current session keeps working; it replaces the current link
+        only once it's proven."""
+        identity = self._identity_for_transport(transport)
         kx = KeyExchange(identity.private_key, identity.pq)
         kx.start_kem()
         try:
             await self._send_raw(
-                peer_id, "tcp",
+                peer_id, transport,
                 await asyncio.to_thread(
-                    self._identity_hello, MessageType.HANDSHAKE, kx, "tcp", hash_id
+                    self._identity_hello, MessageType.HANDSHAKE, kx, transport, hash_id
                 ),
             )
         except (KeyError, OSError, ConnectionError) as exc:
@@ -793,6 +819,16 @@ class ConnectMixin:
             log.info("Kept the direct path to %s (refused a Tor session)", remote_hash[:8])
             await self._reject_connection(peer_id)
             return
+        if (
+            self.tcp_transport and self.tcp_transport.has_peer(peer_id)
+            and self._radio_holds(remote_hash) and not self._tcp_peer_on_lan(peer_id)
+        ):
+            # The radio comes first unless we share a Wi-Fi/LAN: an internet
+            # session doesn't take over a working radio session.
+            log.info("Kept the radio session with %s (refused an internet session)",
+                     remote_hash[:8])
+            await self._reject_connection(peer_id)
+            return
         expected = self.tcp_transport.expected_peer(peer_id) if self.tcp_transport else None
         if expected and expected != remote_hash:
             # A direct UDP connection is set up with one contact (keys from our
@@ -834,7 +870,8 @@ class ConnectMixin:
         if not link:
             return
         ack = await asyncio.to_thread(
-            self._identity_hello, MessageType.HANDSHAKE_ACK, kx, link.transport, remote_hash
+            self._identity_hello, MessageType.HANDSHAKE_ACK, kx, link.transport, remote_hash,
+            hello.ephemeral,
         )
         try:
             await self._send_raw(peer_id, link.transport, ack)
@@ -844,7 +881,19 @@ class ConnectMixin:
             return
         link.pq_public = hello.pq_public
         self.set_link_keys(remote_hash, keys)
+        if link.transport == "serial":
+            # Our answer may be lost on the air: the session is up (shown,
+            # used, what waits sent again) once they prove they have it.
+            link.confirmed = False
+            link.link_up_announced = False
+            return
         await self._complete_handshake(remote_hash, remote_name)
+
+    async def confirm_link(self: MessagingBackend, link: PeerLink) -> None:
+        """Something they encrypted arrived: they have the session keys."""
+        if not link.confirmed:
+            link.confirmed = True
+            await self._complete_handshake(link.hash_id, link.peer_name)
 
     async def _handle_handshake_ack(self: MessagingBackend, peer_id: str, body: bytes) -> None:
         data = decode_payload(body)
@@ -858,12 +907,13 @@ class ConnectMixin:
         remote_name = str(data.get("name", ""))[:64]
         upgrade = self.upgrade_for_peer_id(peer_id)
         if upgrade is not None:
-            await self._finish_upgrade(
-                peer_id, upgrade, data, hello, remote_hash, remote_pub, ed_pub
-            )
+            if self._answers(data, upgrade[1]):
+                await self._finish_upgrade(
+                    peer_id, upgrade, data, hello, remote_hash, remote_pub, ed_pub
+                )
             return
-        kx = self._pending_handshakes.get(remote_hash)
         link = self.get_link(remote_hash)
+        kx = self._answered_try(remote_hash, data)
         if not kx or not link or link.transport_peer_id != peer_id:
             log.warning("Unexpected handshake ack from %s", peer_id[:8])
             return
@@ -883,7 +933,35 @@ class ConnectMixin:
         link.peer_name = remote_name or link.peer_name
         link.pq_public = hello.pq_public
         self.set_link_keys(remote_hash, keys)
+        if link.link_up_announced and link.transport == "serial" and self.is_trusted(remote_hash):
+            # The answer to a later try re-keyed an existing session: tell
+            # them (an encrypted message) that we have these keys too.
+            await self.send_rendezvous(remote_hash)
         await self._complete_handshake(remote_hash, link.peer_name, from_ack=True)
+
+    def _answered_try(
+        self: MessagingBackend, remote_hash: str, data: dict[str, object]
+    ) -> KeyExchange | None:
+        """Which of our recent handshake tries this answer is for. The answer
+        to any of them completes the session (both sides then have the keys
+        of that try); a later answer re-keys to match the other side."""
+        answered = data.get("re")
+        pending = self._pending_handshakes.get(remote_hash)
+        if answered is None:
+            return pending  # (an older version: answers the one in flight)
+        for kx in reversed(self._recent_tries.get(remote_hash, [])):
+            if kx.ephemeral_public.hex() == answered:
+                return kx
+        return None
+
+    @staticmethod
+    def _answers(data: dict[str, object], kx: KeyExchange) -> bool:
+        """The answer is to this handshake of ours (not an earlier try)."""
+        answered = data.get("re")
+        if answered is None or answered == kx.ephemeral_public.hex():
+            return True  # ("re" missing: an older version, which never retries like this)
+        log.info("Ignored the answer to an earlier handshake try")
+        return False
 
     async def _finish_upgrade(
         self: MessagingBackend,
@@ -897,7 +975,8 @@ class ConnectMixin:
     ) -> None:
         expected, kx = upgrade
         self._upgrades.pop(expected, None)
-        own = self._identity_for_transport("tcp").hash_id
+        transport = self._infer_transport(peer_id)
+        own = self._identity_for_transport(transport).hash_id
         try:
             if remote_hash != expected:
                 raise ValueError("wrong identity on the direct path")
@@ -907,32 +986,33 @@ class ConnectMixin:
             if not self._pq_key_ok(remote_hash, hello.pq_public):
                 raise ValueError("post-quantum identity key changed")
         except Exception as exc:  # noqa: BLE001
-            log.warning("Direct path to %s rejected: %s", expected[:8], exc)
-            if self.tcp_transport:
+            log.warning("New path to %s rejected: %s", expected[:8], exc)
+            if transport == "tcp" and self.tcp_transport:
                 await self.tcp_transport.disconnect(peer_id)
             return
         old = self.get_link(remote_hash)
         address = ""
-        if self.tcp_transport:
-            for p in self.tcp_transport.peers():
+        transport_obj = self.serial_transport if transport == "serial" else self.tcp_transport
+        if transport_obj:
+            for p in transport_obj.peers():
                 if p.peer_id == peer_id:
                     address = p.address
         link = PeerLink(
             hash_id=remote_hash,
             transport_peer_id=peer_id,
-            transport="tcp",
+            transport=transport,
             address=address,
             public_key=remote_pub,
             peer_name=str(data.get("name", ""))[:64] or (old.peer_name if old else ""),
             pq_public=hello.pq_public,
         )
-        self.register_link(link)  # replaces the Tor link
+        self.register_link(link)  # replaces the old link
         if (
             old and old.transport == "tcp" and old.transport_peer_id != peer_id
             and self.tcp_transport
         ):
-            # The Tor connection it replaces isn't needed any more.
+            # The connection it replaces (Tor, internet) isn't needed any more.
             await self.tcp_transport.disconnect(old.transport_peer_id)
         self.set_link_keys(remote_hash, keys)
-        log.info("Switched %s from Tor to a direct path (%s)", remote_hash[:8], address)
+        log.info("Switched %s to a better path (%s, %s)", remote_hash[:8], transport, address)
         await self._complete_handshake(remote_hash, link.peer_name, from_ack=True)

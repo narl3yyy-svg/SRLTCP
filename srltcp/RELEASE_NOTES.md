@@ -1,5 +1,377 @@
 # SRLTCP Release Notes
 
+## v0.13.4 (2026-10-17)
+
+### Serial radios: both phones connect, and stay connected
+- **Fixed: one phone showed SERIAL while the other never connected.** Three
+  causes, all fixed:
+  - **The two radios talked over each other.** Radio modems are half-duplex:
+    when both send at the same moment, both transmissions are lost. That's
+    the large "bad packets" count you saw in Settings → Serial. The link now
+    takes turns: each side sends a short burst, then waits for the answer,
+    and listens first so it never starts while the other side is sending.
+    Packets are now 64 bytes (one USB packet, the smallest radio frame), so a
+    lost frame costs less. The sending speed follows what the radio really
+    delivers, and the wait for an answer follows the measured round trip,
+    instead of resending too early. In a simulation of two half-duplex radios
+    with small buffers, the old link never got the handshakes through; the
+    new one does in 20-100 s depending on the radio's speed.
+  - **The answering phone said "connected" too early.** It showed SERIAL as
+    soon as it had *sent* its handshake answer. When that answer was lost on
+    the air, the other phone never connected, and messages went into a
+    session only one side had. Now the answering phone waits until the other
+    side proves it has the session (its first encrypted message). Messages
+    sent meanwhile are sent again then.
+  - **An answer to an earlier try could break the session.** On a slow
+    radio the dialing phone sometimes tries again before the first answer
+    arrives. An answer now names the try it belongs to. The answer to *any*
+    recent try completes the session, and a later answer brings both phones
+    to the same keys.
+  - **A background reconnect could cut a radio handshake short.** Once the
+    phones had swapped their Wi-Fi addresses, the periodic "reconnect
+    contacts" check tried those over TCP and threw away the radio handshake
+    still on its way. A handshake on the radio is now left to finish.
+  - When a session is dropped because the other side lost it, the chat
+    header now shows that at once instead of staying on SERIAL.
+- **The radio comes first.** If you're not on the same Wi-Fi/LAN as the
+  contact, a working radio session is used instead of the internet.
+  - An internet session (or Tor) is replaced by the radio as soon as the
+    contact is in range. The radio session opens alongside, so nothing is
+    lost while it connects.
+  - While the radio works, an internet session can't take over.
+  - The same Wi-Fi/LAN still beats the radio: when both phones are on it,
+    they move there by themselves.
+- **New radio picked up automatically.** *Settings → Serial → Serial port*
+  has a new **Automatic** choice (now the default): it uses the adapter you
+  plugged in most recently, and moves to a new one as soon as you plug it
+  in.
+  - A saved adapter is only used while it's plugged in; otherwise the one
+    that is plugged in is used.
+  - **To delete a saved adapter:** tap the trash icon next to the list (it
+    shows when an adapter is saved). That switches back to Automatic.
+- **Both phones need 0.13.4** (the radio packet format changed again).
+
+### Release notes
+- Tapping the version (bottom right) now shows these notes. It had been
+  stuck on 0.11.0. The notes are now part of the app's source on GitHub
+  too, and a test checks they match the version.
+
+## v0.13.3 (2026-10-16)
+
+### Serial radios: contacts only, and both phones agree
+- **Fixed: one phone showed "connected over the radio" and the other didn't.**
+  The cause: a slow radio carries one message at a time, so right after
+  connecting (history sync, queued messages) the pings waited their turn.
+  After ~30 s without a ping answer, one phone dropped the session as
+  "dead". The other phone still had it, and nothing ever brought the first
+  one back. Now:
+  - a radio session is never dropped while packets keep arriving;
+  - if one phone does lose its session (app restarted, a lost handshake
+    answer), its next beacon tells the other one, and the two reconnect;
+  - if the phone that should dial doesn't within 45 s, the other one dials;
+  - a slow handshake is no longer restarted halfway through (which broke
+    it every time on slow radios);
+  - Tor can never take over a working radio session.
+- **Nobody is discovered over the radio any more.** Only contacts you
+  already trust can connect.
+  - Phones no longer announce their name, ID or key on the air. They send
+    private *beacons* that only the named contacts can read. To anyone else
+    in range they're random bytes: they don't even show how many contacts
+    you have.
+  - A stranger's radio gets no answer, and nothing appears in your
+    discovered list.
+  - Under the hood: each pair of contacts shares a key only those two can
+    compute (static X25519 from your identity keys). The session itself is
+    the usual signed, quantum-safe handshake.
+- **Both phones need 0.13.3** (the beacon replaces the old radio announce).
+
+### Home Wi-Fi ↔ mobile data connects directly
+- **Fixed: a phone on a home Wi-Fi and one on mobile data couldn't connect
+  directly** (two phones on mobile data worked).
+  - Many carriers use a new public port for every destination, and most
+    home routers only let in replies from the exact port they sent to, so
+    neither side's packets got through.
+  - Now the phone on Wi-Fi asks its own router to forward the direct
+    connection's UDP port (UPnP or NAT-PMP, as video-call and game apps
+    do). The mobile phone's packets then get in from any port, and the
+    first authenticated one fixes the path.
+- **Safeguards:**
+  - only routers on your own Wi-Fi are asked;
+  - the port only answers your contacts' encrypted packets;
+  - the mapping renews while the app runs and is removed when it stops.
+- **New setting:** *Settings → Network → Open a port on my home router*
+  (on by default).
+- *Copy connection report* now says whether the router mapping is active.
+  If the router has UPnP and NAT-PMP turned off, turn UPnP on in the
+  router's settings.
+
+## v0.13.2 (2026-10-16)
+
+### Chat over serial radios
+- **Fixed: phones found their radios but never connected.** The quantum-safe
+  handshake is one ~9 KB message, and it was written to the radio in one
+  burst. Radio modems hold only a small buffer and lose some bytes on the
+  air, and with no resending a single lost byte broke the whole handshake.
+- **New reliable radio link:**
+  - every message goes in small packets (200 bytes) with a checksum;
+  - the other side confirms what arrived and only missing packets are sent
+    again;
+  - the sending speed adapts to the radio (slower on loss, faster when
+    clean), so its buffer never overflows.
+  - Tested over a simulated radio with 3-5 % loss and corrupted packets:
+    handshakes, chat and 10 KB messages arrive intact, in order and exactly
+    once.
+- **Same contacts over the radio:**
+  - Serial now uses your normal identity, so the contact you paired over
+    Wi-Fi is the same contact over the radio. (Before, the radio side was a
+    separate "person" you had to add again.)
+  - Phones in range announce themselves when the port opens (and every 30 s
+    until connected), answer each other, and connect by themselves. The
+    header shows **SERIAL**.
+- **Live radio stats in Settings → Serial:**
+  - whether you're connected and to whom;
+  - bytes sent and received, good and bad packets, resends, when the other
+    radio was last heard;
+  - a plain explanation: bad packets mean a baud-rate mismatch; nothing
+    received means the radios aren't paired (channel, net ID, air speed) or
+    the other phone's serial is off.
+- **Privacy:** announces over the radio no longer include your LAN IP
+  address.
+- **ESP32 boards:** opening the port no longer touches the RTS line, which
+  on ESP32 can reset the board or put it in boot mode.
+- The **Refresh** button is now an icon matching the rest of the app.
+- **Both phones need 0.13.2** (the radio packet format is new).
+
+## v0.13.1 (2026-10-16)
+
+### USB serial adapters work on Android
+- **Your serial adapter now shows up in Settings → Serial.** Android doesn't
+  let apps open USB serial devices the way a PC does: they have to go
+  through Android's USB system after you allow it. That's what the Serial
+  USB Terminal app does, and now SRLTCP does too.
+- Supported: FTDI, Silicon Labs CP210x, WCH CH340/CH341, Prolific PL2303,
+  and boards with a standard USB serial interface (Arduino, ESP32,
+  Raspberry Pi Pico, STM32, Teensy).
+- **Permission:**
+  - Android asks once to allow SRLTCP to use the adapter, either when you
+    plug it in (accept SRLTCP) or when you pick it and press Save.
+  - It then opens by itself.
+  - If you say no, it doesn't ask again in the background; press Save to be
+    asked again.
+- **Plug and unplug:**
+  - Pulling the adapter closes the port cleanly; plugging it back in reopens
+    it within about 10 s.
+  - Your choice is remembered across re-plugs (the adapter's vendor/product
+    ID is saved, not a USB path that changes).
+- Only real serial devices are listed: a keyboard, flash drive or USB-C
+  headset is never offered or claimed.
+- Settings → Serial has a **Refresh** button (the list also refreshes when
+  you open the tab), Android-specific hints and the actual error if the
+  port can't be opened.
+- Only one app can use the adapter at a time: close the Serial USB Terminal
+  app (or disconnect it there) first.
+
+### Other fixes
+- Changing the baud rate or port could leave serial closed for a few
+  seconds (the old port's late close hit the new one). Fixed.
+- A PC whose adapter is unplugged no longer logs read errors forever; the
+  port reopens when the adapter is back.
+- With no adapter connected, the message now says so plainly instead of a
+  raw error code.
+- The web UI had two copies of the "is this the Android app" check; the less
+  complete one won. Fixed.
+- Removed docs that still described the old relay.
+
+## v0.13.0 (2026-10-16)
+
+### Phone to phone only: relays removed
+- **The internet relay is gone completely.** That includes the relay
+  server, the relay code, the setup guide and installer, *Relay first on
+  restricted networks*, and the external call-server (TURN) option. No
+  server ever carries your messages, files or calls.
+- Everything goes **directly between the phones**: on the same Wi-Fi or VPN,
+  or straight across the internet over UDP (IPv4 through carrier NAT, and
+  IPv6 at the same time, whichever connects).
+- The only outside help is for *finding* each other:
+  - **Tor** is the doorbell: the phones swap their addresses inside the
+    encrypted session.
+  - A **STUN** server tells each phone its own public IPv4 address. It
+    learns your IP, nothing else.
+- **Group chats** work the same way: every member over their own direct
+  connection. Members who aren't each other's contacts get messages through
+  the creator's phone, which is still phone to phone.
+
+### Fixed: contacts on other networks sometimes never connected
+- When the two phones swapped addresses before both had added each other as
+  contacts, one side's addresses were dropped and never sent again. (The
+  relay used to cover this up by accident.) Now each side says whether it
+  already has the other's addresses and gets an answer if not.
+
+### Connection report
+- *Edit contact → Check connection → Copy connection report* shows:
+  - whether this network's NAT is "easy" or "hard" (a new port for every
+    destination);
+  - whether IPv4 and IPv6 work;
+  - what the contact offers;
+  - how recent attempts ended.
+- It contains no IP addresses. Please send it when two phones don't
+  connect.
+
+### Honest limits
+- When **both** carriers use "hard" NAT, no direct technique can connect
+  the phones. That's why other apps run relay servers. Messages then wait
+  (never over Tor) and go out once one phone is on Wi-Fi or both have IPv6.
+  Most US carriers offer IPv6 on mobile data; check *APN protocol:
+  IPv4/IPv6*.
+
+### Tested
+- Simulated:
+  - two carrier NATs with a private Tor network: found over Tor, delivered
+    directly 11 s after the phones split, a 40 MB file at 7.4 MB/s;
+  - two home routers: direct in 28 s;
+  - a VPN phone and a home-Wi-Fi phone;
+  - hard NAT on both sides: the message waits.
+- **Both phones need 0.13.0.**
+
+## v0.12.3 (2026-10-15)
+
+### Your own relay in a few minutes
+- **Settings → Network → Set up your own relay** shows a short guide and
+  one command (with a copy button) to run on any small Linux server. It
+  installs the relay as a locked-down service on port 443 (the standard web
+  port), starts it after every reboot, and shows the relay code as text and
+  as a QR code. Running it again updates the relay.
+- **Scan relay code** next to the relay field: scan that QR code and the
+  relay is set up. One phone is enough; your contacts get it inside the
+  encrypted connection.
+- The relay still can't read anything: it only passes on sealed, padded
+  packets.
+
+### Relay first on restricted networks (off unless you turn it on)
+- **Settings → Network → Relay first on restricted networks.** On a Wi-Fi
+  that keeps devices apart (plane, hotel, guest Wi-Fi), or when both phones
+  are behind the same public address (Starlink, a carrier), a direct
+  connection can't work. With this on, the app:
+  - goes straight to your relay instead of first waiting for a direct
+    attempt;
+  - moves a contact it found over Tor onto the relay, so messages don't wait
+    for a direct connection that won't come;
+  - stops direct attempts there, which saves time and battery.
+- Back to normal on the next network.
+- It needs your relay and a network that allows ordinary internet traffic
+  (on a plane: the internet plan, not the messaging-only tier).
+
+## v0.12.2 (2026-10-15)
+
+### Cleaner chats
+- **No more connection notices in the chat** ("Found them over Tor",
+  "Connected again directly", "disconnected"...). The connection state is
+  shown in the header only.
+
+### Wi-Fi with a sign-in page (planes, hotels, cafés)
+- When the Wi-Fi is waiting for you to sign in, a bar at the top says so,
+  with a **Sign in** button that opens the Wi-Fi settings (tap the network
+  there to open its sign-in page). Android already knows this; the app sends
+  nothing to find out.
+- **Check connection** now also says what the network is doing:
+  - the Wi-Fi keeps devices apart (common on plane, hotel and guest Wi-Fi),
+    so two phones on it can't talk directly;
+  - both phones share one public address (same Wi-Fi, Starlink or carrier),
+    which most of these networks don't pass traffic through;
+  - the network blocks UDP (what direct connections use).
+- The app doesn't try to get around a network's sign-in page or its rules.
+  On a plane your own relay is the way (if the plan allows it); otherwise
+  messages wait and go out once you're on another network.
+
+### File transfers reviewed
+- **A file only appears under its name once it's verified.** Incoming
+  bytes now go to a hidden partial file that the gallery and other apps
+  ignore. The file gets its real name only after its SHA-256 check passes.
+  A half-received or damaged file never shows up, can't be opened by
+  mistake and isn't picked up by the gallery or backup apps.
+- Two downloads with the same name can no longer collide.
+- Also checked, no changes needed:
+  - files are accepted only from trusted contacts, inside the encrypted
+    session;
+  - every chunk is encrypted and authenticated;
+  - names and sizes are checked, and early data is kept within a limit;
+  - compression is skipped for photos, videos and archives;
+  - read, hash, compress and encrypt run off the main thread;
+  - transfers resume from the last confirmed byte after a drop or restart.
+
+## v0.12.1 (2026-10-15)
+
+### Direct connections between networks: up to 20x faster
+- **Fixed the slow file speed between a phone on mobile data and a phone on
+  Wi-Fi (or two carriers).** The direct connection used a TCP-Reno-style
+  speed control that treats every lost packet as a traffic jam. Radio links
+  lose packets at random all the time, so at mobile round trips (150-200 ms)
+  it settled at about 0.1 MB/s, exactly what you saw.
+- It now uses **BBR**, the speed control YouTube and Google's QUIC use on
+  mobile networks: it measures how fast data really arrives and paces
+  packets at that rate, and random radio losses no longer slow it down.
+- Measured on emulated mobile paths:
+
+  | Path | Link speed | 0.12.0 | 0.12.1 |
+  |---|---|---|---|
+  | LTE, 140 ms, 1 % loss | 2.5 MB/s | 0.10 MB/s | 2.1 MB/s |
+  | LTE, 90 ms, 0.2 % loss | 2.5 MB/s | 0.19 MB/s | 2.25 MB/s |
+  | 5G far away, 200 ms | 7.5 MB/s | 0.11 MB/s | 5.2 MB/s |
+  | Congested cell, 2 % loss | 0.62 MB/s | 0.10 MB/s | 0.56 MB/s |
+
+### No more flipping between Tor and direct
+- While the direct connection works, the contact can't replace it with a
+  Tor session any more. That replacement was what made the chat show
+  "Found them over Tor" and "Connected again directly" over and over, and
+  restarted files each time.
+- When one phone closes the direct connection, it now tells the other, so
+  both look for a new path at once instead of one of them waiting 30 s on a
+  dead link.
+
+### Connects directly faster
+- When the first attempt to connect directly fails (common with some home
+  routers), the next attempt comes after 4 s instead of 10-40 s and uses a
+  new port. Before, routers remembered the failed attempt for about 30 s and
+  every quick retry kept failing. Two home routers in our simulation: direct
+  after 25 s instead of almost 2 minutes.
+
+### Messages during big files
+- Chat messages, read receipts and file confirmations go out **ahead of**
+  queued file data, and files travel in smaller pieces on the direct path,
+  so a message no longer waits behind a video.
+- Fixed: the phone *receiving* a file could hardly send anything back while
+  the file came in (its own acknowledgements used up its sending budget).
+  Replies and file confirmations now flow during transfers.
+- Fewer acknowledgement packets (one per 4 data packets instead of 2): less
+  work for the phone, about 20 % more speed when the phone's CPU is the
+  limit.
+
+- **Both devices need this version** for the full speed.
+
+## v0.12.0 (2026-10-15)
+
+### Tor is only the doorbell now
+- **Your messages, files and calls never go over Tor any more.** Tor is
+  used for one thing only: finding a contact on another network and swapping
+  addresses so the two phones can connect **directly** (UDP or IPv6). Then
+  everything runs at the full speed of both connections.
+- While the direct connection is being set up the header shows
+  **CONNECTING** (amber) and the chat says "Found them over Tor — connecting
+  directly...". It usually takes a few seconds.
+- Messages wait (tick: *Waiting to send*), files pause and calls ring once
+  the direct connection is up — then they go out by themselves. Nothing is
+  lost and nothing is sent slowly.
+- **Faster setup:** a direct connection is started the moment the contact is
+  found over Tor, either phone can ask the other to punch (no more waiting
+  for the "leader" side), and retries come sooner (15 s, 30 s, 60 s, 120 s).
+- The setting is now called *Find contacts on other networks (Tor)*.
+- If both carriers use "symmetric" NAT (rare), a direct connection isn't
+  possible: run your own relay, or messages wait until you're on a network
+  that allows it. *Check connection* says which case you're in.
+- Removed the 8 parallel Tor "lanes" for files (no longer needed), which
+  also makes the app lighter.
+- **Both devices need this version.**
+
 ## v0.11.0 (2026-10-15)
 
 ### Full speed between networks: direct UDP

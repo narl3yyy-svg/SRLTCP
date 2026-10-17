@@ -16,7 +16,6 @@ from srltcp.core.messaging.constants import (
 from srltcp.core.node import SRLTCPNode
 from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.utils.logging import get_logger, setup_logging
-from srltcp.utils.platform import default_serial_port
 from srltcp.utils.shutdown import GracefulShutdown
 from srltcp.web.server import run_web_server, shutdown_web_server
 
@@ -108,7 +107,7 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         tor_path=settings.tor_path,
         enable_tcp=not args.no_tcp,
         enable_serial=args.serial or settings.enable_serial,
-        serial_port=args.serial_port or settings.serial_port or default_serial_port(),
+        serial_port=args.serial_port or settings.serial_port,  # "": Automatic
         serial_baud=settings.serial_baud,
         announce=settings.auto_announce,
         lan_ip=settings.lan_ip,

@@ -3,6 +3,7 @@ can read, nobody discovered over the air, both sides always agree."""
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -15,6 +16,7 @@ import srltcp.core  # noqa: F401  (import order: core before transports)
 from srltcp.core.messaging import radio
 from srltcp.core.messaging.backend import MessagingBackend
 from srltcp.core.protocol import beacon
+from srltcp.core.protocol.messages import MessageType, parse_header
 from srltcp.core.trusted import TrustedPeer
 from srltcp.transports import android_serial
 from tests.test_android_serial import AirBridge
@@ -65,9 +67,14 @@ def test_stale_or_malformed_beacons_are_ignored() -> None:
 
 
 @pytest.fixture
-async def radios(tmp_path: Any, monkeypatch: Any) -> AsyncIterator[tuple[MessagingBackend, ...]]:
-    air = AirBridge(PORTS, loss=0.03)
-    monkeypatch.setattr(android_serial, "_bridge", lambda: air)
+def air(monkeypatch: Any) -> AirBridge:
+    bridge = AirBridge(PORTS, loss=0.03)
+    monkeypatch.setattr(android_serial, "_bridge", lambda: bridge)
+    return bridge
+
+
+@pytest.fixture
+async def radios(tmp_path: Any, air: AirBridge) -> AsyncIterator[tuple[MessagingBackend, ...]]:
     nodes = tuple(
         make_node(tmp_path, name, enable_serial=True, serial_port=port, serial_baud=57600)
         for name, port in zip(("alice", "bob"), PORTS, strict=True)
@@ -89,7 +96,7 @@ def _befriend(x: MessagingBackend, y: MessagingBackend) -> None:
 
 def _on_radio(x: MessagingBackend, y: MessagingBackend) -> bool:
     link = x.get_link(y.identities["tcp"].hash_id)
-    return bool(link and link.handshake_complete and link.transport == "serial")
+    return bool(link and link.up and link.transport == "serial")
 
 
 async def test_strangers_are_not_discovered_and_get_no_answer(
@@ -113,13 +120,14 @@ async def test_a_side_that_lost_its_session_gets_it_back(
 ) -> None:
     """One phone dropped the session (restart, a lost handshake answer) while
     the other still shows it: the next beacon brings both back."""
-    monkeypatch.setattr(radio, "RADIO_SESSION_SETTLE", 0.0)
+    monkeypatch.setattr(radio, "RADIO_SESSION_SETTLE", 3.0)  # (120 s on a real radio)
     a, b = radios
     _befriend(a, b)
     _befriend(b, a)
     assert await a.send_radio_beacon()
     assert await wait_for(lambda: _on_radio(a, b) and _on_radio(b, a), timeout=60)
     assert await wait_for(lambda: not a._radio_dialing and not b._radio_dialing)
+    await asyncio.sleep(3.5)  # the session is settled: a beacon naming us now is news
     b.remove_link(a.identities["tcp"].hash_id)
     assert _on_radio(a, b) and not _on_radio(b, a)
     await b.radio_tick(now_open=True)
@@ -170,3 +178,97 @@ async def test_tor_never_replaces_a_working_radio_session(
     assert await a.send_radio_beacon()
     assert await wait_for(lambda: _on_radio(a, b) and _on_radio(b, a), timeout=60)
     assert a._direct_alive(b.identities["tcp"].hash_id)
+
+
+async def test_a_lost_handshake_answer_leaves_nobody_claiming_a_session(
+    radios: tuple[MessagingBackend, MessagingBackend], monkeypatch: Any
+) -> None:
+    """The answering phone's reply is lost on the air: it must not show the
+    contact as connected (that was one phone saying SERIAL, the other not);
+    once the air clears, both connect."""
+    from srltcp.core.messaging import connect
+
+    monkeypatch.setattr(connect, "SERIAL_HANDSHAKE_TTL", 8.0)
+    a, b = radios
+    _befriend(a, b)
+    _befriend(b, a)
+    low, high = sorted(radios, key=lambda n: n.identities["tcp"].hash_id)
+    real_send = high._send_raw
+    lose_answers = True
+
+    async def send(peer_id: str, transport: str, packet: bytes) -> None:
+        if lose_answers and parse_header(packet)[0] == MessageType.HANDSHAKE_ACK:
+            return  # lost on the air (given up after too many tries)
+        await real_send(peer_id, transport, packet)
+
+    monkeypatch.setattr(high, "_send_raw", send)
+    assert await low.send_radio_beacon()
+    lh = low.identities["tcp"].hash_id
+    assert await wait_for(lambda: (link := high.get_link(lh)) is not None
+                          and link.handshake_complete, timeout=30)
+    assert not _on_radio(high, low) and not _on_radio(low, high)
+    assert high.get_transport_status()["serial"]["peers"] == []
+    lose_answers = False
+    await wait_for(lambda: not low._radio_dialing, timeout=15)
+    await low.radio_tick(now_open=True)
+    assert await wait_for(lambda: _on_radio(a, b) and _on_radio(b, a), timeout=60)
+
+
+async def test_the_radio_takes_over_from_an_internet_session(
+    radios: tuple[MessagingBackend, MessagingBackend], monkeypatch: Any
+) -> None:
+    a, b = radios
+    _befriend(a, b)
+    _befriend(b, a)
+    for node in radios:  # (loopback stands in for the internet here)
+        monkeypatch.setattr(node, "_tcp_peer_on_lan", lambda peer_id: False)
+    assert b.tcp_transport is not None
+    bh = b.identities["tcp"].hash_id
+    assert await a.connect_to_peer(bh, host="127.0.0.1", port=b.tcp_transport.port)
+    assert await wait_for(lambda: (l1 := a.get_link(bh)) is not None and l1.up
+                          and l1.transport == "tcp", timeout=15)
+    assert await a.send_radio_beacon()  # internet isn't the radio: still wanted
+    assert await wait_for(lambda: _on_radio(a, b) and _on_radio(b, a), timeout=60)
+    await a.send_message(bh, "radio first")
+    assert await wait_for(
+        lambda: any(m["text"] == "radio first" for m in b.get_messages()), timeout=30)
+
+
+async def test_the_same_wifi_takes_over_from_the_radio(
+    radios: tuple[MessagingBackend, MessagingBackend], monkeypatch: Any
+) -> None:
+    a, b = radios
+    _befriend(a, b)
+    _befriend(b, a)
+    assert await a.send_radio_beacon()
+    assert await wait_for(lambda: _on_radio(a, b) and _on_radio(b, a), timeout=60)
+    low, high = sorted(radios, key=lambda n: n.identities["tcp"].hash_id)
+    assert high.tcp_transport is not None
+    hh = high.identities["tcp"].hash_id
+    low.trusted.update(hh, tcp_host="127.0.0.1", tcp_port=high.tcp_transport.port)
+    await low.maintain_paths()
+    assert await wait_for(lambda: (link := low.get_link(hh)) is not None and link.up
+                          and link.transport == "tcp", timeout=30)
+    lh = low.identities["tcp"].hash_id
+    assert await wait_for(lambda: (link := high.get_link(lh)) is not None and link.up
+                          and link.transport == "tcp", timeout=30)
+
+
+async def test_both_sides_dialing_at_once_still_connect(
+    radios: tuple[MessagingBackend, MessagingBackend], monkeypatch: Any
+) -> None:
+    """Both phones dial over the radio at the same moment (each thinks the
+    other is late): the handshakes cross and still end in one session."""
+    monkeypatch.setattr(radio, "RADIO_DIAL_GRACE", 0.0)
+    a, b = radios
+    _befriend(a, b)
+    _befriend(b, a)
+    ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+    a._radio_heard[bh] = b._radio_heard[ah] = time.monotonic()
+    a._radio_waiting[bh] = b._radio_waiting[ah] = time.monotonic()
+    a._maybe_dial_radio(bh)
+    b._maybe_dial_radio(ah)
+    assert await wait_for(lambda: _on_radio(a, b) and _on_radio(b, a), timeout=90)
+    await a.send_message(bh, "crossed")
+    assert await wait_for(
+        lambda: any(m["text"] == "crossed" for m in b.get_messages()), timeout=30)

@@ -84,7 +84,7 @@ def test_lists_adapters_from_the_bridge(bridge: FakeBridge, monkeypatch: Any) ->
     monkeypatch.setattr(plat, "is_android", lambda: True)
     ports = serial_ports.list_serial_ports()
     assert ports == [{"device": "usb:0403:6001#0", "description": "FTDI FT232R (USB 0403:6001)",
-                      "hwid": "", "accessible": False}]
+                      "hwid": "", "accessible": False, "attached": 0}]
     assert plat.default_serial_port() == "usb:0403:6001#0"
     bridge.plugged = False
     assert serial_ports.list_serial_ports() == [] and plat.default_serial_port() == ""
@@ -130,7 +130,7 @@ async def test_frames_go_both_ways_and_unplug_stops_the_transport(
     big = bytes(range(256)) * 40  # 10 KiB: many packets, acknowledged
     await a.send(a.peers()[0].peer_id, b"hello radio")
     await a.send(a.peers()[0].peer_id, big)
-    for _ in range(300):
+    for _ in range(1000):  # (~5 s of sending in turns of 32 packets, each answered)
         if len(got) == 2:
             break
         await asyncio.sleep(0.02)
@@ -213,6 +213,7 @@ class AirBridge:
         self.rx: dict[str, list[bytes]] = {p: [] for p in ports}
         self.gens: dict[int, str] = {}
         self.lock = threading.Lock()
+        self.muted: set[str] = set()  # radios whose transmissions never arrive
 
     def listPorts(self) -> str:  # noqa: N802
         return json.dumps([{"device": p, "description": p, "accessible": True} for p in self.ports])
@@ -238,6 +239,8 @@ class AirBridge:
 
     def write(self, gen: int, data: bytes, timeout_ms: int) -> None:
         other = next(p for p in self.ports if p != self.gens[gen])
+        if self.gens[gen] in self.muted:
+            return
         for i in range(0, len(data), 64):
             if self.rnd.random() < self.loss:
                 continue  # lost on the air

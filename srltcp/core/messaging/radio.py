@@ -1,19 +1,26 @@
 """Contacts over a serial radio: private beacons, and the session on the air.
 
 Nobody is discovered over the radio. A device only sends *beacons* that name,
-privately, the contacts it has no working session with (see
-:mod:`srltcp.core.protocol.beacon`): strangers in range learn nothing, and an
-untrusted device can't start anything. A contact that finds itself named
-answers with a beacon of its own and the two connect with the normal signed,
-quantum-safe handshake over the radio:
+privately, the contacts it has no session with on the radio or a shared
+Wi-Fi/LAN (see :mod:`srltcp.core.protocol.beacon`): strangers in range learn
+nothing, and an untrusted device can't start anything. A contact that finds
+itself named answers with a beacon of its own and the two connect with the
+normal signed, quantum-safe handshake over the radio:
 
+- the radio comes first unless the two share a Wi-Fi/LAN: a session over the
+  internet (or the Tor doorbell) is replaced by one on the radio, opened
+  alongside it so nothing is lost meanwhile; the same Wi-Fi/LAN takes over
+  from the radio again (``maintain_paths``);
 - the lower identity hash dials at once; the other one dials too if nothing
   happened after ``RADIO_DIAL_GRACE`` (so a lost handshake never leaves the
   pair stuck);
-- a beacon naming us from a contact we *do* have a radio session with means
-  their side lost it (app restarted, a lost handshake answer): ours is dropped
-  and the two connect again, instead of one phone showing "connected" and the
-  other not, for good.
+- the answering side counts the session as up only once the other side
+  proves it has it (its first encrypted message): on a lossy radio the
+  handshake answer can be lost;
+- a beacon naming us from a contact we have a radio session with means their
+  side doesn't have it (app restarted, a lost answer): ours is dropped and the
+  two connect again, instead of one phone showing "connected" and the other
+  not, for good.
 """
 
 from __future__ import annotations
@@ -23,6 +30,7 @@ import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING
 
+from srltcp.core.messaging.links import PeerLink
 from srltcp.core.protocol import beacon
 from srltcp.core.protocol.messages import MessageType, build_header
 from srltcp.utils.logging import get_logger
@@ -95,6 +103,33 @@ class RadioMixin:
         link = self.get_link(hash_id)
         return bool(link and link.handshake_complete and link.transport == "serial")
 
+    def _radio_holds(self: MessagingBackend, hash_id: str) -> bool:
+        """A working radio session with this contact."""
+        link = self.get_link(hash_id)
+        return bool(link and link.up and link.transport == "serial" and self.radio_alive())
+
+    def _tcp_peer_on_lan(self: MessagingBackend, peer_id: str) -> bool:
+        """A TCP/UDP connection to an address on our own Wi-Fi/LAN or VPN."""
+        from srltcp.utils.network import same_network
+
+        transport = self.tcp_transport
+        if transport is None or transport.is_tor(peer_id):
+            return False
+        for peer in transport.peers():
+            if peer.peer_id == peer_id:
+                host = peer.address.rsplit(":", 1)[0].strip("[]")
+                return bool(host) and same_network(host)
+        return False
+
+    def _beats_radio(self: MessagingBackend, link: PeerLink | None) -> bool:
+        """This session is the radio already, or the same Wi-Fi/LAN (which
+        comes before the radio); anything else, the radio replaces."""
+        if not link or not link.up:
+            return False
+        return link.transport == "serial" or (
+            link.transport == "tcp" and self._tcp_peer_on_lan(link.transport_peer_id)
+        )
+
     def _radio_handshake_pending(self: MessagingBackend) -> bool:
         return any(
             link.transport == "serial" and not link.handshake_complete
@@ -103,13 +138,12 @@ class RadioMixin:
         )
 
     def _radio_wanted(self: MessagingBackend) -> list[str]:
-        """Contacts with no working session (the Tor doorbell carries nothing)."""
+        """Contacts we'd rather reach over the radio than how we reach them now."""
         out = []
         for peer in self.trusted.list_peers():
             if peer.blocked:
                 continue
-            link = self.get_link(peer.hash_id)
-            if link and link.handshake_complete and not self._link_on_tor(link):
+            if self._beats_radio(self.get_link(peer.hash_id)):
                 self._radio_waiting.pop(peer.hash_id, None)
                 continue
             out.append(peer.hash_id)
@@ -132,8 +166,8 @@ class RadioMixin:
             return False
         packet = build_header(MessageType.RADIO_BEACON, body=beacon.build(keys, reply=reply))
         await transport.broadcast(packet)  # (once, unacknowledged: maybe nobody listens)
-        log.debug("Radio beacon sent (%d contact tag(s)%s)", len(keys), ", answer" if reply else "")
         self._radio_beacon_at = time.monotonic()
+        log.debug("Radio beacon sent (%d contact tag(s)%s)", len(keys), ", answer" if reply else "")
         return True
 
     async def radio_tick(self: MessagingBackend, *, now_open: bool = False) -> None:
@@ -169,12 +203,12 @@ class RadioMixin:
         for hash_id in named:
             self._radio_heard[hash_id] = now
             link = self.get_link(hash_id)
-            if self._radio_session(hash_id):
-                if link and now - link.established < RADIO_SESSION_SETTLE:
+            if link and self._radio_session(hash_id):
+                if link.confirmed and now - link.established < RADIO_SESSION_SETTLE:
                     continue  # (sent before our session came up)
-                # They name us only while they have no session: theirs is gone.
+                # They name us only while they have no radio session: theirs is gone.
                 log.info("Radio session with %s lost on their side — reconnecting", hash_id[:8])
-                await self._teardown_link(hash_id)
+                await self._drop_radio_session(hash_id)
             self._radio_waiting.setdefault(hash_id, now)
             self._maybe_dial_radio(hash_id)
         if not heard.reply and now - self._radio_replied_at >= RADIO_REPLY_EVERY:
@@ -184,31 +218,53 @@ class RadioMixin:
             except (OSError, ConnectionError, RuntimeError) as exc:
                 log.debug("Radio beacon answer not sent: %s", exc)
 
+    async def _drop_radio_session(self: MessagingBackend, hash_id: str) -> None:
+        link = self.get_link(hash_id)
+        name, was_up = (link.peer_name, link.up) if link else ("", False)
+        await self._teardown_link(hash_id)
+        if was_up and self._on_link_down:
+            await self._on_link_down(hash_id, name)  # (the chat header shows it)
+
     # ── Connecting ──
 
     def _maybe_dial_radio(self: MessagingBackend, hash_id: str) -> None:
         if hash_id in self._radio_dialing or self.serial_transport is None:
             return
         link = self.get_link(hash_id)
-        if link and link.handshake_complete and not self._link_on_tor(link):
+        if self._beats_radio(link):
             self._radio_waiting.pop(hash_id, None)
-            return  # connected (this radio, Wi-Fi or the internet)
+            return  # on the radio already, or on the same Wi-Fi/LAN
         waiting = time.monotonic() - self._radio_waiting.get(hash_id, time.monotonic())
         if self._me_hash() > hash_id and waiting < RADIO_DIAL_GRACE:
             return  # they dial first
         self._radio_dialing.add(hash_id)
-        task = asyncio.create_task(self._dial_radio(hash_id, replace=link is not None))
+        task = asyncio.create_task(self._dial_radio(hash_id))
         self.__dict__.setdefault("_radio_tasks", set()).add(task)
         task.add_done_callback(self.__dict__["_radio_tasks"].discard)
 
-    async def _dial_radio(self: MessagingBackend, hash_id: str, *, replace: bool) -> None:
+    async def _dial_radio(self: MessagingBackend, hash_id: str) -> None:
         from srltcp.core.messaging.connect import SERIAL_HANDSHAKE_TTL
 
         try:
+            link = self.get_link(hash_id)
+            peers = self.serial_transport.peers() if self.serial_transport else []
             log.info("Contact %s in radio range — connecting over serial", hash_id[:8])
-            await self.connect_to_peer(hash_id, transport="serial", force=replace)
-            if await self.wait_for_handshake(hash_id, timeout=SERIAL_HANDSHAKE_TTL):
-                self._radio_waiting.pop(hash_id, None)
+            if link and link.up and peers:
+                # Connected over the internet or Tor: open the radio session
+                # alongside; it replaces the current one once it's proven.
+                peer_id = peers[0].peer_id
+                kx = await self._send_upgrade_handshake(hash_id, peer_id, "serial")
+                if kx is None:
+                    return
+                self._upgrades[hash_id] = (peer_id, kx, time.monotonic())
+            else:
+                await self.connect_to_peer(hash_id, transport="serial", force=link is not None)
+            deadline = time.monotonic() + SERIAL_HANDSHAKE_TTL
+            while time.monotonic() < deadline:
+                if self._radio_session(hash_id):
+                    self._radio_waiting.pop(hash_id, None)
+                    return
+                await asyncio.sleep(0.2)
         except (OSError, ConnectionError, RuntimeError, KeyError, TimeoutError) as exc:
             log.info("Serial connect to %s failed: %s", hash_id[:8], exc)
         finally:

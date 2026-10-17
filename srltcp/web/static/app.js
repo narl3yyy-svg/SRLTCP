@@ -2523,15 +2523,21 @@
       const ports = portsData.ports || [];
       const group = portsData.group || {};
       const android = isAndroidApp();
-      portEl.innerHTML = ports.length
-        ? ports.map((p) => {
+      const inUse = state.transportStatus?.serial?.active ? state.transportStatus.serial.port : "";
+      const inUseName = ports.find((p) => p.device === inUse)?.description || inUse;
+      // "Automatic" (empty value): the adapter plugged in most recently.
+      const auto = android
+        ? `Automatic — the adapter plugged in${inUseName ? ` (now: ${inUseName})` : ""}`
+        : "Automatic (default port)";
+      portEl.innerHTML = `<option value="" ${selectedPort ? "" : "selected"}>${escapeHtml(auto)}</option>`
+        + ports.map((p) => {
             const access = p.accessible ? "" : android ? " — allow when asked" : " — no permission";
             return `<option value="${escapeHtml(p.device)}" ${p.device === selectedPort ? "selected" : ""}>${escapeHtml(p.description)}${access}</option>`;
-          }).join("")
-        : `<option value="">${android ? "No USB serial adapter found — plug it in, then Refresh" : "No serial devices detected"}</option>`;
+          }).join("");
       if (selectedPort && !ports.some((p) => p.device === selectedPort)) {
-        portEl.innerHTML += `<option value="${escapeHtml(selectedPort)}" selected>${escapeHtml(selectedPort)} (saved)</option>`;
+        portEl.innerHTML += `<option value="${escapeHtml(selectedPort)}" selected>${escapeHtml(selectedPort)} (saved, not plugged in)</option>`;
       }
+      $("#btn-serial-forget")?.classList.toggle("hidden", !selectedPort);
       const hintEl = $("#set-serial-hint");
       const serialErr = state.transportStatus?.serial?.error;
       if (hintEl && android) {
@@ -2548,7 +2554,7 @@
         } else if (ports.length && ports.every((p) => !p.accessible)) {
           hintEl.textContent = `Serial device(s) detected but not readable — check ${group.group || "uucp/dialout"} group permissions.`;
         } else {
-          hintEl.innerHTML = "Both peers need serial enabled and the port open to send/receive RF announces.";
+          hintEl.textContent = "Both sides need serial on with the same baud rate. Only contacts connect over the radio.";
         }
       }
       baudEl.innerHTML = (baudData.rates || [115200]).map((r) =>
@@ -2559,6 +2565,19 @@
       baudEl.innerHTML = `<option value="57600">57600</option>`;
     }
   }
+
+  // Forget the saved adapter: back to "Automatic", saved at once.
+  $("#btn-serial-forget")?.addEventListener("click", async () => {
+    const res = await apiPost("/api/settings", { serial_port: "" });
+    if (!res.ok) {
+      toast("Couldn't forget the adapter", "error");
+      return;
+    }
+    if (state.settings) state.settings.serial_port = "";
+    await fetchStatus();
+    await loadSerialSettings("", parseInt($("#set-serial-baud")?.value || "57600", 10));
+    toast("Saved adapter forgotten: the one plugged in is used");
+  });
 
   $("#btn-serial-refresh")?.addEventListener("click", async () => {
     await fetchStatus();

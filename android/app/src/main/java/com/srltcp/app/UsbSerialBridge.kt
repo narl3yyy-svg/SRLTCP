@@ -50,7 +50,9 @@ object UsbSerialBridge {
     private fun drivers(manager: UsbManager): List<UsbSerialDriver> =
         UsbSerialProber.getDefaultProber().findAllDrivers(manager)
 
-    /** JSON list: [{device, description, accessible}] for the settings UI. */
+    /** JSON list: [{device, description, accessible, attached}] for the settings UI;
+     *  "attached" grows with every plug-in (Android's device id), so the
+     *  adapter plugged in last has the highest. */
     @JvmStatic
     fun listPorts(): String {
         val out = JSONArray()
@@ -71,6 +73,7 @@ object UsbSerialBridge {
                         put("device", String.format("usb:%04x:%04x#%d", dev.vendorId, dev.productId, index))
                         put("description", label)
                         put("accessible", manager.hasPermission(dev))
+                        put("attached", dev.deviceId)
                     })
                 }
             }

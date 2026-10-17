@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.13.3 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.13.4 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -235,7 +235,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.3.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.4.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -243,7 +243,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.3.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.3.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.4.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -377,9 +377,15 @@ Two devices over a USB-serial cable or a pair of **serial radios** (SiK/3DR
 telemetry radios, LoRa or ESP32 serial bridges), no network at all.
 
 - **Android:** plug the adapter into the phone (USB-C OTG), *Settings → Serial*:
-  turn it on, pick the adapter, same baud rate on both phones, Save. Android
-  asks once to allow SRLTCP to use it. Supported: FTDI, CP210x, CH34x, PL2303,
+  turn it on, same baud rate on both phones, Save. Android asks once to allow
+  SRLTCP to use it. Supported: FTDI, CP210x, CH34x, PL2303,
   Arduino/ESP32/RP2040/STM32 boards.
+- **Which adapter:** *Automatic* (default) uses the adapter plugged in most
+  recently and moves to a new one as soon as it's plugged in. Picking one
+  saves it; the trash icon next to the list forgets it (back to Automatic).
+- **The radio comes first** when the two phones aren't on the same Wi-Fi/LAN:
+  an internet or Tor session moves to the radio as soon as the contact is in
+  range (without a gap), and back to the shared Wi-Fi when there is one.
 - **PC:** `./run.sh web --serial --serial-port /dev/ttyUSB0` (or `COM3`).
 - Contacts are the **same contacts** as over Wi-Fi, and **only contacts**:
   nobody is discovered over the radio. Phones send private *beacons* that
@@ -390,10 +396,13 @@ telemetry radios, LoRa or ESP32 serial bridges), no network at all.
 - Both phones always agree: if one side loses the session (restart, a lost
   answer), its next beacon makes the other reconnect too, and a busy radio
   session is never dropped for late pings.
-- The link is **reliable over lossy radios**: messages go in small packets
-  with a CRC-32, the receiver acknowledges what it got, missing packets are
-  sent again, and the sending rate adapts so the radio's buffer never
-  overflows (`srltcp/transports/serial_link.py`).
+- The link is **reliable over lossy, half-duplex radios**: messages go in
+  64-byte packets with a CRC-32, the two sides take turns (listening first,
+  so they never transmit over each other), the receiver acknowledges what it
+  got, missing packets are sent again, and the sending rate and the wait for
+  an answer follow what the radio really does
+  (`srltcp/transports/serial_link.py`). The answering phone shows the
+  contact as connected only once the other side proves it has the session.
 - *Settings → Serial* shows live stats (sent/received, good/bad packets,
   resends, last heard) and says what's wrong: bad packets only means a baud
   rate mismatch; nothing received means the radios aren't paired (channel,

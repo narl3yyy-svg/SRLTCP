@@ -24,7 +24,7 @@ def _bridge() -> Any:
     return jclass("com.srltcp.app.UsbSerialBridge")
 
 
-def list_ports() -> list[dict[str, str | bool]]:
+def list_ports() -> list[dict[str, str | bool | int]]:
     try:
         raw = json.loads(str(_bridge().listPorts()))
     except Exception:  # noqa: BLE001 - not on Android, or no USB host support
@@ -35,6 +35,7 @@ def list_ports() -> list[dict[str, str | bool]]:
             "description": str(p.get("description", "")),
             "hwid": "",
             "accessible": bool(p.get("accessible")),
+            "attached": int(p.get("attached") or 0),  # higher = plugged in later
         }
         for p in raw
         if isinstance(p, dict) and str(p.get("device", "")).startswith(PREFIX)

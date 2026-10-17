@@ -49,6 +49,7 @@ from srltcp.transports.base import Transport, TransportEvent, TransportPeer
 from srltcp.transports.serial import SerialTransport
 from srltcp.transports.tcp import TCPTransport
 from srltcp.utils.logging import get_logger
+from srltcp.utils.platform import resolve_serial_port
 
 log = get_logger(__name__)
 
@@ -282,13 +283,17 @@ class MessagingBackend(
 
     async def serial_watchdog(self) -> None:
         """Serial on but not open (device plugged in later, USB permission just
-        granted, adapter unplugged and back): open it again."""
+        granted, adapter unplugged and back): open it again. With "Automatic"
+        (or the saved adapter unplugged), move to a newly plugged-in one."""
         if not self.config.enable_serial:
             return
         transport = self.serial_transport
         if transport is not None and getattr(transport, "alive", True):
-            await self.radio_tick()
-            return
+            wanted = resolve_serial_port(self.config.serial_port)
+            if not wanted or wanted == transport.port:
+                await self.radio_tick()
+                return
+            log.info("Serial adapter %s plugged in — switching to it", wanted)
         if transport is not None:
             await transport.stop()
             self.serial_transport = None
@@ -308,7 +313,7 @@ class MessagingBackend(
         """Start, stop, or restart serial transport when settings change.
         ``ask``: on Android, show the USB permission question again."""
         want = self.config.enable_serial
-        port = self.config.serial_port or None
+        port = resolve_serial_port(self.config.serial_port)
         baud = self.config.serial_baud
 
         if not want:
@@ -321,7 +326,7 @@ class MessagingBackend(
         needs_restart = False
         if self.serial_transport:
             if (
-                getattr(self.serial_transport, "port", None) != (port or "")
+                getattr(self.serial_transport, "port", None) != port
                 or getattr(self.serial_transport, "baudrate", None) != baud
             ):
                 await self.serial_transport.stop()
@@ -331,6 +336,9 @@ class MessagingBackend(
             needs_restart = True
 
         if needs_restart:
+            if not port:
+                self._record_serial_failure("", FileNotFoundError("No serial adapter connected"))
+                return {"serial": "failed", "error": self._serial_error or ""}
             self.serial_transport = SerialTransport(port=port, baudrate=baud, ask=ask)
             self._wire_transport(self.serial_transport)
             try:
@@ -531,6 +539,7 @@ class MessagingBackend(
             return
         hash_id = link.hash_id
         link.last_seen = time.monotonic()
+        await self.confirm_link(link)
         if msg_type == MessageType.RECEIPT:
             await self._handle_receipt(link, body)
             return
@@ -1065,7 +1074,7 @@ class MessagingBackend(
                 "peers": [
                     link.peer_name or link.hash_id[:8]
                     for link in self._links.values()
-                    if link.transport == "serial" and link.handshake_complete
+                    if link.transport == "serial" and link.up
                 ],
             }
         status["tor"] = self.tor_status()

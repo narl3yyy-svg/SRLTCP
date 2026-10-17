@@ -14,7 +14,7 @@ STANDARD_BAUD_RATES = (
 )
 
 
-def list_serial_ports() -> list[dict[str, str | bool]]:
+def list_serial_ports() -> list[dict[str, str | bool | int]]:
     """Return USB/serial devices currently available on the system."""
     from srltcp.utils.platform import is_android
     from srltcp.utils.serial_access import user_can_access_serial
@@ -30,7 +30,7 @@ def list_serial_ports() -> list[dict[str, str | bool]]:
     except ImportError:
         return []
 
-    ports: list[dict[str, str | bool]] = []
+    ports: list[dict[str, str | bool | int]] = []
     for port in list_ports.comports():
         device = port.device or ""
         if not device:

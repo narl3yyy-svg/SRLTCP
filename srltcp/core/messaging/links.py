@@ -35,6 +35,14 @@ class PeerLink:
     have_their_addresses: bool = False
     # monotonic time the session keys were (last) set
     established: float = 0.0
+    # They proved they have the keys too. Always, once we got their handshake
+    # answer; as the answering side on a radio, only once something they
+    # encrypted arrives (our answer may have been lost on the air).
+    confirmed: bool = True
+
+    @property
+    def up(self) -> bool:
+        return self.handshake_complete and self.confirmed
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,7 +51,7 @@ class PeerLink:
             "transport": self.transport,
             "address": self.address,
             "connected": self.connected,
-            "handshake_complete": self.handshake_complete,
+            "handshake_complete": self.up,  # (what the UI shows as connected)
             "rtt_ms": self.rtt_ms,
             "link_quality_pct": self.link_quality_pct,
             "peer_name": self.peer_name,

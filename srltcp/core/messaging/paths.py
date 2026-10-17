@@ -14,6 +14,7 @@ import contextlib
 import time
 from typing import TYPE_CHECKING, Any
 
+from srltcp.core.messaging.connect import SERIAL_HANDSHAKE_TTL
 from srltcp.core.protocol.messages import MessageType, decode_payload, encode_payload
 from srltcp.utils.logging import get_logger
 
@@ -88,12 +89,16 @@ class PathsMixin:
         """Periodically: a session that only Tor carries → try the direct path."""
         now = time.monotonic()
         for hash_id, (peer_id, _kx, started) in list(self._upgrades.items()):
-            if now - started > 10.0:
+            on_radio = bool(self.serial_transport and self.serial_transport.has_peer(peer_id))
+            if now - started > (SERIAL_HANDSHAKE_TTL if on_radio else 10.0):
                 self._upgrades.pop(hash_id, None)
-                if self.tcp_transport and not self.get_link_by_peer_id(peer_id):
+                if not on_radio and self.tcp_transport and not self.get_link_by_peer_id(peer_id):
                     await self.tcp_transport.disconnect(peer_id)
         for hash_id, link in list(self._links.items()):
-            if not link.handshake_complete or not self._link_on_tor(link):
+            # Tor only rings the doorbell: go direct. On the radio: move to
+            # the same Wi-Fi/LAN when we share one (never to the internet).
+            on_radio = link.transport == "serial"
+            if not link.up or not (on_radio or self._link_on_tor(link)):
                 continue
             # One side drives upgrades so both don't race each other.
             if self._me_hash() > hash_id or hash_id in self._upgrades:
@@ -103,7 +108,7 @@ class PathsMixin:
             if now - self._upgrade_attempts.get(hash_id, 0.0) < every:
                 continue
             self._upgrade_attempts[hash_id] = now
-            asyncio.create_task(self._try_direct_upgrade(hash_id))
+            asyncio.create_task(self._try_direct_upgrade(hash_id, lan_only=on_radio))
 
     def _has_waiting(self: MessagingBackend, hash_id: str) -> bool:
         return hash_id in self.peers_with_undelivered() or hash_id in self.peers_with_queued_files()
@@ -133,10 +138,18 @@ class PathsMixin:
             self._punch_next.pop(hash_id, None)
         asyncio.create_task(self._try_direct_upgrade(hash_id))
 
-    async def _try_direct_upgrade(self: MessagingBackend, hash_id: str) -> None:
+    async def _try_direct_upgrade(
+        self: MessagingBackend, hash_id: str, *, lan_only: bool = False
+    ) -> None:
+        """Dial the contact's LAN/VPN addresses, else punch through the NATs
+        (``lan_only``: only addresses on a network we're on ourselves)."""
         if not self.tcp_transport:
             return
         candidates = self._direct_candidates(hash_id)
+        if lan_only:
+            from srltcp.utils.network import same_network
+
+            candidates = [(h, p) for h, p in candidates if same_network(h)]
         if candidates:
             peer_id, host, port = await self._dial_first(candidates, DIRECT_TIMEOUT)
             if peer_id:
@@ -147,8 +160,8 @@ class PathsMixin:
                 self._upgrades[hash_id] = (peer_id, kx, time.monotonic())
                 log.info("Trying a direct path to %s at %s:%d", hash_id[:8], host, port)
                 return
-        # No LAN/VPN path: punch through the NATs between us.
-        await self.start_punch(hash_id)
+        if not lan_only:
+            await self.start_punch(hash_id)  # no LAN/VPN path: through the NATs between us
 
     def upgrade_for_peer_id(self: MessagingBackend, peer_id: str) -> tuple[str, Any] | None:
         for hash_id, (pid, kx, _started) in self._upgrades.items():
