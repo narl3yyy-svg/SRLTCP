@@ -765,6 +765,19 @@
   }
 
   /* Settings → Serial: what the radio link is doing (live). */
+  // Throughput on the radio right now, from two samples of its counters.
+  let serialSample = null;
+  function serialThroughput(link) {
+    const now = Date.now();
+    const prev = serialSample;
+    serialSample = { at: now, out: link.bytes_out || 0, in: link.bytes_in || 0 };
+    if (!prev || now - prev.at < 1000 || now - prev.at > 15000) return "";
+    const secs = (now - prev.at) / 1000;
+    const up = Math.max(0, (serialSample.out - prev.out) / secs);
+    const down = Math.max(0, (serialSample.in - prev.in) / secs);
+    return ` · now ↑ ${formatSpeed(up) || "0 B/s"} ↓ ${formatSpeed(down) || "0 B/s"}`;
+  }
+
   function renderSerialLink(serial) {
     const el = $("#serial-link-status");
     if (!el) return;
@@ -772,6 +785,7 @@
     if (!serial || !serial.active || !Object.keys(link).length) {
       el.textContent = "";
       el.className = "net-status";
+      serialSample = null;
       return;
     }
     const kb = (n) => (n >= 10240 ? `${Math.round(n / 1024)} KB` : `${n} B`);
@@ -784,7 +798,9 @@
           ? "Hearing the other radio — connecting…"
           : "Port open — nothing heard from the other radio yet",
       `Sent ${kb(link.bytes_out || 0)} · received ${kb(link.bytes_in || 0)} · ${link.packets_in || 0} good / ${link.bad_packets || 0} bad packets · ${link.resent || 0} resent`
-        + (ago !== null ? ` · last heard ${ago}s ago` : ""),
+        + (ago !== null ? ` · last heard ${ago}s ago` : "")
+        + serialThroughput(link)
+        + (link.rate ? ` · pace ${formatSpeed(link.rate)}` : ""),
     ];
     if ((link.bytes_in || 0) > 200 && !link.packets_in) {
       lines.push("Data arrives but none of it is readable: check both sides use the same baud rate, and the radios are in transparent serial mode.");
@@ -3341,30 +3357,37 @@
   }
 
   // Keep the chat pinned to the newest message unless the user scrolled up.
-  // Only the user's own scrolling (finger, wheel, keys) unpins it: a scroll
-  // the layout causes (keyboard opening, a bubble growing, an image loading,
-  // the app resuming) is put right instead of being taken for "scrolled up".
+  // Being back at the bottom pins it again, however you got there; only the
+  // user's own scrolling (finger and the fling after it, wheel, keys) unpins
+  // it. A scroll the layout causes (keyboard opening, a bubble growing, an
+  // image loading, the app resuming) is put right instead.
+  let repinMessages = () => {};
+  const messageRowSizes = window.ResizeObserver ? new ResizeObserver(() => repinMessages()) : null;
   (function pinMessagesToBottom() {
     const el = $("#messages");
     if (!el) return;
     state.stickBottom = true;
     let userScrollUntil = 0;
     const userIsScrolling = () => {
-      userScrollUntil = performance.now() + 600;
+      userScrollUntil = performance.now() + 1500;  // (a fling goes on after the finger lifts)
     };
     const repin = () => {
       if (state.stickBottom && el.scrollHeight - el.scrollTop - el.clientHeight > 1) {
         el.scrollTop = el.scrollHeight;
       }
     };
-    ["touchstart", "touchmove", "wheel", "pointerdown"].forEach((type) => {
+    repinMessages = repin;
+    ["touchstart", "touchmove", "touchend", "wheel", "pointerdown"].forEach((type) => {
       el.addEventListener(type, userIsScrolling, { passive: true });
     });
     el.addEventListener("keydown", userIsScrolling);
     el.addEventListener("scroll", () => {
       if (el.clientHeight <= 0) return;
-      if (performance.now() < userScrollUntil) {
-        state.stickBottom = isNearBottom(el);
+      if (isNearBottom(el)) {
+        state.stickBottom = true;  // at the newest messages: follow new ones again
+        repin();
+      } else if (performance.now() < userScrollUntil) {
+        state.stickBottom = false;  // reading older messages
       } else {
         repin();
       }
@@ -3568,7 +3591,16 @@
         );
       });
     });
-    if (wasAtBottom) el.scrollTop = el.scrollHeight;
+    // Any bubble that changes height later (an emoji font or a picture
+    // loading, a progress line wrapping) keeps the newest message in view.
+    if (messageRowSizes) {
+      messageRowSizes.disconnect();
+      el.querySelectorAll(".bubble-row").forEach((row) => messageRowSizes.observe(row));
+    }
+    if (wasAtBottom) {
+      el.scrollTop = el.scrollHeight;
+      requestAnimationFrame(() => repinMessages());
+    }
   }
 
   function applyMediaZoom() {

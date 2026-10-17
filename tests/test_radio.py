@@ -326,3 +326,69 @@ async def test_file_over_the_radio_shows_speed_and_time_left(
     moving = [u for u in updates if u["state"] == "transferring" and u["speed_bps"] > 0]
     assert moving, "no speed was ever shown"
     assert all(isinstance(u["eta_s"], int) for u in moving if u["offset"] < u["size"])
+
+
+async def test_files_over_the_radio_use_most_of_the_line(tmp_path: Any, monkeypatch: Any) -> None:
+    """On a realistic 57600-baud radio pair (writes at the line's speed, USB
+    packets of 62 bytes, 3 % of frames lost), a file moves at well over 40 %
+    of the line's 5760 B/s (0.13.5 managed ~30 %), and pings stay short."""
+    from scripts.bench_serial_file import RadioBridge
+
+    monkeypatch.setattr(android_serial, "_bridge", lambda: bridge)
+    bridge = RadioBridge(57600, 0.03)
+    nodes = [
+        make_node(tmp_path, name, enable_serial=True, serial_port=port, serial_baud=57600)
+        for name, port in zip(("alice", "bob"), PORTS, strict=True)
+    ]
+    for node in nodes:
+        await node.start()
+    a, b = nodes
+    try:
+        _befriend(a, b)
+        _befriend(b, a)
+        assert await a.send_radio_beacon()
+        assert await wait_for(lambda: _on_radio(a, b) and _on_radio(b, a), timeout=60)
+        await asyncio.sleep(3)  # (the new session's own messages go first)
+        src = tmp_path / "video.bin"
+        src.write_bytes(os.urandom(64 * 1024))
+        started = time.monotonic()
+        result = await a.send_file(b.identities["tcp"].hash_id, src)
+        assert result is not None
+        tid = result["id"]
+        assert await wait_for(lambda: b._transfers.get(tid) is not None
+                              and b._transfers[tid].state.value == "complete", timeout=120)
+        speed = 64 * 1024 / (time.monotonic() - started)
+        assert speed > 2400, f"{speed:.0f} B/s"
+        link = a.get_link(b.identities["tcp"].hash_id)
+        assert link is not None and (link.rtt_ms or 0) < 2000
+    finally:
+        for node in nodes:
+            await node.stop()
+
+
+async def test_cancelling_a_radio_transfer_frees_the_link(
+    radios: tuple[MessagingBackend, MessagingBackend], tmp_path: Any
+) -> None:
+    """Cancel a big file: its queued data is dropped at once, so pings and
+    chat aren't stuck behind minutes of it."""
+    a, b = radios
+    _befriend(a, b)
+    _befriend(b, a)
+    assert await a.send_radio_beacon()
+    assert await wait_for(lambda: _on_radio(a, b) and _on_radio(b, a), timeout=60)
+    src = tmp_path / "big.bin"
+    src.write_bytes(os.urandom(2 * 1024 * 1024))
+    result = await a.send_file(b.identities["tcp"].hash_id, src)
+    assert result is not None
+    tid = result["id"]
+    assert await wait_for(lambda: a._transfers[tid].offset > 0, timeout=60)
+    assert await a.cancel_transfer(tid)
+    assert a.serial_transport is not None
+    link_layer = a.serial_transport._link
+    assert link_layer is not None and not any(item.tag == tid for item in link_layer._bulk)
+    bh = b.identities["tcp"].hash_id
+    sent_at = time.monotonic()
+    await a.send_message(bh, "after the cancel")
+    assert await wait_for(
+        lambda: any(m["text"] == "after the cancel" for m in b.get_messages()), timeout=15)
+    assert time.monotonic() - sent_at < 10

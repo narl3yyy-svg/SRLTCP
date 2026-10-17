@@ -60,8 +60,11 @@ def test_serial_path_never_compresses(backend: MessagingBackend) -> None:
     )
     params = backend._path_params(link)
     assert params.level == 0
-    # Small pieces: a chat message on the radio waits behind one at most.
-    assert params.chunk <= 4 * 1024 and params.window <= 32 * 1024
+    # Pieces fit the radio link's message size; chat waits behind one turn of
+    # a piece at most (serial_link), and the window is seconds of radio time.
+    from srltcp.transports.serial_link import MAX_MESSAGE
+
+    assert params.chunk + 1024 <= MAX_MESSAGE and params.window <= 64 * 1024
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.13.5 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.13.6 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -22,7 +22,7 @@
 | **Verified contacts** | 60-digit safety numbers over both identity keys; automatic when you pair in person (QR or NFC) |
 | **Encrypted on the device** | Keys, contacts, chats, groups and settings sealed at rest (Android Keystore / Windows DPAPI); encrypted backup and restore |
 | **Privacy options** | Disappearing messages, app lock and private lock-screen notifications (all off by default) |
-| **Fast file transfer** | Windowed streaming (1 MiB chunks direct, 256 KiB over UDP, 2 KiB over a serial radio), zstd, verified while streaming; speed and time left on every path; survives dropped connections and app restarts; several files at once; optional photo shrinking |
+| **Fast file transfer** | Windowed streaming (1 MiB chunks direct, 256 KiB over UDP, 8 KiB over a serial radio), zstd, verified while streaming; speed and time left on every path; survives dropped connections and app restarts; several files at once; optional photo shrinking |
 | **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
 | **Folder sync** | Keep a folder the same on your device and a contact's: two-way, incremental, conflicts kept as copies, deletes go to a 30-day trash |
 | **Drag-and-drop send** | Drop files onto a contact in the Web UI |
@@ -236,7 +236,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.5.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.6.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -244,7 +244,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.5.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.5.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.6.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -394,8 +394,15 @@ telemetry radios, LoRa or ESP32 serial bridges), no network at all.
   anyone else in range they're random bytes), then connect by themselves
   (the header shows **SERIAL**). A stranger's radio gets no answer. Chat,
   files and groups work over it, slowly; a file shows its speed and the time
-  left, and chat messages go out ahead of it (file data travels in 2 KiB
-  pieces on the radio's lowest-priority lane).
+  left, and chat, pings and call setup wait behind one turn of file data at
+  most (under a second at 57600 baud). A cancelled file's queued data is
+  dropped at once.
+- **Speed:** 57600 baud is at most ~5.7 KB/s on the line, ~4.5 KB/s of file
+  data after packet overhead; in a simulation of two phones on 57600-baud
+  radios (3 % of frames lost) a file moves at ~3.3 KB/s
+  (`scripts/bench_serial_file.py`). Radios and phones set to 115200 baud
+  roughly double it, if the radios' air speed keeps up. *Settings → Serial*
+  shows what the radio carries right now (↑/↓ per second).
 - **Voice calls** work over the radio: low-bitrate Opus (~8 kbit/s, 60 ms
   packets, nothing sent in silence), each voice packet one unacknowledged
   radio packet ahead of everything else. A video call becomes a voice call
@@ -406,10 +413,10 @@ telemetry radios, LoRa or ESP32 serial bridges), no network at all.
   answer), its next beacon makes the other reconnect too, and a busy radio
   session is never dropped for late pings.
 - The link is **reliable over lossy, half-duplex radios**: messages go in
-  64-byte packets with a CRC-32, the two sides take turns (listening first,
-  so they never transmit over each other), the receiver acknowledges what it
-  got, missing packets are sent again, and the sending rate and the wait for
-  an answer follow what the radio really does
+  64-byte packets with a CRC-32, sent in turns of up to 64 packets (listening
+  first, so the two sides never transmit over each other); the receiver
+  acknowledges each turn, missing packets are sent again, and the sending
+  rate and the wait for an answer follow what the radio really does
   (`srltcp/transports/serial_link.py`). The answering phone shows the
   contact as connected only once the other side proves it has the session.
 - *Settings → Serial* shows live stats (sent/received, good/bad packets,
@@ -566,6 +573,7 @@ pytest tests/ -v
 | `bash scripts/tor_testnet.sh start DIR` + `python scripts/simulate_tor.py` | Two nodes talking only over a private, offline Tor network |
 | `sudo bash scripts/simulate_udp.sh` | Two phones behind carrier NATs find each other over a private Tor network and punch a direct UDP connection; file speed; symmetric NAT waits |
 | `python scripts/bench_udp_path.py` | Direct UDP speed and chat delay over emulated mobile paths (delay, jitter, deep buffers, loss); no root |
+| `python scripts/bench_serial_file.py [KB] [baud] [loss]` | A file between two full nodes over simulated USB serial radios (line speed, USB packets, lost frames): speed and ping |
 | `python scripts/pentest/pentest_local.py` | Automated penetration tests (node) |
 | `sudo bash scripts/simulate_wireguard.sh` | Two "phones" + a server on a real WireGuard VPN in network namespaces: discovery, messaging, IP change |
 | `bash scripts/sync-android-python.sh` | Copy `srltcp/` into Android project before Gradle |

@@ -1,5 +1,58 @@
 # SRLTCP Release Notes
 
+## v0.13.6 (2026-10-17)
+
+### Files over the serial radio: about twice as fast
+- **Faster radio transfers.** Your test showed about 500 B/s on radios set
+  to 57600 baud, which can carry about 5.7 KB/s. Most of the time was lost
+  in the app, not on the air:
+  - every file piece took two separate turns on the radio, each waiting for
+    an answer;
+  - every 64-byte packet was its own USB write followed by a pause;
+  - sending was held below the line's speed.
+- **Now:**
+  - turns of up to 64 packets;
+  - packets written in batches;
+  - sending at the line's speed (it slows down only if the radio loses
+    data);
+  - file data in 8 KB pieces.
+- In a simulation of two phones on 57600-baud radios (the serial line's
+  speed, USB packets, 3% of radio frames lost), a file moved at **3.3 KB/s**
+  (0.13.5: 1.8 KB/s). The phones connected in 5 s (0.13.5: 12 s).
+- 57600 baud means at most about 5.7 KB/s, and each packet also carries its
+  number and a checksum, so about 4.5 KB/s is the ceiling for file data. A
+  147 MB video still takes many hours over a radio.
+- If both radios can do more, set them and both phones to 115200 baud for
+  about twice the speed. Many radios also have a separate *air* speed that
+  can be the real limit.
+- **Settings → Serial now shows what the radio carries right now**
+  (↑ sent / ↓ received per second) and the current sending pace.
+
+### Ping no longer climbs after a cancelled file
+- **Fixed: the ping climbed to many seconds after cancelling a file, with
+  nothing else going on.** The cancelled file's data was still queued on
+  the radio and kept going out for minutes, and pings waited behind it.
+- Cancelling a file, pausing it, or resending part of it now drops its
+  queued data at once.
+- During a transfer, chat, pings and call setup wait behind one turn of file
+  data at most (under a second at 57600 baud).
+
+### Chat always shows your newest message
+- **Fixed: the newest message stayed just below the screen.** After a
+  swipe, Android keeps the list moving for a moment after your finger lifts.
+  When it came to rest at the bottom, the chat still thought you were
+  reading older messages and stopped following new ones.
+- Being at the bottom now always means following new messages, however you
+  got there.
+- A message that changes height after it's shown (an emoji or a picture
+  loading, a line wrapping) keeps the newest message in view.
+
+### Calls
+- A video call over the radio connects as a voice call, as intended: a
+  radio carries a few KB/s, enough for voice but not video.
+
+**Both phones need 0.13.6** (the radio link takes turns differently).
+
 ## v0.13.5 (2026-10-17)
 
 ### File transfers show their speed everywhere, including the radio

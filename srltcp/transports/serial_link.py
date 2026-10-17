@@ -61,11 +61,12 @@ MAX_PARTS = 1024
 MAX_MESSAGE = MAX_PARTS * FRAG
 GIVE_UP = 120.0  # a message not through by then is dropped (the session retries)
 MIN_RATE = 60.0  # bytes/s (the slowest LoRa settings)
-START_RATE = 0.5  # of the line's speed, until the radio's real rate is measured
+START_RATE = 1.0  # of the line's speed (slower radios: lowered on loss)
 ACK_MIN_WAIT, ACK_MAX_WAIT = 0.6, 20.0
 QUIET_MIN = 0.03  # s of silence before we talk (plus a few packet times)
-QUIET_MAX_HOLD = 20.0  # never wait longer than this for the other side to finish
-WINDOW = 32  # packets per turn: then we wait for the answer and the other side may talk
+QUIET_MAX_HOLD = 5.0  # never wait longer than this for the other side to finish
+WINDOW = 64  # packets per turn: then we wait for the answer and the other side may talk
+BATCH = 8  # packets per write (each write is a USB transfer)
 QUEUE_MAX = 256
 MAX_DATAGRAM = 255  # payload bytes of a datagram packet (one-byte length)
 DATAGRAM_QUEUE = 8  # datagrams waiting at most; older ones are dropped (they'd be stale)
@@ -102,6 +103,14 @@ class _Incoming:
     ack_handle: asyncio.TimerHandle | None = None
 
 
+@dataclass
+class _Outgoing:
+    message: bytes
+    reliable: bool
+    tag: str = ""  # bulk messages: what they belong to (cancel_bulk drops them)
+    seq: int = 0  # order queued (a cancel drops only what was queued before it)
+
+
 class SerialLink:
     """Reliable messages over ``write`` (raw bytes to the line); feed
     received bytes to :meth:`feed`; complete messages go to ``deliver``."""
@@ -114,53 +123,93 @@ class SerialLink:
     ) -> None:
         self._write = write
         self._deliver = deliver
-        self.max_rate = max(MIN_RATE, baudrate / 10 * 0.9)  # 10 bits per byte on the line
-        self.stats = LinkStats(rate=self.max_rate * START_RATE, rtt=1.0)
+        self.max_rate = max(MIN_RATE, baudrate / 10)  # 10 bits per byte on the line
+        self.stats = LinkStats(rate=self.max_rate * START_RATE, rtt=0.5)
         self._buf = bytearray()
-        self._urgent: asyncio.Queue[tuple[bytes, bool]] = asyncio.Queue(QUEUE_MAX)
-        self._bulk: asyncio.Queue[bytes] = asyncio.Queue(QUEUE_MAX)
-        self._queued = asyncio.Event()
+        self._urgent: deque[_Outgoing] = deque()
+        self._bulk: deque[_Outgoing] = deque()
+        self._urgent_ready = asyncio.Event()
+        self._bulk_ready = asyncio.Event()
+        self._bulk_room = asyncio.Event()
+        self._bulk_room.set()
+        self._queued_seq = 0
+        # tag -> last seq a cancel covers: older messages with the tag are dropped,
+        # newer ones (the same file resent or resumed) go out.
+        self._cancelled: OrderedDict[str, int] = OrderedDict()
         self._datagrams: deque[bytes] = deque()
         self._datagram_ready = asyncio.Event()
-        self._datagram_task: asyncio.Task[None] | None = None
+        self._tasks: list[asyncio.Task[None]] = []
         self._next_id = random.getrandbits(16)
         self._acked: dict[int, set[int]] = {}
-        self._ack_event = asyncio.Event()
+        self._ack_events: dict[int, asyncio.Event] = {}
         self._incoming: dict[int, _Incoming] = {}
         self._delivered: OrderedDict[int, int] = OrderedDict()  # message id -> count
-        self._task: asyncio.Task[None] | None = None
         self._write_lock = asyncio.Lock()
+        # The line is taken in turns (a burst of packets and the wait for its
+        # answer); urgent messages get the next turn before bulk ones.
+        self._turn = asyncio.Condition()
+        self._turn_busy = False
+        self._urgent_waiting = 0
         self._heard_at = 0.0  # monotonic time any byte last arrived
 
     # ── Sending ──
 
     def start(self) -> None:
-        if self._task is None:
-            self._task = asyncio.create_task(self._send_loop())
-        if self._datagram_task is None:
-            self._datagram_task = asyncio.create_task(self._datagram_loop())
+        if not self._tasks:
+            self._tasks = [
+                asyncio.create_task(self._send_loop(self._urgent, self._urgent_ready, True)),
+                asyncio.create_task(self._send_loop(self._bulk, self._bulk_ready, False)),
+                asyncio.create_task(self._datagram_loop()),
+            ]
 
     async def stop(self) -> None:
-        for task in (self._task, self._datagram_task):
-            if task:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-        self._task = self._datagram_task = None
+        for task in self._tasks:
+            task.cancel()
+        for task in self._tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._tasks = []
         for inc in self._incoming.values():
             if inc.ack_handle:
                 inc.ack_handle.cancel()
 
-    async def send(self, message: bytes, *, reliable: bool = True, bulk: bool = False) -> None:
-        """Queue a message: urgent (default) or ``bulk`` (file data, sent only
-        while nothing urgent waits); ``reliable=False``: once, unacknowledged."""
+    async def send(
+        self, message: bytes, *, reliable: bool = True, bulk: bool = False, tag: str = ""
+    ) -> None:
+        """Queue a message: urgent (default) or ``bulk`` (file data: it goes
+        in the turns urgent messages leave, and ``tag`` lets
+        :meth:`cancel_bulk` drop it); ``reliable=False``: once, unacknowledged."""
         if len(message) > MAX_MESSAGE:
             raise ValueError(f"message too large for the serial link ({len(message)} bytes)")
+        self._queued_seq += 1
+        item = _Outgoing(message, reliable, tag, self._queued_seq)
         if bulk:
-            await self._bulk.put(message)
+            while len(self._bulk) >= QUEUE_MAX:  # (the sender's window normally keeps it short)
+                self._bulk_room.clear()
+                await self._bulk_room.wait()
+            self._bulk.append(item)
+            self._bulk_ready.set()
         else:
-            await self._urgent.put((message, reliable))
-        self._queued.set()
+            self._urgent.append(item)
+            self._urgent_ready.set()
+
+    def cancel_bulk(self, tag: str) -> int:
+        """Drop the bulk messages with ``tag`` queued so far (a cancelled or
+        rewound file) and stop resending the one on its way; what is queued
+        with the tag afterwards goes out. Returns how many were dropped."""
+        kept = [item for item in self._bulk if item.tag != tag]
+        dropped = len(self._bulk) - len(kept)
+        self._bulk.clear()  # (in place: the bulk sender holds this deque)
+        self._bulk.extend(kept)
+        self._bulk_room.set()
+        self._cancelled[tag] = self._queued_seq
+        self._cancelled.move_to_end(tag)
+        while len(self._cancelled) > 64:
+            self._cancelled.popitem(last=False)
+        return dropped
+
+    def _is_cancelled(self, item: _Outgoing) -> bool:
+        return bool(item.tag) and item.seq <= self._cancelled.get(item.tag, 0)
 
     def send_datagram(self, data: bytes) -> bool:
         """Send ``data`` as one unacknowledged packet, ahead of everything
@@ -188,16 +237,12 @@ class SerialLink:
                     break
                 self.stats.bytes_out += len(packet)
                 self.stats.datagrams_out += 1
-                await asyncio.sleep(len(packet) / self.max_rate)  # (the line's own speed)
-
-    def _packet_time(self) -> float:
-        return PACKET / self.stats.rate
 
     async def _wait_quiet(self) -> None:
         """Listen before talk: wait while the other side is transmitting (at
         most about one of its turns), before a turn of ours."""
-        gap = max(QUIET_MIN, 2.5 * PACKET / self.max_rate + self._packet_time())
-        hold = min(QUIET_MAX_HOLD, max(1.0, 1.5 * WINDOW * self._packet_time()))
+        gap = max(QUIET_MIN, 2.5 * PACKET / self.max_rate)
+        hold = min(QUIET_MAX_HOLD, max(0.5, 1.5 * WINDOW * PACKET / self.max_rate))
         deadline = time.monotonic() + hold
         held = False
         while (now := time.monotonic()) < deadline:
@@ -209,68 +254,109 @@ class SerialLink:
         if held:  # both may have waited for the same silence: don't restart together
             await asyncio.sleep(random.uniform(0, gap))
 
-    async def _raw(self, data: bytes) -> None:
-        async with self._write_lock:
-            await self._write(data)
-        self.stats.bytes_out += len(data)
-        await asyncio.sleep(len(data) / self.stats.rate)  # pacing
+    async def _take_turn(self, urgent: bool) -> None:
+        async with self._turn:
+            if urgent:
+                self._urgent_waiting += 1
+            try:
+                await self._turn.wait_for(
+                    lambda: not self._turn_busy and (urgent or not self._urgent_waiting)
+                )
+            finally:
+                if urgent:
+                    self._urgent_waiting -= 1
+            self._turn_busy = True
+
+    async def _end_turn(self) -> None:
+        async with self._turn:
+            self._turn_busy = False
+            self._turn.notify_all()
+
+    async def _burst(self, packets: list[bytes]) -> None:
+        """Write packets in batches (one write per BATCH packets: each write
+        costs a USB transfer), paced at the current rate."""
+        for i in range(0, len(packets), BATCH):
+            data = b"".join(packets[i : i + BATCH])
+            started = time.monotonic()
+            async with self._write_lock:
+                await self._write(data)
+            self.stats.bytes_out += len(data)
+            pause = len(data) / self.stats.rate - (time.monotonic() - started)
+            if pause > 0:  # (a write that blocked at the line's speed already took its time)
+                await asyncio.sleep(pause)
 
     @staticmethod
     def _data_packet(kind: int, msg_id: int, idx: int, count: int, payload: bytes) -> bytes:
         head = DATA_HDR.pack(MAGIC, kind, msg_id, idx, count, len(payload)) + payload
         return head + CRC.pack(zlib.crc32(head))
 
-    async def _next_message(self) -> tuple[bytes, bool]:
+    async def _send_loop(self, queue: deque[_Outgoing], ready: asyncio.Event, urgent: bool) -> None:
         while True:
-            if not self._urgent.empty():
-                return self._urgent.get_nowait()
-            if not self._bulk.empty():
-                return self._bulk.get_nowait(), True
-            self._queued.clear()
-            await self._queued.wait()
-
-    async def _send_loop(self) -> None:
-        while True:
-            message, reliable = await self._next_message()
+            if not queue:
+                ready.clear()
+                await ready.wait()
+                continue
+            item = queue.popleft()
+            if not urgent:
+                self._bulk_room.set()
+                if self._is_cancelled(item):
+                    continue
             try:
-                await self._send_message(message, reliable)
+                await self._send_message(item, urgent)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - a write error: the transport notices
                 await asyncio.sleep(0.2)
 
-    async def _send_message(self, message: bytes, reliable: bool) -> None:
+    async def _send_message(self, item: _Outgoing, urgent: bool) -> None:
         msg_id = self._next_id
         self._next_id = (self._next_id + 1) & 0xFFFF
+        message = item.message
         parts = [message[i : i + FRAG] for i in range(0, len(message), FRAG)] or [b""]
         count = len(parts)
-        if not reliable:
-            await self._wait_quiet()
-            for idx, part in enumerate(parts):
-                await self._raw(self._data_packet(K_DATA_NOACK, msg_id, idx, count, part))
+        if not item.reliable:
+            await self._take_turn(urgent)
+            try:
+                await self._wait_quiet()
+                await self._burst([
+                    self._data_packet(K_DATA_NOACK, msg_id, idx, count, part)
+                    for idx, part in enumerate(parts)
+                ])
+            finally:
+                await self._end_turn()
             self.stats.messages_out += 1
             return
         missing = set(range(count))
         self._acked[msg_id] = set()
+        answer = self._ack_events[msg_id] = asyncio.Event()
         started = time.monotonic()
         sent_once: set[int] = set()
         try:
             while missing and time.monotonic() - started < GIVE_UP:
-                await self._wait_quiet()
-                turn = sorted(missing)[:WINDOW]
-                for idx in turn:
-                    kind = K_DATA_LAST if idx == turn[-1] else K_DATA
-                    await self._raw(self._data_packet(kind, msg_id, idx, count, parts[idx]))
-                    if idx in sent_once:
-                        self.stats.resent += 1
-                    sent_once.add(idx)
-                sent_at = time.monotonic()
-                self._ack_event.clear()
-                wait = min(ACK_MAX_WAIT, max(ACK_MIN_WAIT, 2.0 * self.stats.rtt + 0.2))
-                answered = False
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(self._ack_event.wait(), wait)  # (any answer)
-                    answered = True
+                if self._is_cancelled(item):
+                    return  # (the file was cancelled or rewound: the rest isn't wanted)
+                await self._take_turn(urgent)
+                try:
+                    await self._wait_quiet()
+                    turn = sorted(missing)[:WINDOW]
+                    answer.clear()
+                    await self._burst([
+                        self._data_packet(
+                            K_DATA_LAST if idx == turn[-1] else K_DATA, msg_id, idx, count,
+                            parts[idx],
+                        )
+                        for idx in turn
+                    ])
+                    self.stats.resent += sum(1 for idx in turn if idx in sent_once)
+                    sent_once.update(turn)
+                    sent_at = time.monotonic()
+                    wait = min(ACK_MAX_WAIT, max(ACK_MIN_WAIT, 2.0 * self.stats.rtt + 0.2))
+                    answered = False
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(answer.wait(), wait)
+                        answered = True
+                finally:
+                    await self._end_turn()
                 missing -= self._acked.get(msg_id, set())
                 self._adapt(answered, sent_at, got=len(set(turn) - missing), sent=len(turn))
             if missing:
@@ -279,20 +365,22 @@ class SerialLink:
                 self.stats.messages_out += 1
         finally:
             self._acked.pop(msg_id, None)
+            self._ack_events.pop(msg_id, None)
 
     def _adapt(self, answered: bool, sent_at: float, *, got: int, sent: int) -> None:
         """Pace below what makes the radio lose packets (its buffer overflows
         when we're faster than its air rate); wait for answers as long as
         they take."""
         s = self.stats
-        if not answered:  # nothing came back: slow down, wait longer next time
-            s.rate = max(MIN_RATE, s.rate * 0.7)
+        if not answered:  # nothing came back: slow down a little, wait longer next time
+            if sent >= 8:
+                s.rate = max(MIN_RATE, s.rate * 0.8)
             s.rtt = min(ACK_MAX_WAIT, s.rtt * 1.5)
             return
         s.rtt = 0.75 * s.rtt + 0.25 * (time.monotonic() - sent_at)
         lost = 1 - got / max(sent, 1)
         if lost == 0:
-            s.rate = min(self.max_rate, s.rate * 1.15)
+            s.rate = min(self.max_rate, s.rate * 1.1)
         elif lost > 0.1:  # (a stray loss is the air, not us being too fast)
             s.rate = max(MIN_RATE, s.rate * (1 - lost / 2))
 
@@ -359,7 +447,7 @@ class SerialLink:
                 have = {i for i in range(count) if bitmap[i // 8] >> (i % 8) & 1}
                 if msg_id in self._acked:
                     self._acked[msg_id] |= have
-                    self._ack_event.set()
+                    self._ack_events[msg_id].set()
             else:
                 self._bad(buf)
 

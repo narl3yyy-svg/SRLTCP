@@ -222,3 +222,38 @@ async def test_urgent_messages_overtake_queued_file_data() -> None:
     finally:
         await a.stop()
         await b.stop()
+
+
+async def test_cancel_bulk_drops_queued_file_data() -> None:
+    """A cancelled file's queued pieces never go out (they held the radio for
+    minutes, and pings waited behind them)."""
+    a, b, got = await _pair(loss=0.0, corrupt=0.0)
+    try:
+        for i in range(8):
+            await a.send(bytes([i]) * 2048, bulk=True, tag="file-1")
+        await a.send(b"other", bulk=True, tag="file-2")
+        await asyncio.sleep(0.05)  # (the first piece is on its way)
+        dropped = a.cancel_bulk("file-1")
+        assert dropped >= 6
+        await a.send(b"chat")
+        assert await _until(lambda: b"chat" in got[1] and b"other" in got[1], 20)
+        await asyncio.sleep(0.5)
+        assert sum(1 for m in got[1] if len(m) == 2048) <= 2
+    finally:
+        await a.stop()
+        await b.stop()
+
+
+async def test_data_queued_after_a_cancel_still_goes_out() -> None:
+    """A rewound or resumed file reuses its tag: only what was queued before
+    the cancel is dropped, the resent data goes out."""
+    a, b, got = await _pair(loss=0.0, corrupt=0.0)
+    try:
+        for i in range(4):
+            await a.send(bytes([i]) * 1024, bulk=True, tag="file-1")
+        a.cancel_bulk("file-1")
+        await a.send(b"resent from the last confirmed byte", bulk=True, tag="file-1")
+        assert await _until(lambda: b"resent from the last confirmed byte" in got[1], 15)
+    finally:
+        await a.stop()
+        await b.stop()

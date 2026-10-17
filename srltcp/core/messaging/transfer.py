@@ -1237,10 +1237,12 @@ class TransferMixin:
                     if path_key is not None:
                         out.next = out.acked  # new path or keys: in-flight data is gone
                         out.complete_sent = False
+                        self._drop_queued_chunks(transfer.id)
                     path_key = key
                 if out.rewind:
                     out.rewind = False
                     out.next = out.acked
+                    self._drop_queued_chunks(transfer.id)
                 params = self._path_params(link)
                 if out.next < transfer.size and out.next - out.acked < params.window:
                     length = min(params.chunk, transfer.size - out.next)
@@ -1257,7 +1259,9 @@ class TransferMixin:
                             await self.tcp_transport.send_framed(link.transport_peer_id, frame)
                         elif link.transport == "serial" and self.serial_transport:
                             # Behind chat, confirmations and calls on the radio.
-                            await self.serial_transport.send_bulk(link.transport_peer_id, frame)
+                            await self.serial_transport.send_bulk(
+                                link.transport_peer_id, frame, tag=transfer.id
+                            )
                         else:
                             await self._send_raw(link.transport_peer_id, link.transport, frame)
                     except (KeyError, OSError, ConnectionError) as exc:
@@ -1288,6 +1292,7 @@ class TransferMixin:
                 out.progress_at = now
                 out.next = out.acked
                 out.complete_sent = False
+                self._drop_queued_chunks(transfer.id)
                 if out.stalls >= 3:
                     log.warning(
                         "No answer from %s for %s — reconnecting", hash_id[:8], transfer.filename
@@ -1328,6 +1333,8 @@ class TransferMixin:
                     fh.close()
             if self._transfer_tasks.get(transfer.id) is asyncio.current_task():
                 self._transfer_tasks.pop(transfer.id, None)
+            if transfer.state != TransferState.COMPLETE:
+                self._drop_queued_chunks(transfer.id)  # (paused, cancelled, failed)
             if transfer.state in TERMINAL:
                 self._out.pop(transfer.id, None)
                 self._cleanup_temp_zip(transfer)
@@ -1399,8 +1406,18 @@ class TransferMixin:
         log.info("Transfer cancelled: %s", transfer.filename)
         return True
 
+    def _drop_queued_chunks(self: MessagingBackend, transfer_id: str) -> None:
+        """File data still queued on the radio for this transfer is no longer
+        wanted (cancelled, paused, or about to be resent from an earlier byte):
+        drop it, so it doesn't hold up the link for minutes."""
+        if self.serial_transport is not None:
+            dropped = self.serial_transport.cancel_bulk(transfer_id)
+            if dropped:
+                log.debug("Dropped %d queued radio pieces of %s", dropped, transfer_id)
+
     async def _stop_transfer_work(self: MessagingBackend, transfer: FileTransfer) -> None:
         """Stop the send loop or the writer; delete an unfinished download."""
+        self._drop_queued_chunks(transfer.id)
         task = self._transfer_tasks.pop(transfer.id, None)
         if task and not task.done() and task is not asyncio.current_task():
             task.cancel()

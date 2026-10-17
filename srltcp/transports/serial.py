@@ -151,11 +151,17 @@ class SerialTransport(Transport):
             raise RuntimeError("serial port not open")
         await self._link.send(payload)
 
-    async def send_bulk(self, peer_id: str, payload: bytes) -> None:
-        """Reliable, but only while nothing more urgent waits (file data)."""
+    async def send_bulk(self, peer_id: str, payload: bytes, *, tag: str = "") -> None:
+        """Reliable, in the turns urgent messages leave (file data); ``tag``
+        (the transfer) lets :meth:`cancel_bulk` drop what is still queued."""
         if not self._link or not self.alive:
             raise RuntimeError("serial port not open")
-        await self._link.send(payload, bulk=True)
+        await self._link.send(payload, bulk=True, tag=tag)
+
+    def cancel_bulk(self, tag: str) -> int:
+        """Drop the queued file data with ``tag`` (cancelled, or resent from
+        an earlier point): otherwise it would still take minutes of radio time."""
+        return self._link.cancel_bulk(tag) if self._link else 0
 
     def send_datagram(self, peer_id: str, payload: bytes) -> bool:
         """At once, unacknowledged (call audio). False: too large for one
