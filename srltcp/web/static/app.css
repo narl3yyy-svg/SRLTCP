@@ -570,6 +570,80 @@ body {
 }
 .file-cancel:disabled { opacity: 0.35; cursor: not-allowed; }
 .bubble.out .file-cancel { color: #d4e4ff; border-color: rgba(212, 228, 255, 0.45); }
+/* A file larger than "Download automatically up to": waits for a tap */
+.file-tap-download {
+  display: inline-block;
+  margin-top: 0.35rem;
+  padding: 0.3rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.bubble.out .file-tap-download { color: #d4e4ff; }
+.file-tap-download:disabled { opacity: 0.5; cursor: progress; }
+/* Photos and videos sent together: one album */
+.bubble.album-bubble { padding: 0.3rem; width: min(80vw, 360px); max-width: min(80%, 360px); }
+.album-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.album-grid.odd > :first-child { grid-column: 1 / -1; }
+.album-tile {
+  position: relative;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: rgba(0, 0, 0, 0.25);
+  cursor: zoom-in;
+  overflow: hidden;
+}
+.album-grid.odd > .album-tile:first-child { aspect-ratio: 2; }
+.album-tile img, .album-tile video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.album-play {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  pointer-events: none;
+}
+.album-tile.pending {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  padding: 0.4rem;
+  cursor: default;
+  text-align: center;
+}
+.album-tile-icon { font-size: 1.4rem; line-height: 1; opacity: 0.8; }
+.album-tile .file-progress-meta { font-size: 0.68rem; opacity: 0.85; }
+.album-tile.cancelled .file-progress-meta { color: var(--warning); }
+.album-tile.failed .file-progress-meta { color: var(--danger); }
+.album-tile .chat-progress { width: 80%; }
+.album-tile .file-cancel { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; font-size: 0.85rem; }
+.album-bubble .bubble-meta { padding: 0.2rem 0.3rem 0; }
 /* ── Composer ── */
 .composer {
   padding: 0.85rem 1.25rem 1.1rem;
@@ -1776,3 +1850,13 @@ html, body { touch-action: pan-x pan-y; }
   background: #111; color: var(--warning, #e0a63b); font-weight: 600;
 }
 
+
+/* A checkbox in a dialog reads as a sentence, not a field label */
+.modal-card .checkbox-field { align-items: center; margin: 0.75rem 0; }
+.modal-card .checkbox-field > span {
+  margin: 0;
+  font-size: 0.85rem;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-secondary);
+}

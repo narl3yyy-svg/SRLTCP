@@ -77,6 +77,14 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
+AUTO_DOWNLOAD_ANY = 1024 * 1024  # MiB: "any size" for "Download automatically up to"
+
+
+def _awaits_tap(transfer: FileTransfer) -> bool:
+    """A large file waiting for the receiver to tap Download (either side)."""
+    return bool(transfer.metadata.get("ask") or transfer.metadata.get("waiting"))
+
+
 TERMINAL = frozenset(
     {TransferState.COMPLETE, TransferState.CANCELLED, TransferState.FAILED, TransferState.REJECTED}
 )
@@ -386,6 +394,9 @@ class TransferMixin:
                 self._incoming_paths[tid] = path  # deleted when its timer runs out
                 return transfer
             return transfer if meta.get("reject_unsent") else None
+        if not outgoing and meta.get("ask"):
+            transfer.state = TransferState.OFFERED  # still waits for a tap (no file yet)
+            return transfer
         transfer.state = TransferState.PAUSED
         if outgoing:
             try:
@@ -461,9 +472,11 @@ class TransferMixin:
 
     def has_active_transfer_for(self: MessagingBackend, hash_id: str) -> bool:
         # PAUSED is not "active": a paused transfer needs the link back, so it
-        # must not suppress reconnects or dead-link detection.
+        # must not suppress reconnects or dead-link detection. Neither is a
+        # large file waiting for the receiver to tap Download.
         return any(
             t.state in ACTIVE and hash_id in (t.recipient_hash, t.sender_hash)
+            and not _awaits_tap(t)
             for t in self._transfers.values()
         )
 
@@ -738,6 +751,8 @@ class TransferMixin:
                     hash_id, MessageType.FILE_ACK,
                     {"transfer_id": transfer_id, "offset": existing.size, "ok": True},
                 )
+            elif existing.metadata.get("ask"):
+                await self._send_waiting(hash_id, transfer_id)  # (still waits for a tap)
             elif existing.state in TERMINAL:
                 await self._send_reject(
                     hash_id, transfer_id,
@@ -781,6 +796,7 @@ class TransferMixin:
             dest = self._free_dest(filename)
         link = self.get_link(hash_id)
         assert link is not None
+        ask = sync_meta is None and size > self.auto_download_limit(link.transport)
         transfer = FileTransfer(
             id=transfer_id,
             sender_hash=hash_id,
@@ -790,26 +806,27 @@ class TransferMixin:
             size=size,
             sha256="",
             transport=link.transport,
-            state=TransferState.ACCEPTED,
+            state=TransferState.OFFERED if ask else TransferState.ACCEPTED,
         )
         ttl = wire_ttl(data)
         if ttl and sync_meta is None:
             transfer.metadata["ttl"] = ttl  # the sender's disappearing timer
         if sync_meta is not None:
             transfer.metadata["sync"] = sync_meta
-        # The bytes go to a hidden partial file until verified (sync files have
-        # their own partial files already): nothing half-received or damaged
-        # ever shows under the real name.
-        part = dest if sync_meta is not None else part_path(dest)
         self._transfers[transfer_id] = transfer
-        self._incoming_paths[transfer_id] = part
-        self._in[transfer_id] = _Incoming(path=part)
-        with contextlib.suppress(OSError):
-            part.touch(exist_ok=True)  # (reserves the name for concurrent offers)
-        self._journal_changed()
-        await self._send_control(
-            hash_id, MessageType.FILE_ACCEPT, {"transfer_id": transfer_id, "offset": 0}
-        )
+        if ask:
+            # Larger than "Download automatically up to": it waits until the
+            # user taps Download (or cancels). The sender is told, so it waits too.
+            transfer.metadata["ask"] = True
+            log.info("%s (%d bytes) from %s waits for a tap to download",
+                     filename, size, hash_id[:8])
+            self._journal_changed()
+            await self._send_waiting(hash_id, transfer_id)
+        else:
+            self._start_receiving(transfer, dest)
+            await self._send_control(
+                hash_id, MessageType.FILE_ACCEPT, {"transfer_id": transfer_id, "offset": 0}
+            )
         if sync_meta is not None:
             return  # no chat bubble for sync files
         if self._on_file_offer:
@@ -821,6 +838,59 @@ class TransferMixin:
             transfer=transfer.to_dict(),
             direction="in",
         )
+
+    def auto_download_limit(self: MessagingBackend, transport: str) -> int:
+        """Incoming files up to this many bytes download by themselves; larger
+        ones wait for a tap (settings: "Download automatically up to")."""
+        mb = getattr(self.config, "auto_download_mb", AUTO_DOWNLOAD_ANY)
+        if transport == "serial":
+            mb = min(mb, getattr(self.config, "auto_download_radio_mb", mb))
+        return int(mb) * MiB
+
+    def _start_receiving(self: MessagingBackend, transfer: FileTransfer, dest: Path) -> None:
+        sync = transfer.metadata.get("sync") is not None
+        # The bytes go to a hidden partial file until verified (sync files have
+        # their own partial files already): nothing half-received or damaged
+        # ever shows under the real name.
+        part = dest if sync else part_path(dest)
+        transfer.path = dest
+        self._incoming_paths[transfer.id] = part
+        self._in[transfer.id] = _Incoming(path=part)
+        with contextlib.suppress(OSError):
+            part.touch(exist_ok=True)  # (reserves the name for concurrent offers)
+        self._journal_changed()
+
+    async def _send_waiting(self: MessagingBackend, hash_id: str, transfer_id: str) -> None:
+        # An ack at offset 0 marked "waiting": the sender stops offering it
+        # again and shows that the receiver has to tap Download (versions
+        # without this ignore an ack for a file they aren't sending yet).
+        await self._send_control(
+            hash_id, MessageType.FILE_ACK,
+            {"transfer_id": transfer_id, "offset": 0, "waiting": True},
+        )
+
+    async def download_transfer(self: MessagingBackend, transfer_id: str) -> bool:
+        """The user tapped Download on a file that waited for it."""
+        try:
+            tid = normalize_transfer_id(transfer_id)
+        except ValueError:
+            return False
+        transfer = self._transfers.get(tid)
+        if (
+            not transfer or self._is_outgoing(transfer)
+            or not transfer.metadata.pop("ask", None)
+        ):
+            return False
+        self._start_receiving(transfer, self._free_dest(transfer.filename))
+        transfer.state = TransferState.ACCEPTED
+        sent = await self._send_control(
+            transfer.sender_hash, MessageType.FILE_ACCEPT, {"transfer_id": tid, "offset": 0}
+        )
+        if not sent:
+            transfer.state = TransferState.PAUSED  # starts when the sender is back
+        await self._emit_transfer_progress(transfer, force=True)
+        log.info("Downloading %s (tapped)", transfer.filename)
+        return True
 
     async def _handle_file_chunk(
         self: MessagingBackend, hash_id: str, body: bytes, *, compressed: bool = False
@@ -1048,7 +1118,7 @@ class TransferMixin:
         for transfer in list(self._transfers.values()):
             if transfer.sender_hash != peer_hash or transfer.state not in ACTIVE:
                 continue
-            if self._is_outgoing(transfer):
+            if self._is_outgoing(transfer) or transfer.metadata.get("ask"):
                 continue
             transfer.state = TransferState.PAUSED
             await self._emit_transfer_progress(transfer, force=True)
@@ -1084,6 +1154,7 @@ class TransferMixin:
         out.complete_sent = False
         transfer.offset = offset
         self._offer_sent_at.pop(tid, None)
+        transfer.metadata.pop("waiting", None)
         transfer.state = TransferState.TRANSFERRING
         task = self._transfer_tasks.get(tid)
         if task and not task.done():
@@ -1104,6 +1175,12 @@ class TransferMixin:
             return
         if transfer.state in (TransferState.CANCELLED, TransferState.FAILED):
             await self._repeat_reject(hash_id, transfer)
+            return
+        if data.get("waiting") and transfer.state == TransferState.OFFERED:
+            self._offer_sent_at.pop(tid, None)  # (not unanswered: no re-offer, no pause)
+            if not transfer.metadata.get("waiting"):
+                transfer.metadata["waiting"] = True
+                await self._emit_transfer_progress(transfer, force=True)
             return
         out = self._out.get(tid)
         if transfer.state in TERMINAL or out is None:
@@ -1360,6 +1437,7 @@ class TransferMixin:
             # offset, so this also resumes a partial transfer.
             if transfer.state == TransferState.PAUSED:
                 transfer.state = TransferState.OFFERED
+            transfer.metadata.pop("waiting", None)  # (said again if it still waits)
             await self._send_file_offer(link, transfer)
             await self._emit_transfer_progress(transfer, force=True)
             return True

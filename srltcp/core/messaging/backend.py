@@ -31,7 +31,7 @@ from srltcp.core.messaging.share_peer import SharePeerMixin
 from srltcp.core.messaging.store import MessageStore
 from srltcp.core.messaging.sync import SyncMixin
 from srltcp.core.messaging.tor import TorMixin
-from srltcp.core.messaging.transfer import TransferMixin
+from srltcp.core.messaging.transfer import TERMINAL, TransferMixin
 from srltcp.core.protocol.messages import (
     GROUP_MESSAGE_TYPES,
     SESSION_MESSAGE_TYPES,
@@ -93,6 +93,8 @@ class NodeConfig:
     incoming_dir: str = ""
     message_retention_hours: int = 168
     disappear_seconds: int = 0  # timer on messages we send (0 = keep)
+    auto_download_mb: int = 2048  # larger incoming files wait for a tap (MiB)
+    auto_download_radio_mb: int = 2  # the same over the serial radio
 
 
 class MessagingBackend(
@@ -662,14 +664,51 @@ class MessagingBackend(
         return removed
 
     def clear_messages_for_peer(self, hash_id: str) -> int:
+        """Delete the chat with a contact (not their messages in groups)."""
         before = len(self._messages)
-        self._messages = [
-            m
-            for m in self._messages
-            if m.sender_hash != hash_id and m.recipient_hash != hash_id
-        ]
+        self._messages = [m for m in self._messages if not self._in_chat(m, hash_id, "")]
         self._persist_messages()
         return before - len(self._messages)
+
+    @staticmethod
+    def _in_chat(msg: ChatMessage, peer: str, group: str) -> bool:
+        gid = msg.metadata.get("group_id")
+        if group:
+            return gid == group
+        return not gid and peer in (msg.sender_hash, msg.recipient_hash)
+
+    async def delete_chat(
+        self, *, peer: str = "", group: str = "", delete_files: bool = False
+    ) -> int:
+        """Delete every message of one chat (a contact or a group). Its
+        unfinished file transfers stop; ``delete_files`` also removes the
+        files received in it from this device."""
+        if not peer and not group:
+            return 0
+        gone = [m for m in self._messages if self._in_chat(m, peer, group)]
+        if not gone:
+            return 0
+        ids = {m.id for m in gone}
+        self._messages = [m for m in self._messages if m.id not in ids]
+        for msg in gone:
+            tid = str(msg.metadata.get("transfer_id") or "")
+            transfer = self._transfers.get(tid) if tid else None
+            if transfer is None:
+                continue
+            if transfer.state not in TERMINAL:
+                await self.cancel_transfer(tid)
+            if delete_files and not self._is_outgoing(transfer):
+                for path in {self._incoming_paths.pop(tid, None), transfer.path}:
+                    if path is not None:
+                        with contextlib.suppress(OSError):
+                            path.unlink(missing_ok=True)
+            self._transfers.pop(tid, None)
+        self._journal_changed()
+        self._persist_messages()
+        log.info("Chat deleted (%d message(s)%s)", len(ids), ", files too" if delete_files else "")
+        if self._on_event:
+            await self._on_event({"kind": "messages_removed", "ids": sorted(ids)})
+        return len(ids)
 
     async def _handle_text(self, hash_id: str, body: bytes, flags: int) -> None:
         link = self.get_link(hash_id)
@@ -1267,6 +1306,8 @@ class MessagingBackend(
                 "direction": direction,
                 "is_folder_zip": meta.get("is_folder_zip"),
                 "folder_name": meta.get("folder_name"),
+                "ask": bool(meta.get("ask")),  # waits for a tap to download
+                "waiting": bool(meta.get("waiting")),  # (sender: they have to tap)
             },
         )
         self.stamp_ttl(msg, wire_ttl(meta))
@@ -1299,6 +1340,8 @@ class MessagingBackend(
                     # The receiver has the whole file and checked it: ✓✓, like a chat message.
                     msg.status = "delivered"
                 meta = transfer.get("metadata") or {}
+                msg.metadata["ask"] = bool(meta.get("ask"))
+                msg.metadata["waiting"] = bool(meta.get("waiting"))
                 if meta.get("is_folder_zip"):
                     msg.metadata["is_folder_zip"] = True
                     msg.metadata["folder_name"] = meta.get("folder_name")

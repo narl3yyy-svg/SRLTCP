@@ -1,5 +1,69 @@
 # SRLTCP Release Notes
 
+## v0.13.7 (2026-10-17)
+
+### Scrolling the chat
+- **Scrolling up is never pulled back down.** When you started scrolling
+  up from the newest message, the chat jumped back to the bottom for the
+  first few lines. It also jumped to the bottom when a photo finished
+  arriving or you deleted a message while reading older messages.
+- **Now:**
+  - while your finger (or the fling after it) moves the chat, nothing moves
+    it for you;
+  - the chat follows new messages again only once you scroll right to the
+    bottom yourself, or send a message.
+
+### Delete a chat
+- **The 🗑 button in the chat header** (and *Delete chat…* in a contact's ⋮
+  menu) deletes every message of the chat from this device, after asking.
+  It works in group chats too.
+- **"Also delete the files received in this chat"** removes the photos,
+  videos and files they sent you from this phone as well. Files you sent
+  are never touched.
+- Your contact keeps their copy of the chat.
+- Deleting a chat with a contact no longer deletes their messages in your
+  group chats.
+
+### Photos and videos sent together show as an album
+- **Several photos or videos sent in a row** (within 2 minutes) show as one
+  grid, like in Signal, instead of one large bubble each.
+- Tap a picture to open it full size. Videos show a ▶ and play when tapped.
+- While they arrive, each tile shows its own progress and a ✕ to cancel it.
+
+### Large files wait for a tap
+- **Settings → General → "Download automatically up to"** (default 2 GB):
+  a received file larger than this waits in the chat with a **Download**
+  button (✕ declines it). Nothing is stored or downloaded until you tap.
+- **"Over the serial radio, up to"** (default 2 MB) is a separate limit for
+  the radio, which moves only a few KB per second.
+- The sender's phone shows "waiting for them to tap Download". It doesn't
+  resend the offer or give up meanwhile, and the file still waits after
+  either app restarts.
+- *Ask for every file* and *Any size* are also choices.
+
+### Ping
+- **Why one phone shows 300 ms and the other 400 ms.** Each phone measures
+  its own ping: the time until the other phone answers, at a moment of its
+  own choosing.
+  - That time includes how busy both phones are just then, and anything
+    queued on the connection ahead of the ping (a file piece, an
+    acknowledgement, a radio turn).
+  - Two measurements taken at different moments differ by 100 ms or more
+    without anything being wrong.
+- **The ping shown is now the median of the last 5 measurements,** so one
+  slow answer no longer makes the number jump. Both phones show steadier,
+  closer values.
+
+### STUN servers
+- **Leave the field empty.** The built-in defaults work everywhere:
+  - `stun.l.google.com:19302`
+  - `stun.cloudflare.com:3478`
+- A STUN server only tells your phone its public internet address, so two
+  phones on different networks can connect directly.
+- DNS servers such as 8.8.8.8 or 1.1.1.1 are *not* STUN servers and don't
+  answer STUN. The setting now refuses them with an explanation, and the
+  hint under the field says what to enter (e.g. `stun.nextcloud.com:443`).
+
 ## v0.13.6 (2026-10-17)
 
 ### Files over the serial radio: about twice as fast

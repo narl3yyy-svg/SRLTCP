@@ -1510,6 +1510,14 @@ class UdpEndpoint:
                     return
 
 
+# Public DNS resolvers people mistake for STUN servers (they don't answer STUN).
+_DNS_RESOLVERS = frozenset({
+    "8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9", "149.112.112.112",
+    "208.67.222.222", "208.67.220.220", "2001:4860:4860::8888", "2001:4860:4860::8844",
+    "2606:4700:4700::1111", "2606:4700:4700::1001",
+})
+
+
 def parse_stun_servers(text: str) -> tuple[tuple[str, int], ...]:
     """``host:port`` entries separated by commas or spaces (port 3478 if
     left out, ``[v6]:port`` for IPv6 literals); empty = the defaults.
@@ -1529,11 +1537,18 @@ def parse_stun_servers(text: str) -> tuple[tuple[str, int], ...]:
             ipaddress.IPv6Address(host)
         elif item.count(":") == 1:
             host, port_text = item.split(":")
+            if not port_text.isdigit():
+                raise ValueError(f"bad STUN server: {item}")
             port = int(port_text)
         if not 0 < port < 65536 or not host or len(host) > 253:
             raise ValueError(f"bad STUN server: {item}")
         if not all(c.isalnum() or c in ".-:" for c in host):
             raise ValueError(f"bad STUN server: {item}")
+        if host in _DNS_RESOLVERS:
+            raise ValueError(
+                f"{host} is a DNS server, not a STUN server — leave the field empty "
+                "for the defaults"
+            )
         out.append((host, port))
     if len(out) > 4:
         raise ValueError("at most 4 STUN servers")

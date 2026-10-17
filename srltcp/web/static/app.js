@@ -92,6 +92,8 @@
       speed_mbps: live?.speed_mbps ?? meta.speed_mbps,
       eta_s: live ? live.eta_s : meta.eta_s,
       filename: live?.filename || meta.filename,
+      ask: live?.metadata ? !!live.metadata.ask : !!meta.ask,
+      waiting: live?.metadata ? !!live.metadata.waiting : !!meta.waiting,
     };
   }
 
@@ -499,6 +501,8 @@
     if (stateLabel === "cancelled") return "Transfer cancelled";
     if (stateLabel === "failed") return "Transfer failed";
     if (stateLabel === "complete") return `${formatBytes(size)} · complete`;
+    if (data.ask) return `${formatBytes(size)} · tap Download to receive`;
+    if (data.waiting) return `${formatBytes(size)} · waiting for them to tap Download`;
     const amounts = `${formatBytes(offset)} / ${formatBytes(size)}`;
     if (stateLabel === "paused") return `${amounts} · waiting for connection`;
     const pct = size ? Math.min(100, (offset / size) * 100) : 0;
@@ -1639,18 +1643,39 @@
     loadPeers();
   }
 
-  async function clearChatHistory(hashId) {
+  // Delete one chat (a contact's or a group's) from this device.
+  function openDeleteChat(chatId, name) {
     closeContactMenu();
-    const { ok, data } = await apiPost(
-      `/api/trusted/${encodeURIComponent(hashId)}/clear-chat`,
-      {}
-    );
+    if (!chatId) return;
+    const isGroup = !!groupById(chatId);
+    state.deleteChatTarget = { chatId, isGroup };
+    const text = $("#delete-chat-text");
+    if (text) {
+      text.textContent = `Delete every message in your chat with “${name || chatId.slice(0, 8)}” from this device? `
+        + (isGroup ? "The other members keep theirs." : "They keep their copy.");
+    }
+    const files = $("#delete-chat-files");
+    if (files) files.checked = false;
+    openModal($("#delete-chat-modal"));
+  }
+
+  async function submitDeleteChat() {
+    const target = state.deleteChatTarget;
+    closeModal($("#delete-chat-modal"));
+    if (!target) return;
+    const { ok, data } = await apiPost("/api/chats/delete", {
+      [target.isGroup ? "group" : "peer"]: target.chatId,
+      delete_files: !!$("#delete-chat-files")?.checked,
+    });
     if (!ok) {
-      toast("Failed to clear chat", "error");
+      toast(data?.error || "Could not delete the chat", "error");
       return;
     }
-    toast(`Cleared ${data?.cleared || 0} message(s)`);
-    if (state.selectedPeer === hashId) loadMessages();
+    toast(data?.deleted ? `Chat deleted (${data.deleted} message${data.deleted === 1 ? "" : "s"})` : "Chat was already empty");
+    if (state.selectedPeer === target.chatId) {
+      state.messageCache = [];
+      renderMessages([], { scrollToBottom: true });
+    }
   }
 
   function openEditContact(hashId) {
@@ -2686,6 +2711,8 @@
     setCheckbox("set-tor-enabled", settings.tor_enabled !== false);
     setCheckbox("set-shrink-photos", !!settings.shrink_photos);
     setSelectValue("set-disappear", String(settings.disappear_seconds || 0));
+    setSelectValue("set-auto-download", String(settings.auto_download_mb ?? 2048));
+    setSelectValue("set-auto-download-radio", String(settings.auto_download_radio_mb ?? 2));
     refreshPhonePrivacy();
     setInputValue("set-tor-path", settings.tor_path || "");
     setCheckbox("set-wan-expose", !!settings.wan_expose_port);
@@ -3231,9 +3258,10 @@
       ? `${fileUrl}?v=${encodeURIComponent(stateLabel)}`
       : fileUrl;
     const progressLine = transferProgressLine(live);
-    const progressBar = stateLabel !== "complete" && !cancelled && !failed
+    const progressBar = stateLabel !== "complete" && !cancelled && !failed && !live.ask
       ? `<div class="progress-track chat-progress"><div class="progress-fill" style="width:${pct}%"></div></div>`
       : "";
+    const tapDownload = live.ask && !cancelled && !failed ? tapDownloadButton(tid) : "";
     const cancelBtn = tid && ACTIVE_TRANSFER_STATES.has(stateLabel)
       ? `<button type="button" class="file-cancel" data-cancel-transfer="${escapeHtml(tid)}" title="Cancel transfer" aria-label="Cancel transfer">✕</button>`
       : "";
@@ -3279,9 +3307,58 @@
               : progressLine
         }</div>
         ${progressBar}
+        ${tapDownload}
         ${downloadLink}
       </div>
       ${cancelBtn}
+    </div>`;
+  }
+
+  function tapDownloadButton(tid) {
+    return `<button type="button" class="file-tap-download" data-download-transfer="${escapeHtml(tid)}">Download</button>`;
+  }
+
+  // Photos and videos sent together show as one album (a grid), like Signal.
+  const ALBUM_GAP_S = 120;
+
+  function albumable(m) {
+    const t = mediaMsgType(m);
+    return (t === "image" || t === "video") && !!m.metadata?.transfer_id;
+  }
+
+  function sameAlbum(a, b) {
+    return albumable(b) && a.sender_hash === b.sender_hash
+      && (a.metadata?.group_id || "") === (b.metadata?.group_id || "")
+      && Math.abs(b.timestamp - a.timestamp) <= ALBUM_GAP_S
+      && formatDate(a.timestamp) === formatDate(b.timestamp);
+  }
+
+  function renderAlbumTile(m) {
+    const meta = m.metadata || {};
+    const tid = meta.transfer_id || "";
+    const live = mergeTransferMeta(tid, meta);
+    const kind = mediaMsgType(m);
+    const stateLabel = live.state || "transferring";
+    const filename = escapeHtml(live.filename || m.text || "file");
+    const url = `/api/transfers/${encodeURIComponent(tid)}/file?v=complete`;
+    if (stateLabel === "complete") {
+      const media = kind === "video"
+        ? `<video src="${url}" preload="metadata" muted playsinline></video><span class="album-play" aria-hidden="true">▶</span>`
+        : `<img src="${url}" alt="${filename}" loading="lazy" />`;
+      return `<button type="button" class="album-tile ${kind}-bubble" data-transfer="${escapeHtml(tid)}" data-media-open="${escapeHtml(url)}" data-media-kind="${kind}" data-media-name="${filename}" title="${filename}">${media}</button>`;
+    }
+    const cancelled = stateLabel === "cancelled";
+    const failed = stateLabel === "failed";
+    const size = live.size || 0;
+    const pct = size ? Math.min(100, Math.round(((live.offset || 0) / size) * 100)) : 0;
+    const line = cancelled ? "Cancelled" : failed ? "Failed" : live.ask ? formatBytes(size) : transferProgressLine(live);
+    const busy = !cancelled && !failed && !live.ask;
+    return `<div class="album-tile pending${cancelled ? " cancelled" : failed ? " failed" : ""}" data-transfer="${escapeHtml(tid)}" title="${filename}">
+      <div class="album-tile-icon" aria-hidden="true">${kind === "video" ? "🎬" : "🖼"}</div>
+      <div class="file-progress-meta">${escapeHtml(line)}</div>
+      ${busy ? `<div class="progress-track chat-progress"><div class="progress-fill" style="width:${pct}%"></div></div>` : ""}
+      ${live.ask && !cancelled && !failed ? tapDownloadButton(tid) : ""}
+      ${tid && ACTIVE_TRANSFER_STATES.has(stateLabel) ? `<button type="button" class="file-cancel" data-cancel-transfer="${escapeHtml(tid)}" title="Cancel" aria-label="Cancel">✕</button>` : ""}
     </div>`;
   }
 
@@ -3339,7 +3416,7 @@
     const { ok, data } = await apiDelete(`/api/messages/${encodeURIComponent(messageId)}`);
     if (ok && data?.deleted) {
       state.messageCache = state.messageCache.filter((m) => m.id !== messageId);
-      renderMessages(state.messageCache);
+      renderMessages(state.messageCache, { preserveScroll: true });
       toast("Message deleted");
     } else {
       toast("Could not delete message");
@@ -3383,11 +3460,13 @@
     el.addEventListener("keydown", userIsScrolling);
     el.addEventListener("scroll", () => {
       if (el.clientHeight <= 0) return;
-      if (isNearBottom(el)) {
+      if (performance.now() < userScrollUntil) {
+        // The user's own scroll is never moved: it follows new messages
+        // again only once they bring it right to the bottom themselves.
+        state.stickBottom = isNearBottom(el, 8);
+      } else if (isNearBottom(el)) {
         state.stickBottom = true;  // at the newest messages: follow new ones again
         repin();
-      } else if (performance.now() < userScrollUntil) {
-        state.stickBottom = false;  // reading older messages
       } else {
         repin();
       }
@@ -3433,6 +3512,8 @@
       filename: data.filename ?? meta.filename,
       is_folder_zip: data.metadata?.is_folder_zip ?? meta.is_folder_zip,
       folder_name: data.metadata?.folder_name ?? meta.folder_name,
+      ask: data.metadata ? !!data.metadata.ask : meta.ask,
+      waiting: data.metadata ? !!data.metadata.waiting : meta.waiting,
     };
   }
 
@@ -3448,15 +3529,21 @@
     return !bubble.classList.contains("image-bubble") && !bubble.classList.contains("video-bubble");
   }
 
+  function bubbleAskChanged(msg, bubble, data) {
+    if (!msg || !bubble) return false;
+    const merged = mergeTransferMeta(msg.metadata?.transfer_id || data?.id || "", msg.metadata || {});
+    return !!bubble.querySelector("[data-download-transfer]") !== !!merged.ask;
+  }
+
   function refreshTransferBubble(transferId, data, { scroll = false } = {}) {
     const bubble = document.querySelector(`[data-transfer="${CSS.escape(transferId)}"]`);
     const msg = messageForTransfer(transferId);
-    if (bubbleNeedsMediaRender(msg, bubble, data)) {
-      renderMessages(state.messageCache, { scrollToBottom: scroll });
+    if (bubbleNeedsMediaRender(msg, bubble, data) || bubbleAskChanged(msg, bubble, data)) {
+      renderMessages(state.messageCache, { preserveScroll: !scroll, scrollToBottom: scroll });
       return;
     }
     if (!patchTransferBubble(transferId, data)) {
-      renderMessages(state.messageCache, { scrollToBottom: scroll });
+      renderMessages(state.messageCache, { preserveScroll: !scroll, scrollToBottom: scroll });
       return;
     }
     if (scroll && msg && (mediaMsgType(msg) === "image" || mediaMsgType(msg) === "video") && data.state === "complete") {
@@ -3531,7 +3618,8 @@
     let lastDate = "";
     let html = "";
     // (Connection state shows in the header only, never in the chat.)
-    msgs.forEach((m) => {
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i];
       try {
       const date = formatDate(m.timestamp);
       if (date !== lastDate) {
@@ -3539,6 +3627,30 @@
         lastDate = date;
       }
       const out = isOutgoing(m.sender_hash);
+      let end = i;
+      if (albumable(m)) {
+        while (end + 1 < msgs.length && sameAlbum(msgs[end], msgs[end + 1])) end++;
+      }
+      if (end > i) {
+        const album = msgs.slice(i, end + 1);
+        const last = album[album.length - 1];
+        const label = !out && m.metadata?.group_id
+          ? `<div class="bubble-sender" style="color:${hashColor(m.sender_hash)}">${escapeHtml(memberName(m.metadata.group_id, m.sender_hash))}</div>`
+          : "";
+        html += `<div class="bubble-row ${out ? "out" : "in"}" data-msg-id="${escapeHtml(m.id)}">
+          <div class="bubble ${out ? "out" : "in"} album-bubble">
+            ${label}
+            <div class="album-grid${album.length % 2 ? " odd" : ""}">${album.map(renderAlbumTile).join("")}</div>
+            <div class="bubble-meta">
+              ${disappearIcon(last)}
+              <span>${formatTime(last.timestamp)}</span>
+              <span class="bubble-status ${last.status}"${out ? ` title="${STATUS_HINTS[last.status] || ""}"` : ""}></span>
+            </div>
+          </div>
+        </div>`;
+        i = end;
+        continue;
+      }
       const mediaType = mediaMsgType(m);
       const isFile = mediaType === "file" || mediaType === "image" || mediaType === "video";
       const senderLabel = !out && m.metadata?.group_id
@@ -3563,7 +3675,7 @@
         </div>
       </div>`;
       } catch (_) { /* skip malformed message */ }
-    });
+    }
 
     el.innerHTML = html || '<div class="empty-hint" style="text-align:center;padding:2rem">No messages yet — say hello!</div>';
     el.querySelectorAll("[data-copy]").forEach((btn) => {
@@ -4647,6 +4759,13 @@
     openFolderSendPicker(state.selectedPeer, state.selectedName);
   });
 
+  $("#btn-delete-chat")?.addEventListener("click", () => {
+    openDeleteChat(state.selectedPeer, state.selectedName);
+  });
+  $("#delete-chat-cancel")?.addEventListener("click", () => closeModal($("#delete-chat-modal")));
+  $("#delete-chat-submit")?.addEventListener("click", submitDeleteChat);
+  setupModalClose($("#delete-chat-modal"));
+
   $("#btn-file")?.addEventListener("click", () => $("#file-input")?.click());
 
   $("#file-input")?.addEventListener("change", (e) => {
@@ -4692,6 +4811,8 @@
       tor_enabled: $("#set-tor-enabled")?.checked ?? true,
       shrink_photos: $("#set-shrink-photos")?.checked || false,
       disappear_seconds: parseInt($("#set-disappear")?.value || "0", 10),
+      auto_download_mb: parseInt($("#set-auto-download")?.value || "2048", 10),
+      auto_download_radio_mb: parseInt($("#set-auto-download-radio")?.value || "2", 10),
       tor_path: ($("#set-tor-path")?.value || "").trim(),
       wan_expose_port: $("#set-wan-expose")?.checked || false,
       handshake_protocol: "identity",
@@ -4733,7 +4854,18 @@
     });
   }
 
-  $("#messages")?.addEventListener("click", (e) => {
+  $("#messages")?.addEventListener("click", async (e) => {
+    const dl = e.target.closest("[data-download-transfer]");
+    if (dl && !dl.disabled) {
+      e.stopPropagation();
+      dl.disabled = true;
+      const { ok, data } = await apiPost(`/api/transfers/${encodeURIComponent(dl.dataset.downloadTransfer)}/download`, {});
+      if (!ok) {
+        dl.disabled = false;
+        toast(data?.error || "Could not start the download", "error");
+      }
+      return;
+    }
     const btn = e.target.closest("[data-cancel-transfer]");
     if (!btn || btn.disabled) return;
     e.stopPropagation();
@@ -4821,7 +4953,7 @@
         openFolderSendPicker(hashId, name);
         break;
       case "clear-chat":
-        await clearChatHistory(hashId);
+        openDeleteChat(hashId, name);
         break;
       case "edit":
       case "rename":

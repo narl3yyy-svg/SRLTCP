@@ -114,6 +114,8 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         incoming_dir=str(settings.resolved_incoming_dir()),
         message_retention_hours=settings.message_retention_hours,
         disappear_seconds=settings.disappear_seconds,
+        auto_download_mb=settings.auto_download_mb,
+        auto_download_radio_mb=settings.auto_download_radio_mb,
     )
 
 

@@ -122,6 +122,9 @@
 <button class="icon-btn" id="btn-send-folder-peer" title="Send folder">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z"/><path d="M12 11v6M9 14h6"/></svg>
 </button>
+<button class="icon-btn" id="btn-delete-chat" type="button" title="Delete chat" aria-label="Delete chat">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg>
+</button>
 <button class="icon-btn" id="btn-file" title="Send file">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
 </button>
@@ -180,6 +183,34 @@
 <span>Shrink photos before sending</span>
 </label>
 <small class="field-hint">JPEG, WebP and HEIC photos go out as JPEG with the longest side at most 2560 px, so they send faster over mobile data, without the location and camera details stored in the photo. Screenshots (PNG), GIFs and photos this device can't open are sent as they are. Off = the original file, untouched.</small>
+<label class="field">
+<span>Download automatically up to</span>
+<select id="set-auto-download">
+<option value="0">Ask for every file</option>
+<option value="2">2 MB</option>
+<option value="10">10 MB</option>
+<option value="25">25 MB</option>
+<option value="100">100 MB</option>
+<option value="500">500 MB</option>
+<option value="2048">2 GB</option>
+<option value="1048576">Any size</option>
+</select>
+<small>Received files larger than this wait in the chat until you tap Download (or ✕ to decline), so a huge file doesn't fill your storage or data plan by itself.</small>
+</label>
+<label class="field">
+<span>Over the serial radio, up to</span>
+<select id="set-auto-download-radio">
+<option value="0">Ask for every file</option>
+<option value="2">2 MB</option>
+<option value="10">10 MB</option>
+<option value="25">25 MB</option>
+<option value="100">100 MB</option>
+<option value="500">500 MB</option>
+<option value="2048">2 GB</option>
+<option value="1048576">Any size</option>
+</select>
+<small>The radio moves a few KB per second: a 2 MB photo takes about 10 minutes at 57600 baud.</small>
+</label>
 </div>
 <div class="settings-panel" data-panel="privacy">
 <p class="hint">Your keys, contacts, chats and settings are stored encrypted on this device. On Android the key is kept by the phone's secure hardware (Keystore), so a copy of the app's files is useless anywhere else.</p>
@@ -237,7 +268,7 @@
 <label class="field">
 <span>STUN servers</span>
 <input type="text" id="set-stun-servers" placeholder="Default: Google and Cloudflare" autocomplete="off" spellcheck="false" />
-<small>Only tell this device its public address (they see your IP address, nothing you send). <code>host:port</code>, separated by commas. Leave empty for the defaults.</small>
+<small>Leave this empty: the defaults (<code>stun.l.google.com:19302</code>, <code>stun.cloudflare.com:3478</code>) work everywhere. Only change it to use STUN servers you prefer, as <code>host:port</code> separated by commas, e.g. <code>stun.nextcloud.com:443</code>. A STUN server only tells this device its public address (it sees your IP address, nothing you send). DNS servers such as 8.8.8.8 are not STUN servers and won't work.</small>
 </label>
 <label class="field checkbox-field">
 <input type="checkbox" id="set-tor-enabled" />
@@ -756,10 +787,25 @@
 </div>
 </div>
 </div>
+<div class="modal-overlay" id="delete-chat-modal" aria-hidden="true">
+<div class="modal-card">
+<h3>Delete chat</h3>
+<p class="hint" id="delete-chat-text">Delete every message in this chat from this device? The other side keeps their copy.</p>
+<label class="field checkbox-field">
+<input type="checkbox" id="delete-chat-files" />
+<span>Also delete the files received in this chat</span>
+</label>
+<div class="modal-actions">
+<span class="spacer"></span>
+<button type="button" class="action-btn secondary" id="delete-chat-cancel">Cancel</button>
+<button type="button" class="action-btn danger-btn" id="delete-chat-submit">Delete</button>
+</div>
+</div>
+</div>
 <div class="contact-menu hidden" id="contact-menu" role="menu" aria-hidden="true">
 <button type="button" class="contact-menu-item" data-action="copy-hash">Copy hash ID</button>
 <button type="button" class="contact-menu-item" data-action="send-folder">Send folder…</button>
-<button type="button" class="contact-menu-item" data-action="clear-chat">Clear chat history</button>
+<button type="button" class="contact-menu-item" data-action="clear-chat">Delete chat…</button>
 <button type="button" class="contact-menu-item" data-action="edit">Edit contact…</button>
 <button type="button" class="contact-menu-item" data-action="share">Share folder (E2EE)</button>
 <button type="button" class="contact-menu-item" data-action="sync">Sync a folder…</button>

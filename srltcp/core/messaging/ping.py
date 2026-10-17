@@ -158,8 +158,7 @@ class PingMixin:
         if not link:
             return
         link.last_seen = time.monotonic()
-        link.rtt_ms = rtt_ms
-        self.discovery.update_metrics(link.hash_id, rtt_ms=rtt_ms)
+        self.discovery.update_metrics(link.hash_id, rtt_ms=link.add_rtt(rtt_ms))
         if link.transport == "serial" and self.serial_transport:
             self.serial_transport.record_ping_success(rtt_ms)
             lq = self.serial_transport.link_quality_pct()

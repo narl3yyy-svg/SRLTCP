@@ -197,6 +197,22 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         removed = node.backend.clear_messages_for_peer(hash_id)
         return web.json_response({"cleared": removed})
 
+    async def delete_chat(request: web.Request) -> web.Response:
+        """Delete one chat (``peer`` or ``group``), optionally with the files received in it."""
+        data = await request.json()
+        peer = str(data.get("peer", "")).lower()
+        group = str(data.get("group", "")).lower()
+        if bool(peer) == bool(group):
+            return web.json_response({"error": "peer or group required"}, status=400)
+        if peer and not is_valid_hash_id(peer):
+            return web.json_response({"error": "invalid peer"}, status=400)
+        if group and not is_valid_group_id(group):
+            return web.json_response({"error": "invalid group"}, status=400)
+        removed = await node.backend.delete_chat(
+            peer=peer, group=group, delete_files=bool(data.get("delete_files"))
+        )
+        return web.json_response({"deleted": removed})
+
     async def trusted_diagnose(request: web.Request) -> web.Response:
         hash_id = request.match_info.get("hash_id", "").lower()
         if not is_valid_hash_id(hash_id) or not node.backend.trusted.get(hash_id):
@@ -856,6 +872,12 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
 
         if updated.disappear_seconds not in CHOICES:
             updated.disappear_seconds = 0
+        from srltcp.core.settings import AUTO_DOWNLOAD_CHOICES
+
+        if updated.auto_download_mb not in AUTO_DOWNLOAD_CHOICES:
+            updated.auto_download_mb = AppSettings().auto_download_mb
+        if updated.auto_download_radio_mb not in AUTO_DOWNLOAD_CHOICES:
+            updated.auto_download_radio_mb = AppSettings().auto_download_radio_mb
         tor_path = str(updated.tor_path or "").strip()
         if tor_path and not (Path(tor_path).is_file() and Path(tor_path).name.lower() in (
             "tor", "tor.exe"
@@ -1134,6 +1156,15 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response({"error": "transfer already finished"}, status=409)
         return web.json_response({"cancelled": True, "id": transfer_id})
 
+    async def download_transfer(request: web.Request) -> web.Response:
+        """Start a received file that waited for a tap (larger than the auto-download size)."""
+        transfer_id = request.match_info.get("transfer_id", "")
+        if not is_valid_transfer_id(transfer_id):
+            return web.json_response({"error": "invalid transfer_id"}, status=400)
+        if not await node.backend.download_transfer(transfer_id):
+            return web.json_response({"error": "nothing to download"}, status=409)
+        return web.json_response({"downloading": True, "id": transfer_id})
+
     async def system(_request: web.Request) -> web.Response:
         # Reads /proc, /sys or WMI (and maybe NTP): never on the event loop.
         stats = await asyncio.to_thread(
@@ -1256,6 +1287,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_post("/api/trusted/{hash_id}/diagnose", trusted_diagnose)
     app.router.add_get("/api/messages", messages)
     app.router.add_delete("/api/messages/{message_id}", delete_message)
+    app.router.add_post("/api/chats/delete", delete_chat)
     app.router.add_post("/api/messages", send_message)
     app.router.add_post("/api/connect", connect)
     app.router.add_post("/api/disconnect", disconnect)
@@ -1269,6 +1301,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_get("/api/transfers", transfers)
     app.router.add_get("/api/transfers/{transfer_id}/file", transfer_file)
     app.router.add_post("/api/transfers/{transfer_id}/cancel", cancel_transfer)
+    app.router.add_post("/api/transfers/{transfer_id}/download", download_transfer)
     app.router.add_get("/api/share/grants", share_grants)
     app.router.add_post("/api/share/peer/offer", share_peer_offer)
     app.router.add_post("/api/share/files", share_files_upload)

@@ -181,7 +181,7 @@ routers and a VPN phone with a home-Wi-Fi phone.
 |---|---|---|
 | **Direct internet connections** | Phone-to-phone UDP across networks, described above. Shares your public IP address **only with your contacts** (and a STUN server), inside the encrypted session. Off: only the same Wi-Fi or VPN; contacts never see your IP. | On |
 | **Open a port on my home router** | On Wi-Fi, asks your router (UPnP / NAT-PMP) to forward the direct-connection UDP port to this phone, so a contact on mobile data gets through. Only your own router is asked; removed when the app stops. | On |
-| **STUN servers** | Who tells this phone its public IPv4 address. `host:port`, separated by commas; empty for the defaults. | Google, Cloudflare |
+| **STUN servers** | Who tells this phone its public IPv4 address. Leave it empty: the defaults (`stun.l.google.com:19302`, `stun.cloudflare.com:3478`) work everywhere. To use others: `host:port`, separated by commas (at most 4), e.g. `stun.nextcloud.com:443`. DNS servers such as 8.8.8.8 are not STUN servers and are refused. | Google, Cloudflare |
 | **Find contacts on other networks (Tor)** | The doorbell, described above: only to find each other and set up the direct connection. | On |
 
 ### Same Wi-Fi / VPN

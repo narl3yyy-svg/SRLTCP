@@ -22,6 +22,9 @@ DEFAULT_SHARED = "shared"
 RetentionPreset = Literal["1d", "1w", "1m", "1y", "forever", "restart"]
 HandshakeProtocol = Literal["identity", "noise_xx"]
 
+# "Download automatically up to" (MiB): 0 = ask for every file; the largest
+# means any size (transfer.AUTO_DOWNLOAD_ANY).
+AUTO_DOWNLOAD_CHOICES = (0, 2, 10, 25, 100, 500, 2048, 1024 * 1024)
 RETENTION_HOURS: dict[str, int] = {
     "1d": 24,
     "1w": 168,
@@ -120,8 +123,13 @@ class AppSettings:
     # Disappearing messages: what you send is deleted from both phones after
     # this many seconds (0 = keep). One of disappear.CHOICES.
     disappear_seconds: int = 0
+    # Incoming files up to this size (MiB) download by themselves; larger ones
+    # wait until you tap Download. One of AUTO_DOWNLOAD_CHOICES (0 = ask for
+    # every file); the second applies over the serial radio.
+    auto_download_mb: int = 2048
+    auto_download_radio_mb: int = 2
     handshake_protocol: str = "identity"
-    version: str = "0.13.6"
+    version: str = "0.13.7"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

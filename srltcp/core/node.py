@@ -155,6 +155,8 @@ class SRLTCPNode:
         self.config.lan_ip = settings.lan_ip
         self.config.message_retention_hours = settings.message_retention_hours
         self.config.disappear_seconds = settings.disappear_seconds
+        self.config.auto_download_mb = settings.auto_download_mb
+        self.config.auto_download_radio_mb = settings.auto_download_radio_mb
         self.config.enable_serial = settings.enable_serial
         self.config.serial_port = settings.serial_port
         self.config.serial_baud = settings.serial_baud

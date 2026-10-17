@@ -12,6 +12,9 @@ if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
 
 
+RTT_SAMPLES = 5
+
+
 @dataclass
 class PeerLink:
     hash_id: str
@@ -22,7 +25,8 @@ class PeerLink:
     crypto: CryptoBox = field(default_factory=CryptoBox)
     connected: bool = False
     handshake_complete: bool = False
-    rtt_ms: float | None = None
+    rtt_ms: float | None = None  # median of the last RTT_SAMPLES round trips
+    rtt_samples: list[float] = field(default_factory=list)
     link_quality_pct: float | None = None
     peer_name: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -39,6 +43,15 @@ class PeerLink:
     # answer; as the answering side on a radio, only once something they
     # encrypted arrives (our answer may have been lost on the air).
     confirmed: bool = True
+
+    def add_rtt(self, rtt_ms: float) -> float:
+        """Record one round trip; the shown ping is the median of the last few,
+        so one ping that waited behind other traffic doesn't make it jump."""
+        self.rtt_samples = [*self.rtt_samples[-(RTT_SAMPLES - 1):], rtt_ms]
+        ordered = sorted(self.rtt_samples)
+        mid = len(ordered) // 2
+        self.rtt_ms = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+        return self.rtt_ms
 
     @property
     def up(self) -> bool:
