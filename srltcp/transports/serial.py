@@ -146,10 +146,23 @@ class SerialTransport(Transport):
             await self._emit_frame(self._peer, message)
 
     async def send(self, peer_id: str, payload: bytes) -> None:
-        """Reliable (acknowledged, resent until it arrives)."""
+        """Reliable (acknowledged, resent until it arrives), ahead of file data."""
         if not self._link or not self.alive:
             raise RuntimeError("serial port not open")
         await self._link.send(payload)
+
+    async def send_bulk(self, peer_id: str, payload: bytes) -> None:
+        """Reliable, but only while nothing more urgent waits (file data)."""
+        if not self._link or not self.alive:
+            raise RuntimeError("serial port not open")
+        await self._link.send(payload, bulk=True)
+
+    def send_datagram(self, peer_id: str, payload: bytes) -> bool:
+        """At once, unacknowledged (call audio). False: too large for one
+        radio packet, or the port is closed."""
+        if not self._link or not self.alive:
+            return False
+        return self._link.send_datagram(payload)
 
     async def broadcast(self, payload: bytes) -> None:
         """Once, unacknowledged (announces: maybe nobody is listening)."""

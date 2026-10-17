@@ -11,9 +11,11 @@ WEB_PORT = 9876
 CHUNK_SIZE = 1024 * 1024  # direct TCP (LAN / VPN / punched)
 CHUNK_WINDOW = 24 * 1024 * 1024
 UDP_CHUNK_SIZE = 256 * 1024  # direct UDP: a message waits behind at most one chunk
-SERIAL_CHUNK_SIZE = 8 * 1024  # serial/RF links have smaller frames
-SERIAL_CHUNK_DELAY = 0.02  # seconds between serial chunks
-SERIAL_WINDOW = 64 * 1024
+# Serial radio: small pieces (one is all a chat message may wait behind) and
+# a window of a few seconds of radio time.
+SERIAL_CHUNK_SIZE = 2 * 1024
+SERIAL_CHUNK_DELAY = 0.0  # (the radio link paces itself)
+SERIAL_WINDOW = 16 * 1024
 TRANSFER_STALL = 12.0  # no confirmation this long: resend from the last confirmed byte
 TRANSFER_STALL_SLOW = 40.0  # the same over serial
 PROGRESS_EMIT_INTERVAL = 0.3  # seconds between UI progress updates

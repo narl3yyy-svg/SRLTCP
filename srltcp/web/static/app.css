@@ -402,7 +402,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  scroll-behavior: smooth;
+  /* Jumps to the newest message are instant (an animated one reports
+     mid-way positions that read as "scrolled up"), and the browser doesn't
+     shift the list by itself when something above changes height. */
+  scroll-behavior: auto;
+  overflow-anchor: none;
 }
 .date-sep {
   align-self: center;

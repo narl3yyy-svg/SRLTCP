@@ -110,7 +110,7 @@ Incoming and shared files default to `Downloads/SRLTCP/` when storage access is 
 
 - **Other networks:** phones connect directly (UDP over IPv4 and IPv6), finding each other through the built-in Tor; no relays or servers. See `docs/NETWORKING.md`.
 - The foreground service keeps the node running so messages arrive with the app closed. Swipe the notification away (Android 14+) or tap **Quit** to stop everything.
-- **USB serial adapters** (FTDI, CP210x, CH34x, PL2303, Arduino/ESP32/RP2040 boards) work over the phone's USB port (OTG) through Android's USB host API (`UsbSerialBridge.kt`, usb-serial-for-android): pick the adapter under *Settings → Serial*; Android asks once to allow SRLTCP to use it (or accept SRLTCP when you plug it in). Only one app can use the adapter at a time.
+- **USB serial adapters** (FTDI, CP210x, CH34x, PL2303, Arduino/ESP32/RP2040 boards) work over the phone's USB port (OTG) through Android's USB host API (`UsbSerialBridge.kt`, usb-serial-for-android): pick the adapter under *Settings → Serial*; Android asks once to allow SRLTCP to use it (or accept SRLTCP when you plug it in). Only one app can use the adapter at a time. *Automatic* (the default) uses the adapter plugged in most recently; the trash icon next to the list forgets a saved one. Two phones with serial radios chat, send files (with speed and time left) and make voice calls with no network; only contacts connect.
 
 ## Troubleshooting
 

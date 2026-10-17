@@ -1,5 +1,67 @@
 # SRLTCP Release Notes
 
+## v0.13.5 (2026-10-17)
+
+### File transfers show their speed everywhere, including the radio
+- **Fixed: a file sent over the serial radio showed no speed.** The speed
+  was rounded to whole hundredths of a MB/s, so anything below about
+  5 KB/s (radio speeds) showed as nothing. It is now shown in B/s, KB/s or
+  MB/s as fits, with the **time left**: for example
+  `1.2 MB / 147.6 MB · 0.8% · 4.6 KB/s · 8 h 52 min left`.
+- The speed is measured over the last 8 seconds of real progress, and moving
+  transfers are refreshed every second. It stays steady on a slow radio,
+  where confirmations come seconds apart, and falls when a transfer stalls
+  ("waiting…").
+- **Chat no longer waits behind a file on the radio.** The radio link now
+  has three lanes:
+  - call audio first;
+  - chat, confirmations, call setup and pings next;
+  - file data last, sent in 2 KB pieces, so a message waits behind one
+    piece at most (it used to wait behind up to 64 KB, about 20 s of radio
+    time).
+
+### Voice calls over the serial radio
+- **Fixed: calls over the radio stayed on "Connecting…" for good.** Every
+  voice packet went through the same reliable queue as chat and files, each
+  one waiting for an acknowledgement, so the call never got through its
+  setup.
+- Voice packets now go as single unacknowledged radio packets, ahead of
+  everything else: a late voice packet is useless, so nothing is resent.
+  They stay sealed with the session keys, on top of the call's own
+  encryption.
+- Calls over the radio are tuned for it: Opus at about 8 kbit/s, mono, 60 ms
+  packets (about 17 a second instead of 50), error correction, and nothing
+  sent during silence. That's about 2.4 KB/s each way, which a radio pair at
+  57600 baud carries. Tested in Chromium: the tuned call connects and sends
+  60 ms packets at about 8 kbit/s.
+- **Video over the radio becomes a voice call,** with a short note (a radio
+  carries a few KB/s). Video works as before on Wi-Fi and mobile data.
+- **No more endless "Connecting…".** A call that hasn't connected after
+  45 s (90 s over the radio) ends and says why.
+
+### Chat shows your newest message
+- **Fixed: after sending, the newest messages stayed below the screen.**
+  The chat scrolled to the bottom with an animation, and the positions
+  reported halfway through read as "you scrolled up", so it stopped
+  following new messages.
+  - Jumps to the newest message are now instant.
+  - Only your own scrolling (finger, mouse wheel, keys) stops the chat
+    following new messages. The keyboard opening, a file bubble growing or
+    a picture loading no longer does.
+  - What you send always shows at the bottom.
+- A background refresh of the chat no longer pulls you down to the bottom
+  while you're reading older messages.
+
+### Documentation
+- README, the networking guide, SECURITY.md and the Android README cover
+  the serial radio as it is now: private beacons, priority over the
+  internet, Automatic adapter choice, voice calls, and speed with time left.
+  Outdated lines are gone ("Serial/USB is disabled", "Calls over serial" as
+  planned).
+
+**Both phones need 0.13.5** for calls and file transfers over the radio
+(the radio link has a new packet type for call audio).
+
 ## v0.13.4 (2026-10-17)
 
 ### Serial radios: both phones connect, and stay connected

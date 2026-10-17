@@ -44,6 +44,7 @@ import hashlib
 import hmac
 import shutil
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO
@@ -82,6 +83,9 @@ TERMINAL = frozenset(
 ACTIVE = frozenset({TransferState.OFFERED, TransferState.ACCEPTED, TransferState.TRANSFERRING})
 MAX_CHUNK = 1024 * 1024  # largest chunk a receiver accepts (after decompression)
 RX_BUFFER_MAX = 48 * 1024 * 1024  # early + unwritten bytes kept per incoming file
+SPEED_WINDOW = 8.0  # the speed shown is measured over this many seconds…
+SPEED_MIN_SPAN = 1.0  # …once at least this much has been seen
+PROGRESS_TICK = 1.0  # moving transfers are refreshed this often
 ACK_BYTES = 1024 * 1024  # confirm at least every MiB written…
 ACK_INTERVAL = 0.1  # …and never leave newer bytes unconfirmed longer than this
 REJECT_REPEAT = 2.0  # answer stray data for a cancelled transfer at most this often
@@ -247,7 +251,8 @@ class TransferMixin:
         ensure_dir(self._transfer_dir)
         self._transfer_cooldown_until: dict[str, float] = {}
         self._transfer_progress_emit: dict[str, float] = {}
-        self._speed_sample: dict[str, tuple[float, int]] = {}
+        self._speed_samples: dict[str, deque[tuple[float, int]]] = {}
+        self._progress_task: asyncio.Task[None] | None = None
         self._reject_sent_at: dict[str, float] = {}
         # Outgoing offers not yet accepted: transfer id -> (sent at, tries).
         self._offer_sent_at: dict[str, tuple[float, int]] = {}
@@ -258,7 +263,29 @@ class TransferMixin:
         # while their transfer can still run.
         self._copy_dirs = (data_dir() / "uploads", data_dir() / "transfers" / ".zip-temp")
 
+    def start_progress_ticker(self: MessagingBackend) -> None:
+        """Refresh moving transfers every second, so their speed and time left
+        stay current even on a slow link where confirmations come seconds
+        apart (and fall when it stalls)."""
+        if self._progress_task is None or self._progress_task.done():
+            self._progress_task = asyncio.create_task(self._progress_ticker())
+
+    async def _progress_ticker(self: MessagingBackend) -> None:
+        while True:
+            await asyncio.sleep(PROGRESS_TICK)
+            for transfer in list(self._transfers.values()):
+                if transfer.state == TransferState.TRANSFERRING:
+                    try:
+                        await self._emit_transfer_progress(transfer)
+                    except Exception as exc:  # noqa: BLE001 - keep ticking
+                        log.debug("Progress update for %s failed: %s", transfer.id, exc)
+
     async def stop_transfers(self: MessagingBackend) -> None:
+        if self._progress_task is not None:
+            self._progress_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._progress_task
+            self._progress_task = None
         tasks = [t for t in self._transfer_tasks.values() if not t.done()]
         for task in tasks:
             task.cancel()
@@ -476,6 +503,22 @@ class TransferMixin:
 
     # ── Progress ──
 
+    def _measure_speed(self: MessagingBackend, transfer: FileTransfer, now: float) -> None:
+        """Speed over the last few seconds: what really arrived (confirmed
+        bytes when sending), not the average since the start, which pauses and
+        slow starts would drag down for good. On a slow radio, where bytes are
+        confirmed every few seconds, the window smooths the steps."""
+        samples = self._speed_samples.setdefault(transfer.id, deque())
+        if samples and transfer.offset < samples[-1][1]:
+            samples.clear()  # resent from the last confirmed byte
+        if not samples or transfer.offset != samples[-1][1] or now - samples[-1][0] >= 1.0:
+            samples.append((now, transfer.offset))
+        while len(samples) > 2 and now - samples[1][0] >= SPEED_WINDOW:
+            samples.popleft()
+        start, start_offset = samples[0]
+        if now - start >= SPEED_MIN_SPAN:
+            transfer.speed_bps = max(0.0, (transfer.offset - start_offset) / (now - start))
+
     async def _emit_transfer_progress(
         self: MessagingBackend, transfer: FileTransfer, *, force: bool = False
     ) -> None:
@@ -485,21 +528,11 @@ class TransferMixin:
         if not force and not terminal and (now - last) < C.PROGRESS_EMIT_INTERVAL:
             return
         self._transfer_progress_emit[transfer.id] = now
-        # Speed over the last moment, smoothed — not the average since the
-        # start, which pauses and slow starts would drag down for good.
         if transfer.state == TransferState.TRANSFERRING:
-            sample = self._speed_sample.get(transfer.id)
-            if sample is None:
-                self._speed_sample[transfer.id] = (now, transfer.offset)
-            elif now - sample[0] >= 0.25:
-                rate = max(0.0, (transfer.offset - sample[1]) / (now - sample[0]) / MiB)
-                transfer.speed_mbps = (
-                    rate if not transfer.speed_mbps else 0.5 * rate + 0.5 * transfer.speed_mbps
-                )
-                self._speed_sample[transfer.id] = (now, transfer.offset)
+            self._measure_speed(transfer, now)
         else:
-            transfer.speed_mbps = 0.0
-            self._speed_sample.pop(transfer.id, None)
+            transfer.speed_bps = 0.0
+            self._speed_samples.pop(transfer.id, None)
         if terminal:
             self._transfer_progress_emit.pop(transfer.id, None)
         if terminal or force:
@@ -1222,6 +1255,9 @@ class TransferMixin:
                     try:
                         if framed and self.tcp_transport:
                             await self.tcp_transport.send_framed(link.transport_peer_id, frame)
+                        elif link.transport == "serial" and self.serial_transport:
+                            # Behind chat, confirmations and calls on the radio.
+                            await self.serial_transport.send_bulk(link.transport_peer_id, frame)
                         else:
                             await self._send_raw(link.transport_peer_id, link.transport, frame)
                     except (KeyError, OSError, ConnectionError) as exc:

@@ -25,8 +25,16 @@ makes the line reliable:
 - broadcasts (beacons) go out once, unacknowledged: there may be nobody
   listening.
 
-One message is in flight at a time. Both ends must speak this format (SRLTCP
-0.13.4 and later).
+Three lanes share the line:
+
+- **datagrams** (call audio): one packet each, never acknowledged or resent
+  (a late voice packet is useless), sent at once between the other packets;
+- **urgent** messages (chat, confirmations, call setup, pings): ahead of
+- **bulk** messages (file data), which only go out when nothing urgent waits.
+
+One reliable message is in flight at a time, so file data is sent in small
+pieces: an urgent message waits behind one piece at most. Both ends must speak
+this format (SRLTCP 0.13.5 and later).
 """
 
 from __future__ import annotations
@@ -37,12 +45,13 @@ import random
 import struct
 import time
 import zlib
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 MAGIC = b"\x5a\xa6"
 K_DATA, K_ACK, K_DATA_NOACK, K_DATA_LAST = 1, 2, 3, 4  # LAST: end of a turn, answer now
+K_DATAGRAM = 5  # one packet, unacknowledged (call audio)
 DATA_HDR = struct.Struct(">2sBHHHB")  # magic, kind, message id, index, count, payload length
 ACK_HDR = struct.Struct(">2sBHHB")  # magic, kind, message id, count, bitmap length
 CRC = struct.Struct(">I")
@@ -58,6 +67,8 @@ QUIET_MIN = 0.03  # s of silence before we talk (plus a few packet times)
 QUIET_MAX_HOLD = 20.0  # never wait longer than this for the other side to finish
 WINDOW = 32  # packets per turn: then we wait for the answer and the other side may talk
 QUEUE_MAX = 256
+MAX_DATAGRAM = 255  # payload bytes of a datagram packet (one-byte length)
+DATAGRAM_QUEUE = 8  # datagrams waiting at most; older ones are dropped (they'd be stale)
 
 
 @dataclass
@@ -71,6 +82,9 @@ class LinkStats:
     messages_out: int = 0
     messages_in: int = 0
     given_up: int = 0
+    datagrams_out: int = 0
+    datagrams_in: int = 0
+    datagrams_dropped: int = 0  # too many waiting: the oldest (stale) went
     last_rx: float = 0.0  # time.time() of the last good packet
     rate: float = 0.0  # current pacing rate, bytes/s
     rtt: float = 0.0  # measured answer time for a round, s
@@ -103,7 +117,12 @@ class SerialLink:
         self.max_rate = max(MIN_RATE, baudrate / 10 * 0.9)  # 10 bits per byte on the line
         self.stats = LinkStats(rate=self.max_rate * START_RATE, rtt=1.0)
         self._buf = bytearray()
-        self._queue: asyncio.Queue[tuple[bytes, bool]] = asyncio.Queue(QUEUE_MAX)
+        self._urgent: asyncio.Queue[tuple[bytes, bool]] = asyncio.Queue(QUEUE_MAX)
+        self._bulk: asyncio.Queue[bytes] = asyncio.Queue(QUEUE_MAX)
+        self._queued = asyncio.Event()
+        self._datagrams: deque[bytes] = deque()
+        self._datagram_ready = asyncio.Event()
+        self._datagram_task: asyncio.Task[None] | None = None
         self._next_id = random.getrandbits(16)
         self._acked: dict[int, set[int]] = {}
         self._ack_event = asyncio.Event()
@@ -118,21 +137,58 @@ class SerialLink:
     def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(self._send_loop())
+        if self._datagram_task is None:
+            self._datagram_task = asyncio.create_task(self._datagram_loop())
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
-            self._task = None
+        for task in (self._task, self._datagram_task):
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        self._task = self._datagram_task = None
         for inc in self._incoming.values():
             if inc.ack_handle:
                 inc.ack_handle.cancel()
 
-    async def send(self, message: bytes, *, reliable: bool = True) -> None:
+    async def send(self, message: bytes, *, reliable: bool = True, bulk: bool = False) -> None:
+        """Queue a message: urgent (default) or ``bulk`` (file data, sent only
+        while nothing urgent waits); ``reliable=False``: once, unacknowledged."""
         if len(message) > MAX_MESSAGE:
             raise ValueError(f"message too large for the serial link ({len(message)} bytes)")
-        await self._queue.put((message, reliable))
+        if bulk:
+            await self._bulk.put(message)
+        else:
+            await self._urgent.put((message, reliable))
+        self._queued.set()
+
+    def send_datagram(self, data: bytes) -> bool:
+        """Send ``data`` as one unacknowledged packet, ahead of everything
+        else. False if it doesn't fit in one packet (send it reliably)."""
+        if len(data) > MAX_DATAGRAM:
+            return False
+        if len(self._datagrams) >= DATAGRAM_QUEUE:
+            self._datagrams.popleft()
+            self.stats.datagrams_dropped += 1
+        self._datagrams.append(data)
+        self._datagram_ready.set()
+        return True
+
+    async def _datagram_loop(self) -> None:
+        while True:
+            await self._datagram_ready.wait()
+            self._datagram_ready.clear()
+            while self._datagrams:
+                packet = self._data_packet(K_DATAGRAM, 0, 0, 1, self._datagrams.popleft())
+                try:
+                    async with self._write_lock:
+                        await self._write(packet)
+                except Exception:  # noqa: BLE001 - the transport notices a dead line
+                    self._datagrams.clear()
+                    break
+                self.stats.bytes_out += len(packet)
+                self.stats.datagrams_out += 1
+                await asyncio.sleep(len(packet) / self.max_rate)  # (the line's own speed)
 
     def _packet_time(self) -> float:
         return PACKET / self.stats.rate
@@ -164,9 +220,18 @@ class SerialLink:
         head = DATA_HDR.pack(MAGIC, kind, msg_id, idx, count, len(payload)) + payload
         return head + CRC.pack(zlib.crc32(head))
 
+    async def _next_message(self) -> tuple[bytes, bool]:
+        while True:
+            if not self._urgent.empty():
+                return self._urgent.get_nowait()
+            if not self._bulk.empty():
+                return self._bulk.get_nowait(), True
+            self._queued.clear()
+            await self._queued.wait()
+
     async def _send_loop(self) -> None:
         while True:
-            message, reliable = await self._queue.get()
+            message, reliable = await self._next_message()
             try:
                 await self._send_message(message, reliable)
             except asyncio.CancelledError:
@@ -252,12 +317,13 @@ class SerialLink:
             if len(buf) < 3:
                 return
             kind = buf[2]
-            if kind in (K_DATA, K_DATA_NOACK, K_DATA_LAST):
+            if kind in (K_DATA, K_DATA_NOACK, K_DATA_LAST, K_DATAGRAM):
                 if len(buf) < DATA_HDR.size:
                     return
                 _m, _k, msg_id, idx, count, ln = DATA_HDR.unpack_from(buf)
                 total = DATA_HDR.size + ln + CRC.size
-                if ln > FRAG or not 0 < count <= MAX_PARTS or idx >= count:
+                limit = MAX_DATAGRAM if kind == K_DATAGRAM else FRAG
+                if ln > limit or not 0 < count <= MAX_PARTS or idx >= count:
                     self._bad(buf)
                     continue
                 if len(buf) < total:
@@ -268,7 +334,11 @@ class SerialLink:
                     continue
                 del buf[:total]
                 self._good()
-                await self._on_data(kind, msg_id, idx, count, body[DATA_HDR.size :])
+                if kind == K_DATAGRAM:
+                    self.stats.datagrams_in += 1
+                    await self._deliver(body[DATA_HDR.size :])
+                else:
+                    await self._on_data(kind, msg_id, idx, count, body[DATA_HDR.size :])
             elif kind == K_ACK:
                 if len(buf) < ACK_HDR.size:
                     return

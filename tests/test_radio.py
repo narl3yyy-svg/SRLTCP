@@ -4,6 +4,7 @@ can read, nobody discovered over the air, both sides always agree."""
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -272,3 +273,56 @@ async def test_both_sides_dialing_at_once_still_connect(
     await a.send_message(bh, "crossed")
     assert await wait_for(
         lambda: any(m["text"] == "crossed" for m in b.get_messages()), timeout=30)
+
+
+async def test_call_audio_goes_as_radio_datagrams(
+    radios: tuple[MessagingBackend, MessagingBackend], monkeypatch: Any
+) -> None:
+    """Voice packets go as single unacknowledged radio packets, sealed with
+    the session keys, and reach the other phone's call relay."""
+    a, b = radios
+    _befriend(a, b)
+    _befriend(b, a)
+    assert await a.send_radio_beacon()
+    assert await wait_for(lambda: _on_radio(a, b) and _on_radio(b, a), timeout=60)
+    heard: list[tuple[str, int, int, bytes]] = []
+    assert b.call_relay is not None
+    monkeypatch.setattr(b.call_relay, "deliver",
+                        lambda h, src, dst, data: heard.append((h, src, dst, data)))
+    assert a.serial_transport is not None
+    before = a.serial_transport.link_stats()["datagrams_out"]
+    voice = os.urandom(90)
+    await a._send_call_media(b.identities["tcp"].hash_id, 49152, 49153, voice)
+    assert await wait_for(lambda: bool(heard), timeout=10)
+    assert heard[0] == (a.identities["tcp"].hash_id, 49152, 49153, voice)
+    assert a.serial_transport.link_stats()["datagrams_out"] == before + 1
+    config = await a.call_ice_config(b.identities["tcp"].hash_id)
+    assert config is not None and config["narrow"] is True
+
+
+async def test_file_over_the_radio_shows_speed_and_time_left(
+    radios: tuple[MessagingBackend, MessagingBackend], tmp_path: Any
+) -> None:
+    a, b = radios
+    _befriend(a, b)
+    _befriend(b, a)
+    assert await a.send_radio_beacon()
+    assert await wait_for(lambda: _on_radio(a, b) and _on_radio(b, a), timeout=60)
+    updates: list[dict[str, Any]] = []
+
+    async def progress(payload: dict[str, Any]) -> None:
+        updates.append(payload)
+
+    a._on_transfer_progress = progress
+    src = tmp_path / "notes.bin"
+    payload = os.urandom(24 * 1024)
+    src.write_bytes(payload)
+    result = await a.send_file(b.identities["tcp"].hash_id, src)
+    assert result is not None
+    tid = result["id"]
+    assert await wait_for(lambda: b._transfers.get(tid) is not None
+                          and b._transfers[tid].state.value == "complete", timeout=120)
+    assert b._incoming_paths[tid].read_bytes() == payload
+    moving = [u for u in updates if u["state"] == "transferring" and u["speed_bps"] > 0]
+    assert moving, "no speed was ever shown"
+    assert all(isinstance(u["eta_s"], int) for u in moving if u["offset"] < u["size"])

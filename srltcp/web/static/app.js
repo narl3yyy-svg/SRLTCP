@@ -88,7 +88,9 @@
       state: mergedState,
       offset: live?.offset ?? meta.offset ?? 0,
       size: live?.size ?? meta.size ?? 0,
+      speed_bps: live?.speed_bps ?? meta.speed_bps,
       speed_mbps: live?.speed_mbps ?? meta.speed_mbps,
+      eta_s: live ? live.eta_s : meta.eta_s,
       filename: live?.filename || meta.filename,
     };
   }
@@ -466,6 +468,50 @@
     if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
     if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
     return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+
+  /** A transfer's speed: "820 B/s", "4.6 KB/s", "38 KB/s", "2.4 MB/s". */
+  function formatSpeed(bps) {
+    if (!(bps > 0)) return "";
+    if (bps < 1024) return `${Math.round(bps)} B/s`;
+    if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(bps < 10 * 1024 ? 1 : 0)} KB/s`;
+    return `${(bps / (1024 * 1024)).toFixed(1)} MB/s`;
+  }
+
+  /** Time left: "40 s left", "12 min left", "3 h 5 min left", "4 days left". */
+  function formatEta(seconds) {
+    if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) {
+      return "";
+    }
+    if (seconds < 60) return `${Math.max(1, Math.round(seconds))} s left`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)} min left`;
+    const hours = Math.floor(seconds / 3600);
+    if (hours >= 48) return `${Math.round(hours / 24)} days left`;
+    const minutes = Math.round((seconds % 3600) / 60);
+    return minutes ? `${hours} h ${minutes} min left` : `${hours} h left`;
+  }
+
+  /** The line under a file bubble: how much, how fast, how long. */
+  function transferProgressLine(data) {
+    const size = data.size || 0;
+    const offset = data.offset || 0;
+    const stateLabel = data.state || "transferring";
+    if (stateLabel === "cancelled") return "Transfer cancelled";
+    if (stateLabel === "failed") return "Transfer failed";
+    if (stateLabel === "complete") return `${formatBytes(size)} · complete`;
+    const amounts = `${formatBytes(offset)} / ${formatBytes(size)}`;
+    if (stateLabel === "paused") return `${amounts} · waiting for connection`;
+    const pct = size ? Math.min(100, (offset / size) * 100) : 0;
+    const parts = [amounts, `${pct > 0 && pct < 1 ? pct.toFixed(1) : Math.round(pct)}%`];
+    const bps = data.speed_bps ?? (data.speed_mbps ? data.speed_mbps * 1024 * 1024 : 0);
+    if (bps > 0) {
+      parts.push(formatSpeed(bps));
+      const eta = formatEta(data.eta_s ?? (size > offset ? (size - offset) / bps : null));
+      if (eta) parts.push(eta);
+    } else if (stateLabel === "transferring") {
+      parts.push(offset ? "waiting…" : "starting…");
+    }
+    return parts.join(" · ");
   }
 
   /* ── WebSocket ── */
@@ -1784,7 +1830,8 @@
     state.seenMsgIds = state.seenMsgIds || new Set();
     filtered.forEach((m) => state.seenMsgIds.add(m.id));
     if (!messagesEqual(filtered, state.messageCache)) {
-      renderMessages(filtered);
+      // (Opening a chat pins it to the bottom; a refresh keeps your place.)
+      renderMessages(filtered, { preserveScroll: true });
     }
   }
 
@@ -1959,6 +2006,7 @@
 
     input.value = "";
     autoResize(input);
+    scrollMessagesToBottom();  // what you send always shows at the bottom
 
     const sendBtn = $("#send-btn");
     if (sendBtn) sendBtn.disabled = true;
@@ -3154,10 +3202,8 @@
     const size = live.size || 0;
     const offset = live.offset || 0;
     const pct = size ? Math.min(100, Math.round((offset / size) * 100)) : 0;
-    const speed = live.speed_mbps;
     const stateLabel = live.state || "transferring";
     const filename = live.filename || m.text || "file";
-    const speedStr = speed ? ` · ${Number(speed).toFixed(2)} MB/s` : "";
     const fileUrl = tid ? `/api/transfers/${encodeURIComponent(tid)}/file` : "";
     const downloadUrl = fileUrl ? `${fileUrl}?download=1` : "";
     const cancelled = stateLabel === "cancelled";
@@ -3168,11 +3214,7 @@
     const previewUrl = canPreviewImage || canPreviewVideo
       ? `${fileUrl}?v=${encodeURIComponent(stateLabel)}`
       : fileUrl;
-    const progressLine = stateLabel === "complete"
-      ? `${formatBytes(size)} · complete`
-      : stateLabel === "paused"
-        ? `${formatBytes(offset)} / ${formatBytes(size)} · waiting for connection`
-        : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speedStr}`;
+    const progressLine = transferProgressLine(live);
     const progressBar = stateLabel !== "complete" && !cancelled && !failed
       ? `<div class="progress-track chat-progress"><div class="progress-fill" style="width:${pct}%"></div></div>`
       : "";
@@ -3298,19 +3340,46 @@
     if (el) el.scrollTop = el.scrollHeight;
   }
 
-  // Keep the chat pinned to the newest message unless the user scrolled up:
-  // survives images loading late, the keyboard opening and the app resuming.
+  // Keep the chat pinned to the newest message unless the user scrolled up.
+  // Only the user's own scrolling (finger, wheel, keys) unpins it: a scroll
+  // the layout causes (keyboard opening, a bubble growing, an image loading,
+  // the app resuming) is put right instead of being taken for "scrolled up".
   (function pinMessagesToBottom() {
     const el = $("#messages");
     if (!el) return;
     state.stickBottom = true;
-    const repin = () => { if (state.stickBottom) el.scrollTop = el.scrollHeight; };
+    let userScrollUntil = 0;
+    const userIsScrolling = () => {
+      userScrollUntil = performance.now() + 600;
+    };
+    const repin = () => {
+      if (state.stickBottom && el.scrollHeight - el.scrollTop - el.clientHeight > 1) {
+        el.scrollTop = el.scrollHeight;
+      }
+    };
+    ["touchstart", "touchmove", "wheel", "pointerdown"].forEach((type) => {
+      el.addEventListener(type, userIsScrolling, { passive: true });
+    });
+    el.addEventListener("keydown", userIsScrolling);
     el.addEventListener("scroll", () => {
-      if (el.clientHeight > 0) state.stickBottom = isNearBottom(el);
+      if (el.clientHeight <= 0) return;
+      if (performance.now() < userScrollUntil) {
+        state.stickBottom = isNearBottom(el);
+      } else {
+        repin();
+      }
     }, { passive: true });
     el.addEventListener("load", repin, true);
     el.addEventListener("loadedmetadata", repin, true);
     if (window.ResizeObserver) new ResizeObserver(repin).observe(el);
+    // New or changed bubbles (a file's progress line, a status tick, a
+    // bubble switching to its finished look).
+    new MutationObserver(repin).observe(el, {
+      childList: true, subtree: true, characterData: true,
+      attributes: true, attributeFilter: ["class", "style"],
+    });
+    window.addEventListener("resize", repin);
+    window.visualViewport?.addEventListener("resize", repin);
   })();
 
   function messageForTransfer(transferId) {
@@ -3335,7 +3404,9 @@
       state: bestState,
       offset: data.offset ?? meta.offset,
       size: data.size ?? meta.size,
+      speed_bps: data.speed_bps ?? meta.speed_bps,
       speed_mbps: data.speed_mbps ?? meta.speed_mbps,
+      eta_s: data.eta_s !== undefined ? data.eta_s : meta.eta_s,
       filename: data.filename ?? meta.filename,
       is_folder_zip: data.metadata?.is_folder_zip ?? meta.is_folder_zip,
       folder_name: data.metadata?.folder_name ?? meta.folder_name,
@@ -3379,22 +3450,10 @@
     const offset = data.offset || 0;
     const pct = size ? Math.min(100, Math.round((offset / size) * 100)) : 0;
     const stateLabel = data.state || "transferring";
-    const speed = data.speed_mbps ? ` · ${Number(data.speed_mbps).toFixed(2)} MB/s` : "";
     const cancelled = stateLabel === "cancelled";
     const failed = stateLabel === "failed";
-    const paused = stateLabel === "paused";
     const meta = bubble.querySelector(".file-progress-meta");
-    if (meta) {
-      meta.textContent = cancelled
-        ? "Transfer cancelled"
-        : failed
-          ? "Transfer failed"
-          : stateLabel === "complete"
-            ? `${formatBytes(size)} · complete`
-            : paused
-              ? `${formatBytes(offset)} / ${formatBytes(size)} · waiting for connection`
-              : `${formatBytes(offset)} / ${formatBytes(size)} · ${pct}%${speed}`;
-    }
+    if (meta) meta.textContent = transferProgressLine(data);
     if (stateLabel === "complete" || cancelled || failed) {
       bubble.querySelectorAll(".progress-track, .chat-progress, .file-cancel").forEach((el) => el.remove());
       bubble.classList.remove("cancelled", "failed");
@@ -4010,7 +4069,9 @@
         state: merged.state,
         offset: merged.offset,
         size: merged.size,
+        speed_bps: merged.speed_bps,
         speed_mbps: merged.speed_mbps,
+        eta_s: merged.eta_s,
         filename: merged.filename,
       };
       if (TERMINAL_TRANSFER_STATES.has(merged.state)) {

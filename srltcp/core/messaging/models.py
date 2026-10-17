@@ -100,7 +100,7 @@ class FileTransfer:
     offset: int = 0
     compressed: bool = False
     created: float = field(default_factory=time.time)
-    speed_mbps: float = 0.0
+    speed_bps: float = 0.0  # bytes/s over the last few seconds (0: not moving)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -128,6 +128,12 @@ class FileTransfer:
             compressed=compressed,
         )
 
+    def eta_seconds(self) -> int | None:
+        """Time left at the current speed (None while it isn't moving)."""
+        if self.speed_bps <= 0 or self.offset >= self.size:
+            return None
+        return round((self.size - self.offset) / self.speed_bps)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -141,6 +147,8 @@ class FileTransfer:
             "offset": self.offset,
             "compressed": self.compressed,
             "created": self.created,
-            "speed_mbps": round(self.speed_mbps, 2),
+            "speed_bps": round(self.speed_bps),
+            "speed_mbps": round(self.speed_bps / (1024 * 1024), 3),
+            "eta_s": self.eta_seconds(),
             "metadata": self.metadata,
         }

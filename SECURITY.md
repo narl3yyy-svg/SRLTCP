@@ -84,7 +84,7 @@ Each contact has a **safety number**: 60 digits computed from both phones' ident
 
 ### Threat assumptions
 
-- Peers on the same LAN or serial bus may observe traffic patterns.
+- Peers on the same LAN, and anyone in range of a serial radio, may observe traffic patterns (when and how much is sent), never the content: everything on the radio is sealed with the session keys, including call audio.
 - A contact is only as trustworthy as the way you added them. Pairing **in person** (scanning their QR code, or an NFC tap) verifies their keys at once; for anyone added another way (pasted link, *Discovered*), compare the **safety number** (see *Verified contacts* below) before relying on the contact.
 - LAN announce signatures authenticate discovery metadata but do **not** encrypt it — anyone on the LAN can still observe that you exist and read names/endpoints.
 - On a serial radio nothing identifying is sent in the clear: devices send beacons whose tags only the named contact can compute (HMAC with a static X25519 key derived from both identity keys), padded with random filler. Someone in radio range can tell that *a* device is transmitting, not who, and can't start a session with you. The beacon key is classical (not post-quantum); it only hides presence, while sessions use the quantum-safe handshake.
@@ -109,7 +109,7 @@ Each contact has a **safety number**: 60 digits computed from both phones' ident
 ### Android
 
 - Build APKs locally from a trusted source checkout; verify `scripts/sync-android-python.sh` ran before Gradle build.
-- Grant **USB permissions** only to known devices (serial is disabled in the app, but permissions remain declared).
+- Grant **USB permissions** only to the serial adapters you use: Android asks once per adapter, and SRLTCP only ever opens USB serial devices (the bridge's driver list never claims keyboards, storage or headsets).
 - Grant **notification permission** on Android 13+ so the foreground service can keep the node alive.
 - The embedded WebView trusts only `127.0.0.1` / `localhost` self-signed TLS.
 - App data (identities, contacts, chats, settings) lives in the app files directory, encrypted with a key wrapped by the Android Keystore; uninstall clears it. Android cloud backup is off for the app (`allowBackup=false`): use *Settings → Privacy → Backup* instead.

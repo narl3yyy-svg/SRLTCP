@@ -192,3 +192,33 @@ async def test_both_sides_talking_at_once_over_a_half_duplex_radio() -> None:
         radio.stop()
         await a.stop()
         await b.stop()
+
+
+async def test_datagrams_go_at_once_and_unacknowledged() -> None:
+    """Call audio: one packet each, never acknowledged or resent, and a
+    datagram too large for one packet is refused (sent reliably instead)."""
+    a, b, got = await _pair(loss=0.0, corrupt=0.0)
+    try:
+        assert a.send_datagram(b"voice" * 40)
+        assert not a.send_datagram(b"x" * 256)
+        assert await _until(lambda: got[1] == [b"voice" * 40], 5)
+        await asyncio.sleep(0.3)
+        assert a.stats.datagrams_out == 1 and b.stats.datagrams_in == 1
+        assert a.stats.messages_out == 0 and b.stats.bytes_out == 0  # no answer at all
+    finally:
+        await a.stop()
+        await b.stop()
+
+
+async def test_urgent_messages_overtake_queued_file_data() -> None:
+    """A chat message sent while file data is queued goes out before it."""
+    a, b, got = await _pair(loss=0.0, corrupt=0.0)
+    try:
+        for i in range(6):
+            await a.send(bytes([i]) * 2048, bulk=True)
+        await a.send(b"chat")
+        assert await _until(lambda: len(got[1]) == 7, 30)
+        assert got[1].index(b"chat") <= 1  # (behind the piece already on the air, at most)
+    finally:
+        await a.stop()
+        await b.stop()

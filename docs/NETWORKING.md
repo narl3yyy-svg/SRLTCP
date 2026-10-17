@@ -21,11 +21,13 @@ device to the other. The only outside help is for *finding* each other:
 |---|---|---|---|
 | 1 | **Direct, same network** | Both on the same Wi-Fi, or both on the same VPN (WireGuard) | Only the two devices |
 | 2 | **Direct, across networks** | Two mobile carriers, a phone and a home Wi-Fi, two homes: the devices connect straight to each other over **UDP** through both NATs, over IPv4 and IPv6 at once (see below); also one on the VPN and the other on the home Wi-Fi | Only the two devices |
+| 3 | **Serial radio** | No network at all: two phones with USB serial radio modems in range of each other. Comes before path 2 (internet) when both are possible, after path 1 (same Wi-Fi/LAN). See the README's *USB Serial P2P* | Anyone in radio range sees that something is sent, never what (sealed with the session keys) |
 | — | **Tor (doorbell only)** | Finds the contact on any network so path 2 can be set up; carries no messages, files or calls (both devices need *Find contacts on other networks (Tor)* on) | Tor relays carry the sealed setup messages; your contact doesn't see your IP over Tor |
 
 Every path carries the same end-to-end encrypted session (signed, quantum-safe
-handshake, forward secrecy). The chat header shows **DIRECT**, or
-**CONNECTING** while a contact found over Tor is being connected directly.
+handshake, forward secrecy). The chat header shows **DIRECT**, **SERIAL**
+(the radio), or **CONNECTING** while a contact found over Tor is being
+connected directly.
 Messages and files you send meanwhile wait and go out automatically.
 
 ## Common setups

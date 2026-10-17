@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.13.4 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.13.5 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -13,15 +13,16 @@
 
 | Feature | Description |
 |---------|-------------|
-| **Dual transports** | TCP/IP networking + USB Serial (pyserial) |
+| **Dual transports** | TCP/IP networking + USB serial (pyserial on a PC, the USB host API on Android) |
 | **P2P mode** | Direct encrypted links between peers on LAN or serial cable |
+| **Serial radios** | Chat, files and voice calls with no network at all, over a pair of serial radio modems (SiK, LoRa or ESP32 bridges): only contacts connect (private beacons, nobody is discovered), a reliable link made for lossy half-duplex radios, chat and call audio ahead of file data, and the radio comes before the internet when you're not on the same Wi-Fi |
 | **Tor as the doorbell (no server needed)** | Find trusted contacts on any network without a server or port forwarding: each device publishes a private onion service that only its contacts can use, used only to swap addresses and set up the direct connection. Chat, files and calls never go over Tor. Bundled on Android; uses Tor Browser's Tor on a PC |
 | **Direct across networks** | Full speed between two mobile carriers, a phone and a home Wi-Fi, two homes: the devices punch a direct, encrypted **UDP** connection through both NATs (like video calls do), with Tor only as the meeting point, no server or port forwarding. Reliable and ordered for chat and files, separate datagrams for call audio/video; follows a phone to a new network. Addresses are exchanged only inside the encrypted session; when a network doesn't allow it, messages wait |
 | **Quantum-safe encryption** | Every session: X25519 + ML-KEM-768 key exchange, Ed25519 + ML-DSA-65 signatures, AES-256-GCM with replay protection |
 | **Verified contacts** | 60-digit safety numbers over both identity keys; automatic when you pair in person (QR or NFC) |
 | **Encrypted on the device** | Keys, contacts, chats, groups and settings sealed at rest (Android Keystore / Windows DPAPI); encrypted backup and restore |
 | **Privacy options** | Disappearing messages, app lock and private lock-screen notifications (all off by default) |
-| **Fast file transfer** | Windowed streaming (1 MiB chunks direct, 256 KiB over UDP, smaller on serial), zstd, verified while streaming; survives dropped connections and app restarts; several files at once; optional photo shrinking |
+| **Fast file transfer** | Windowed streaming (1 MiB chunks direct, 256 KiB over UDP, 2 KiB over a serial radio), zstd, verified while streaming; speed and time left on every path; survives dropped connections and app restarts; several files at once; optional photo shrinking |
 | **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
 | **Folder sync** | Keep a folder the same on your device and a contact's: two-way, incremental, conflicts kept as copies, deletes go to a 30-day trash |
 | **Drag-and-drop send** | Drop files onto a contact in the Web UI |
@@ -31,7 +32,7 @@
 | **System stats** | CPU usage & temperature in the web UI status bar |
 | **Pairing** | QR code, shareable link, or **NFC tap** (Android) — one scan pairs both sides |
 | **Group chats** | End-to-end encrypted groups of up to 32; members who aren't each other's contacts still talk (the creator passes messages on, signed by their author so they can't be faked) |
-| **Voice & video calls** | WebRTC; signalling and media both travel inside the encrypted SRLTCP session (through a small forwarder on the phone itself), so calls work wherever chat works — no third-party servers |
+| **Voice & video calls** | WebRTC; signalling and media both travel inside the encrypted SRLTCP session (through a small forwarder on the phone itself), so calls work wherever chat works — no third-party servers. Over a serial radio: voice at ~8 kbit/s, each voice packet one radio packet ahead of everything else |
 | **Offline delivery** | Messages queue while a contact is offline and deliver on reconnect, with ✓/✓✓ receipts |
 | **Works over WireGuard** | VPN-aware discovery (unicast sweep + replies), Find by IP, automatic address updates |
 | **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected. Discovery stays on **your own networks** (the Wi-Fi/LAN you're on and your VPN): never sent on mobile data or across the internet, and announces, Find by IP and contact requests from other networks are ignored, so nobody elsewhere can find you |
@@ -235,7 +236,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.4.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.5.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -243,7 +244,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.4.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.4.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.5.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -254,7 +255,7 @@ adb logcat -c                               # clear old logs
 adb logcat -s SRLTCP:* python.stderr:*      # follow SRLTCP + Python output
 ```
 
-**On the phone:** tap **☰** for contacts, **⚙** for Settings (full-screen). Default folders: `Downloads/SRLTCP/Incoming` and `Downloads/SRLTCP/Shared` (grant storage access when prompted). Serial/USB is disabled; TCP works over Wi‑Fi, mobile data and VPN; direct UDP/IPv6 (found via the built-in Tor) covers the rest.
+**On the phone:** tap **☰** for contacts, **⚙** for Settings (full-screen). Default folders: `Downloads/SRLTCP/Incoming` and `Downloads/SRLTCP/Shared` (grant storage access when prompted). TCP works over Wi‑Fi, mobile data and VPN; direct UDP/IPv6 (found via the built-in Tor) covers the rest; a USB serial radio (*Settings → Serial*) works with no network at all.
 
 | Symptom | What to do |
 |---------|------------|
@@ -392,7 +393,15 @@ telemetry radios, LoRa or ESP32 serial bridges), no network at all.
   only the contacts they name can read (no name, ID or key on the air; to
   anyone else in range they're random bytes), then connect by themselves
   (the header shows **SERIAL**). A stranger's radio gets no answer. Chat,
-  files and groups work over it, slowly.
+  files and groups work over it, slowly; a file shows its speed and the time
+  left, and chat messages go out ahead of it (file data travels in 2 KiB
+  pieces on the radio's lowest-priority lane).
+- **Voice calls** work over the radio: low-bitrate Opus (~8 kbit/s, 60 ms
+  packets, nothing sent in silence), each voice packet one unacknowledged
+  radio packet ahead of everything else. A video call becomes a voice call
+  (a radio carries a few KB/s). A call that can't connect ends with the
+  reason after 90 s instead of staying on *Connecting…*. Calls need a radio
+  pair with a few KB/s each way and a baud rate of 57600 or more.
 - Both phones always agree: if one side loses the session (restart, a lost
   answer), its next beacon makes the other reconnect too, and a busy radio
   session is never dropped for late pings.
@@ -572,6 +581,15 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 
 ## Roadmap
 
+**Done (v0.11–0.13)**
+
+- [x] Direct UDP between networks (QUIC-style reliable, encrypted transport in pure Python; STUN + hole punching; BBR; Tor only as the meeting point)
+- [x] No relays and no servers at all (0.13.0); group chats over direct links
+- [x] Home router port mapping (UPnP / NAT-PMP) so mobile data reaches a phone on Wi-Fi
+- [x] USB serial adapters on Android (USB host API), Automatic adapter choice
+- [x] Serial radios: reliable link for lossy half-duplex radios, private contact beacons (nobody discovered over the air), radio before the internet
+- [x] Voice calls over a serial radio (low-bitrate Opus as unacknowledged radio datagrams); file speed and time left on every path
+
 **Done (v0.10.0)**
 
 - [x] Folder sync with a contact: two-way, incremental, conflict copies, 30-day trash for deletes
@@ -652,11 +670,8 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 **Planned**
 
 - [ ] Files and voice/video calls in group chats
-- [ ] Calls over serial/RF
 - [ ] Wi-Fi Direct / Bluetooth transport for phone-to-phone without a router
 - [ ] Per-contact "always use Tor" (hide who talks to whom even when a direct path exists)
-- [ ] Android USB serial Chaquopy shim (full OTG support)
-- [x] Direct UDP between networks (QUIC-style reliable, encrypted transport in pure Python; STUN + hole punching; Tor as meeting point)
 - [ ] Faster direct UDP: native packet processing (batching, GSO) for >30 MB/s per phone
 - [ ] Reconnect directly after both apps restart without waiting for Tor (remember the last UDP addresses)
 - [ ] Bandwidth limiting and QoS per transfer

@@ -220,6 +220,7 @@ class MessagingBackend(
         if self.config.announce:
             await self.start_announce_loop()
         await self.start_ping_loop()
+        self.start_progress_ticker()
         await self.start_call_relay()
         if self.tcp_transport:
             await self.start_udp()
@@ -980,9 +981,13 @@ class MessagingBackend(
         ips = [str(i.get("ip", "")) for i in list_interfaces()[:3]]
         await self.call_relay.ensure_interface_endpoints([ip for ip in ips if ip])
         creds = self.call_relay.issue_credentials(peer_hash)
+        link = self.data_link(peer_hash)
         return {
             "iceServers": [{"urls": self.call_relay.urls(), **creds}],
             "iceTransportPolicy": "relay",
+            # Over a serial radio the page makes a low-bitrate voice call
+            # (a radio carries a few KB/s: no video).
+            "narrow": bool(link and link.transport == "serial"),
         }
 
     async def _send_call_media(
@@ -1003,6 +1008,14 @@ class MessagingBackend(
                 # two of us have, and the media inside is DTLS-SRTP encrypted.
                 return
             packet = self._seal(link, MessageType.CALL_MEDIA, body)
+            if (
+                link.transport == "serial"
+                and self.serial_transport
+                and self.serial_transport.send_datagram(link.transport_peer_id, packet)
+            ):
+                # The radio: one unacknowledged packet, ahead of everything else
+                # (sealed with the session keys; the radio has no encryption).
+                return
             await self._send_raw(link.transport_peer_id, link.transport, packet)
         except (KeyError, OSError, ConnectionError, RuntimeError):
             pass  # media is loss-tolerant; the call recovers or ends
@@ -1097,7 +1110,7 @@ class MessagingBackend(
             # Unfinished file: it resumes if restore_transfers() brought it back.
             transfer = self._transfers.get(str(msg.metadata.get("transfer_id", "")))
             msg.metadata["state"] = transfer.state.value if transfer else "failed"
-            msg.metadata["speed_mbps"] = 0
+            msg.metadata.update(speed_bps=0, speed_mbps=0, eta_s=None)
             if transfer:
                 msg.metadata["offset"] = transfer.offset
         self._messages = stored + [m for m in self._messages if m.id not in stored_ids]
@@ -1248,7 +1261,9 @@ class MessagingBackend(
                 "sha256": transfer.get("sha256"),
                 "state": transfer.get("state"),
                 "offset": transfer.get("offset", 0),
+                "speed_bps": transfer.get("speed_bps", 0),
                 "speed_mbps": transfer.get("speed_mbps", 0),
+                "eta_s": transfer.get("eta_s"),
                 "direction": direction,
                 "is_folder_zip": meta.get("is_folder_zip"),
                 "folder_name": meta.get("folder_name"),
@@ -1270,7 +1285,9 @@ class MessagingBackend(
                     {
                         "state": transfer.get("state"),
                         "offset": transfer.get("offset", 0),
+                        "speed_bps": transfer.get("speed_bps", 0),
                         "speed_mbps": transfer.get("speed_mbps", 0),
+                        "eta_s": transfer.get("eta_s"),
                         "filename": transfer.get("filename", msg.metadata.get("filename")),
                     }
                 )

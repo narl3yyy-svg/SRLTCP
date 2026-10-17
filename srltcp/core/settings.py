@@ -121,7 +121,7 @@ class AppSettings:
     # this many seconds (0 = keep). One of disappear.CHOICES.
     disappear_seconds: int = 0
     handshake_protocol: str = "identity"
-    version: str = "0.13.4"
+    version: str = "0.13.5"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

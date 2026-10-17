@@ -5,6 +5,10 @@
  * DTLS fingerprints are authenticated by the contact's identity key. The media
  * goes through this phone's own local media forwarder (127.0.0.1), which carries
  * it inside the same encrypted session — no third-party signalling, STUN/TURN or relay servers.
+ *
+ * Over a serial radio (a few KB/s) a call is voice only, at a low bitrate
+ * (Opus ~8 kbit/s, 60 ms packets, silence not sent), and each voice packet
+ * goes as one unacknowledged radio packet ahead of everything else.
  */
 (() => {
   "use strict";
@@ -15,6 +19,11 @@
   // the call waits this long for it to come back, then gives up.
   const RECOVER_MS = 90000;
   const RECOVER_EVERY_MS = 3000;
+  // Answered but no media yet after this long: the call ends with a reason
+  // instead of showing "Connecting…" for good.
+  const CONNECT_TIMEOUT_MS = 45000;
+  const RADIO_CONNECT_TIMEOUT_MS = 90000;  // call setup over a radio is slow
+  const RADIO_AUDIO_BITRATE = 8000;  // bit/s
 
   const call = {
     id: null,
@@ -39,6 +48,8 @@
     restarting: false,
     facing: "user",      // camera in use: "user" (front) | "environment" (rear)
     switching: false,
+    narrow: false,       // over a serial radio: low-bitrate voice only
+    connectTimer: null,
   };
   // Answer tapped on the ringing notification, possibly before the offer
   // reached this (freshly opened) page: answer it when it arrives.
@@ -88,6 +99,71 @@
       if (res.ok) return await res.json();
     } catch (_) { /* fall through */ }
     return { iceServers: [] };
+  }
+
+  /** The RTCPeerConnection part of the ICE config, and whether the contact
+   *  is reached over a serial radio. */
+  function splitIceConfig(cfg) {
+    const { narrow, ...rtc } = cfg || {};
+    return { rtc, narrow: !!narrow };
+  }
+
+  /** SDP for a radio call: Opus at ~8 kbit/s, mono, 60 ms packets (fewer,
+   *  bigger packets: less overhead per packet), in-band error correction, and
+   *  nothing sent during silence. */
+  function narrowAudio(sdp) {
+    const pt = /a=rtpmap:(\d+) opus\/48000/i.exec(sdp)?.[1];
+    if (!pt) return sdp;
+    const ours = /^(maxaveragebitrate|maxplaybackrate|stereo|sprop-stereo|useinbandfec|usedtx)=/i;
+    const params = `maxaveragebitrate=${RADIO_AUDIO_BITRATE};maxplaybackrate=16000;stereo=0;`
+      + "sprop-stereo=0;useinbandfec=1;usedtx=1";
+    const line = `a=fmtp:${pt} `;
+    const fmtp = new RegExp(`^a=fmtp:${pt} ([^\\r\\n]*)`, "m");
+    let out = sdp.replace(/^a=(max)?ptime:[^\r\n]*\r?\n/gm, "");
+    if (fmtp.test(out)) {
+      out = out.replace(fmtp, (_whole, existing) => line + [
+        ...existing.split(";").map((p) => p.trim()).filter((p) => p && !ours.test(p)),
+        params,
+      ].join(";"));
+    } else {
+      out = out.replace(new RegExp(`^(a=rtpmap:${pt} opus/48000[^\\r\\n]*)`, "mi"),
+        `$1\r\n${line}${params}`);
+    }
+    // (Line endings stay CRLF; the new lines go right after the Opus fmtp.)
+    return out.replace(fmtp, (whole) => `${whole}\r\na=ptime:60\r\na=maxptime:60`);
+  }
+
+  /** Cap our own voice encoder too (the SDP tells the other side); once the
+   *  call is negotiated (before that, some WebViews refuse it). */
+  async function limitAudioBitrate(pc) {
+    for (const sender of pc.getSenders()) {
+      if (sender.track?.kind !== "audio") continue;
+      try {
+        const params = sender.getParameters();
+        params.encodings = params.encodings?.length ? params.encodings : [{}];
+        params.encodings.forEach((e) => { e.maxBitrate = RADIO_AUDIO_BITRATE; });
+        await sender.setParameters(params);
+      } catch (_) { /* older WebView: the SDP limit still applies */ }
+    }
+  }
+
+  async function localDescription(pc, description) {
+    if (call.narrow) description = { type: description.type, sdp: narrowAudio(description.sdp) };
+    await pc.setLocalDescription(description);
+  }
+
+  /** Answered: the call must connect within a while, or it ends with a reason. */
+  function startConnectTimer() {
+    clearTimeout(call.connectTimer);
+    call.connectTimer = setTimeout(() => {
+      if (call.state !== "connecting" || call.lostAt) return;
+      app().toast?.(call.narrow
+        ? "The call couldn't connect over the radio: the radio link is too slow or too busy"
+          + " for a call (a file transfer on it also slows calls down)."
+        : "Call could not connect — check that the contact is online (a text message should get ✓✓).",
+      "error");
+      hangup("failed");
+    }, call.narrow ? RADIO_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS);
   }
 
   function newCallId() {
@@ -229,6 +305,7 @@
 
   function reset() {
     clearTimeout(call.ringTimer);
+    clearTimeout(call.connectTimer);
     clearInterval(call.clockTimer);
     clearInterval(call.recoverTimer);
     try { call.pc?.close(); } catch (_) { /* ignore */ }
@@ -238,6 +315,7 @@
       remote: null, role: null, state: "idle", pendingOffer: null, pendingIce: [],
       ringTimer: null, muted: false, cameraOff: false, speaker: false,
       startedAt: 0, lostAt: 0, recoverTimer: null, restarting: false, facing: "user", switching: false,
+      narrow: false, connectTimer: null,
     });
     $("#call-overlay")?.classList.remove("rear-camera");
     routeAudio(false);
@@ -340,6 +418,7 @@
       if (pc !== call.pc) return;
       const st = state();
       if (st === "connected") {
+        clearTimeout(call.connectTimer);
         if (call.lostAt) {
           connectionBack();
         } else if (call.state !== "active") {
@@ -445,8 +524,7 @@
     call.restarting = true;
     try {
       await freshIceConfig(pc);
-      const offer = await pc.createOffer({ iceRestart: true });
-      await pc.setLocalDescription(offer);
+      await localDescription(pc, await pc.createOffer({ iceRestart: true }));
       await gathered(pc);
       if (pc === call.pc) {
         await signal(call.peer, { type: "reoffer", call_id: call.id, sdp: pc.localDescription.sdp });
@@ -464,7 +542,7 @@
     try {
       await freshIceConfig(pc);
       await pc.setRemoteDescription({ type: "offer", sdp });
-      await pc.setLocalDescription(await pc.createAnswer());
+      await localDescription(pc, await pc.createAnswer());
       await gathered(pc);
       if (pc === call.pc) {
         await signal(call.peer, { type: "answer", call_id: call.id, sdp: pc.localDescription.sdp });
@@ -486,17 +564,21 @@
       app().toast?.("Already in a call", "error");
       return;
     }
+    const { rtc, narrow } = splitIceConfig(await iceConfig(peer));
+    if (narrow && video) {
+      video = false;
+      app().toast?.("Video calls need Wi-Fi or mobile data — calling with voice over the radio");
+    }
     Object.assign(call, {
       id: newCallId(), peer, peerName, video, role: "caller", state: "outgoing",
-      speaker: video,
+      speaker: video, narrow,
     });
     showOverlay("outgoing");
     setStatus("Starting…");
     try {
-      call.pc = createPeerConnection(await iceConfig(peer));
+      call.pc = createPeerConnection(rtc);
       attachLocal(await getMedia(video));
-      const offer = await call.pc.createOffer();
-      await call.pc.setLocalDescription(offer);
+      await localDescription(call.pc, await call.pc.createOffer());
       setStatus("Calling…");
       const sent = await signal(peer, {
         type: "offer", call_id: call.id, video, sdp: call.pc.localDescription.sdp,
@@ -567,17 +649,21 @@
     clearTimeout(call.ringTimer);
     stopRinging();
     call.state = "connecting";
-    call.video = !!withVideo && call.video;
+    const { rtc, narrow } = splitIceConfig(await iceConfig(call.peer));
+    if (call.state !== "connecting") return;  // hung up meanwhile
+    call.narrow = narrow;
+    call.video = !!withVideo && call.video && !narrow;  // (no video over a radio)
     call.speaker = call.video;
     showOverlay("active");
     setStatus("Connecting…");
+    startConnectTimer();
     try {
-      call.pc = createPeerConnection(await iceConfig(call.peer));
+      call.pc = createPeerConnection(rtc);
       await call.pc.setRemoteDescription({ type: "offer", sdp: call.pendingOffer });
       await flushIce();
       attachLocal(await getMedia(call.video));
-      const answer = await call.pc.createAnswer();
-      await call.pc.setLocalDescription(answer);
+      await localDescription(call.pc, await call.pc.createAnswer());
+      if (narrow) await limitAudioBitrate(call.pc);
       await signal(call.peer, { type: "answer", call_id: call.id, sdp: call.pc.localDescription.sdp });
     } catch (err) {
       app().toast?.(err?.message || "Could not answer (microphone/camera permission?)", "error");
@@ -614,12 +700,14 @@
         if (call.state === "outgoing") {
           call.state = "connecting";
           setStatus("Connecting…");
+          startConnectTimer();
         }
         try {
           await call.pc.setRemoteDescription({ type: "answer", sdp: sig.sdp });
         } catch (_) {
           return;  // answer to an older restart offer
         }
+        if (call.narrow) await limitAudioBitrate(call.pc);
         await flushIce();
         break;
       case "reoffer":

@@ -60,7 +60,8 @@ def test_serial_path_never_compresses(backend: MessagingBackend) -> None:
     )
     params = backend._path_params(link)
     assert params.level == 0
-    assert params.chunk == 8 * 1024
+    # Small pieces: a chat message on the radio waits behind one at most.
+    assert params.chunk <= 4 * 1024 and params.window <= 32 * 1024
 
 
 @pytest.mark.asyncio
