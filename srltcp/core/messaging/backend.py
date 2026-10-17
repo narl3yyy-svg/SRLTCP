@@ -512,10 +512,11 @@ class MessagingBackend(
                 await self._handle_handshake(peer.peer_id, body)
             elif msg_type == MessageType.HANDSHAKE_ACK:
                 await self._handle_handshake_ack(peer.peer_id, body)
-            elif msg_type == MessageType.PING:
-                await self._reply_pong_with_rtt(peer, body)
-            elif msg_type == MessageType.PONG:
-                await self._handle_pong(peer.peer_id, body)
+            elif msg_type in (MessageType.PING, MessageType.PONG):
+                if flags & Flags.ENCRYPTED:
+                    await self._dispatch_session_message(peer, msg_type, flags, body)
+                elif msg_type == MessageType.PING:
+                    await self._reply_pong_with_rtt(peer, body)  # (a plaintext pong: ignored)
         except Exception as exc:
             log.warning(
                 "Handler failed for msg_type=%s from %s: %s",
@@ -543,6 +544,12 @@ class MessagingBackend(
         hash_id = link.hash_id
         link.last_seen = time.monotonic()
         await self.confirm_link(link)
+        if msg_type == MessageType.PING:
+            await self._answer_ping(link, body)
+            return
+        if msg_type == MessageType.PONG:
+            await self._handle_pong(link, body)
+            return
         if msg_type == MessageType.RECEIPT:
             await self._handle_receipt(link, body)
             return
@@ -686,6 +693,28 @@ class MessagingBackend(
         if not peer and not group:
             return 0
         gone = [m for m in self._messages if self._in_chat(m, peer, group)]
+        removed = await self._remove_messages(gone, delete_files=delete_files)
+        if removed:
+            log.info("Chat deleted (%d message(s)%s)", removed,
+                     ", files too" if delete_files else "")
+        return removed
+
+    async def delete_messages(
+        self, ids: list[str], *, peer: str = "", group: str = "", delete_files: bool = True
+    ) -> int:
+        """Delete these messages of one chat from this device (long-press →
+        Delete). A file's message takes the received file with it, like in
+        Signal; its transfer stops if it's still moving. (Ids of received
+        messages are the sender's: only the chat's own count, so an id copied
+        from another chat can't take that one with it.)"""
+        wanted = set(ids)
+        return await self._remove_messages(
+            [m for m in self._messages
+             if m.id in wanted and (not (peer or group) or self._in_chat(m, peer, group))],
+            delete_files=delete_files,
+        )
+
+    async def _remove_messages(self, gone: list[ChatMessage], *, delete_files: bool) -> int:
         if not gone:
             return 0
         ids = {m.id for m in gone}
@@ -697,15 +726,14 @@ class MessagingBackend(
                 continue
             if transfer.state not in TERMINAL:
                 await self.cancel_transfer(tid)
-            if delete_files and not self._is_outgoing(transfer):
-                for path in {self._incoming_paths.pop(tid, None), transfer.path}:
-                    if path is not None:
-                        with contextlib.suppress(OSError):
-                            path.unlink(missing_ok=True)
+            received = self.received_file(transfer)  # (only a file we wrote ourselves)
+            if delete_files and received is not None:
+                with contextlib.suppress(OSError):
+                    received.unlink(missing_ok=True)
+            self._incoming_paths.pop(tid, None)
             self._transfers.pop(tid, None)
         self._journal_changed()
         self._persist_messages()
-        log.info("Chat deleted (%d message(s)%s)", len(ids), ", files too" if delete_files else "")
         if self._on_event:
             await self._on_event({"kind": "messages_removed", "ids": sorted(ids)})
         return len(ids)

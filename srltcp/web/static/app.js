@@ -3,6 +3,44 @@
   "use strict";
 
   const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => document.querySelectorAll(sel);
+
+  /** Long-press (touch or mouse) and right-click call ``fn``; the tap that ends
+   *  a long-press does nothing else (it doesn't also open the chat). */
+  function onLongPress(el, fn) {
+    let timer = null;
+    let start = null;
+    let fired = false;
+    const cancel = () => { clearTimeout(timer); timer = null; };
+    el.addEventListener("pointerdown", (ev) => {
+      if (ev.button > 0) return;
+      fired = false;
+      start = { x: ev.clientX, y: ev.clientY };
+      cancel();
+      timer = setTimeout(() => {
+        timer = null;
+        fired = true;
+        navigator.vibrate?.(12);
+        fn(ev);
+      }, 450);
+    });
+    el.addEventListener("pointermove", (ev) => {
+      if (timer && start && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) > 10) cancel();
+    });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((type) => el.addEventListener(type, cancel));
+    el.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      if (fired) return;
+      cancel();
+      fn(ev);
+    });
+    el.addEventListener("click", (ev) => {
+      if (!fired) return;
+      fired = false;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }, true);
+  }
   const state = {
     selectedPeer: null,
     selectedName: null,
@@ -59,6 +97,9 @@
   ];
 
   const ICON_COPY = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+  const ICON_SAVE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>`;
+  const ICON_SELECT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>`;
+  const ICON_INFO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>`;
   const ICON_TRASH = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>`;
   const ACTIVE_TRANSFER_STATES = new Set(["transferring", "accepted", "offered", "paused"]);
   const TERMINAL_TRANSFER_STATES = new Set(["complete", "failed", "cancelled", "rejected"]);
@@ -889,9 +930,36 @@
       row.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); }
       });
-      row.addEventListener("contextmenu", (ev) => { ev.preventDefault(); openGroupModal(row.dataset.group); });
+      onLongPress(row, () => openGroupMenu(row.dataset.group, row));
     });
   }
+
+  function openGroupMenu(gid, anchor) {
+    const menu = $("#group-menu");
+    if (!menu) return;
+    closeContactMenu();
+    menu.dataset.group = gid;
+    positionContactMenu(menu, anchor);
+  }
+
+  function closeGroupMenu() {
+    const menu = $("#group-menu");
+    if (!menu) return;
+    menu.classList.add("hidden");
+    menu.setAttribute("aria-hidden", "true");
+  }
+
+  $("#group-menu")?.addEventListener("click", (ev) => {
+    const item = ev.target.closest("[data-action]");
+    const gid = $("#group-menu")?.dataset.group || "";
+    if (!item || !gid) return;
+    closeGroupMenu();
+    if (item.dataset.action === "group-info") openGroupModal(gid);
+    else if (item.dataset.action === "delete-chat") openDeleteChat(gid, groupById(gid)?.name || "");
+  });
+  document.addEventListener("click", (ev) => {
+    if (!ev.target.closest?.("#group-menu")) closeGroupMenu();
+  });
 
   function updateGroupHeader() {
     const g = groupById(state.selectedGroup);
@@ -917,6 +985,7 @@
   function selectGroup(gid) {
     const g = groupById(gid);
     if (!g) return;
+    stopSelecting(false);
     state.selectedPeer = gid;
     state.selectedGroup = gid;
     state.selectedName = g.name;
@@ -3174,11 +3243,9 @@
         selectPeer(btn.dataset.hash, btn.dataset.name);
         closeSidebarMobile();
       });
-      btn.addEventListener("contextmenu", (ev) => {
-        if (state.peerTab !== "trusted") return;
-        ev.preventDefault();
-        openContactMenu(btn.dataset.hash, btn.dataset.name, btn);
-      });
+      if (state.peerTab === "trusted") {
+        onLongPress(btn, () => openContactMenu(btn.dataset.hash, btn.dataset.name, btn));
+      }
     });
     el.querySelectorAll(".contact-trust").forEach((btn) => {
       btn.addEventListener("click", (ev) => {
@@ -3191,6 +3258,7 @@
 
   function selectPeer(hashId, name) {
     if (!hashId) return;
+    stopSelecting(false);
     state.selectedPeer = hashId;
     state.selectedName = name;
     const switching = state.selectedGroup || state.selectedPeerShown !== hashId;
@@ -3345,7 +3413,7 @@
       const media = kind === "video"
         ? `<video src="${url}" preload="metadata" muted playsinline></video><span class="album-play" aria-hidden="true">▶</span>`
         : `<img src="${url}" alt="${filename}" loading="lazy" />`;
-      return `<button type="button" class="album-tile ${kind}-bubble" data-transfer="${escapeHtml(tid)}" data-media-open="${escapeHtml(url)}" data-media-kind="${kind}" data-media-name="${filename}" title="${filename}">${media}</button>`;
+      return `<button type="button" class="album-tile ${kind}-bubble${state.selected?.has(m.id) ? " selected" : ""}" data-msg-id="${escapeHtml(m.id)}" data-transfer="${escapeHtml(tid)}" data-media-open="${escapeHtml(url)}" data-media-kind="${kind}" data-media-name="${filename}" title="${filename}">${media}</button>`;
     }
     const cancelled = stateLabel === "cancelled";
     const failed = stateLabel === "failed";
@@ -3353,7 +3421,7 @@
     const pct = size ? Math.min(100, Math.round(((live.offset || 0) / size) * 100)) : 0;
     const line = cancelled ? "Cancelled" : failed ? "Failed" : live.ask ? formatBytes(size) : transferProgressLine(live);
     const busy = !cancelled && !failed && !live.ask;
-    return `<div class="album-tile pending${cancelled ? " cancelled" : failed ? " failed" : ""}" data-transfer="${escapeHtml(tid)}" title="${filename}">
+    return `<div class="album-tile pending${cancelled ? " cancelled" : failed ? " failed" : ""}${state.selected?.has(m.id) ? " selected" : ""}" data-msg-id="${escapeHtml(m.id)}" data-transfer="${escapeHtml(tid)}" title="${filename}">
       <div class="album-tile-icon" aria-hidden="true">${kind === "video" ? "🎬" : "🖼"}</div>
       <div class="file-progress-meta">${escapeHtml(line)}</div>
       ${busy ? `<div class="progress-track chat-progress"><div class="progress-fill" style="width:${pct}%"></div></div>` : ""}
@@ -3411,17 +3479,234 @@
     }
   }
 
-  async function deleteMessage(messageId) {
-    if (!messageId) return;
-    const { ok, data } = await apiDelete(`/api/messages/${encodeURIComponent(messageId)}`);
-    if (ok && data?.deleted) {
-      state.messageCache = state.messageCache.filter((m) => m.id !== messageId);
-      renderMessages(state.messageCache, { preserveScroll: true });
-      toast("Message deleted");
-    } else {
-      toast("Could not delete message");
+  /* ── Long-press a message (like Signal): Copy, Save, Select, Info, Delete ── */
+  const LONG_PRESS_MS = 450;
+
+  function messageById(id) {
+    return state.messageCache.find((m) => m.id === id);
+  }
+
+  function isFileMessage(m) {
+    return ["file", "image", "video"].includes(mediaMsgType(m));
+  }
+
+  function closeMessageSheet() {
+    const sheet = $("#msg-sheet");
+    if (!sheet || sheet.classList.contains("hidden")) return;
+    sheet.classList.add("hidden");
+    sheet.setAttribute("aria-hidden", "true");
+    sheet.querySelector(".msg-sheet-lift")?.remove();
+  }
+
+  function openMessageSheet(id, anchor) {
+    const m = messageById(id);
+    if (!m) return;
+    blurComposer();
+    const file = isFileMessage(m);
+    const live = file ? mergeTransferMeta(m.metadata?.transfer_id || "", m.metadata || {}) : null;
+    const items = [
+      !file && { action: "copy", label: "Copy", icon: ICON_COPY },
+      file && live?.state === "complete" && { action: "save", label: "Save", icon: ICON_SAVE },
+      { action: "select", label: "Select", icon: ICON_SELECT },
+      { action: "info", label: "Info", icon: ICON_INFO },
+      { action: "delete", label: "Delete", icon: ICON_TRASH, danger: true },
+    ].filter(Boolean);
+    const menu = $("#msg-sheet-menu");
+    const sheet = $("#msg-sheet");
+    if (!menu || !sheet) return;
+    menu.innerHTML = items.map((it) => `<button type="button" class="msg-sheet-item${it.danger ? " danger" : ""}" role="menuitem" data-sheet-action="${it.action}">${it.icon}<span>${it.label}</span></button>`).join("");
+    menu.dataset.msgId = id;
+    // The message stays bright above the dimmed chat (a copy where it is).
+    const rect = anchor.getBoundingClientRect();
+    sheet.querySelector(".msg-sheet-lift")?.remove();
+    const lift = anchor.cloneNode(true);
+    lift.classList.add("msg-sheet-lift");
+    lift.removeAttribute("data-msg-id");
+    lift.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+    Object.assign(lift.style, {
+      top: `${rect.top}px`, left: `${rect.left}px`, width: `${rect.width}px`, height: `${rect.height}px`,
+    });
+    sheet.insertBefore(lift, menu);
+    sheet.classList.remove("hidden");
+    sheet.setAttribute("aria-hidden", "false");
+    // Next to the message, like Signal: below it if there's room, else above.
+    const box = menu.getBoundingClientRect();
+    const margin = 12;
+    let top = rect.bottom + 8;
+    if (top + box.height > window.innerHeight - margin) top = rect.top - box.height - 8;
+    top = Math.max(margin, Math.min(top, window.innerHeight - box.height - margin));
+    const out = anchor.closest(".bubble-row")?.classList.contains("out");
+    let left = out ? rect.right - box.width : rect.left;
+    left = Math.max(margin, Math.min(left, window.innerWidth - box.width - margin));
+    menu.style.top = `${top}px`;
+    menu.style.left = `${left}px`;
+    menu.querySelector("button")?.focus({ preventScroll: true });
+  }
+
+  async function runMessageAction(action, id) {
+    closeMessageSheet();
+    const m = messageById(id);
+    if (!m) return;
+    if (action === "copy") {
+      copyMessageText(m.text || "");
+    } else if (action === "save") {
+      const tid = m.metadata?.transfer_id || "";
+      const url = `/api/transfers/${encodeURIComponent(tid)}/file?download=1`;
+      saveTransferFile(tid, url, m.metadata?.filename || m.text || "file");
+    } else if (action === "select") {
+      startSelecting(id);
+    } else if (action === "info") {
+      showMessageInfo(m);
+    } else if (action === "delete") {
+      await deleteMessages([id]);
     }
   }
+
+  async function deleteMessages(ids) {
+    if (!ids.length) return;
+    const files = ids.some((id) => { const m = messageById(id); return m && isFileMessage(m); });
+    const what = ids.length === 1 ? "this message" : `${ids.length} messages`;
+    if (!confirm(`Delete ${what} from this device?${files ? " Files received with them are deleted too." : ""}\n\nYour contact keeps their copy.`)) return;
+    const chat = state.selectedGroup ? { group: state.selectedGroup } : { peer: state.selectedPeer };
+    const { ok, data } = await apiPost("/api/messages/delete", { ids, ...chat });
+    if (!ok) {
+      toast(data?.error || "Could not delete", "error");
+      return;
+    }
+    const gone = new Set(ids);
+    stopSelecting(false);
+    state.messageCache = state.messageCache.filter((m) => !gone.has(m.id));
+    renderMessages(state.messageCache, { preserveScroll: true });
+    toast(ids.length === 1 ? "Message deleted" : `${data?.deleted ?? ids.length} messages deleted`);
+  }
+
+  function showMessageInfo(m) {
+    const out = isOutgoing(m.sender_hash);
+    const meta = m.metadata || {};
+    const live = isFileMessage(m) ? mergeTransferMeta(meta.transfer_id || "", meta) : null;
+    const who = out ? "You" : (meta.group_id ? memberName(meta.group_id, m.sender_hash) : (state.selectedName || m.sender_hash.slice(0, 8)));
+    const rows = [
+      [out ? "Sent" : "Received", new Date(m.timestamp * 1000).toLocaleString()],
+      ["From", who],
+      out && ["Status", { delivered: "Delivered", sent: "Sent, not confirmed yet", pending: "Waiting to send", failed: "Not sent", not_trusted: "They haven't accepted you yet" }[m.status] || m.status],
+      ["Connection", ({ tcp: "Wi-Fi / internet", serial: "Serial radio", udp: "Direct" }[m.transport] || m.transport || "—")],
+      live && ["File", `${live.filename || m.text} · ${formatBytes(live.size || 0)}`],
+      live && ["Transfer", transferProgressLine(live)],
+      meta.ttl && ["Disappears", "Yes (timer set by the sender)"],
+      ["Encryption", "End-to-end (quantum-safe)"],
+    ].filter(Boolean);
+    const body = $("#msg-info-body");
+    if (body) body.innerHTML = rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(String(v))}</dd>`).join("");
+    openModal($("#msg-info-modal"));
+  }
+
+  /* Select several messages: tap to add or remove, then Copy or Delete. */
+  function startSelecting(id) {
+    state.selected = new Set(id ? [id] : []);
+    $("#chat-active")?.classList.add("selecting");
+    refreshSelection();
+  }
+
+  function stopSelecting(render = true) {
+    if (!state.selected) return;
+    state.selected = null;
+    $("#chat-active")?.classList.remove("selecting");
+    if (render) refreshSelection();
+  }
+
+  function toggleSelected(id) {
+    if (!state.selected) return;
+    if (state.selected.has(id)) state.selected.delete(id);
+    else state.selected.add(id);
+    refreshSelection();
+  }
+
+  function refreshSelection() {
+    const picked = state.selected || new Set();
+    $$("#messages [data-msg-id]").forEach((el) => {
+      el.classList.toggle("selected", picked.has(el.dataset.msgId));
+    });
+    const count = $("#select-count");
+    if (count) count.textContent = `${picked.size} selected`;
+    const copy = $("#select-copy");
+    if (copy) copy.disabled = ![...picked].some((id) => { const m = messageById(id); return m && !isFileMessage(m); });
+    const del = $("#select-delete");
+    if (del) del.disabled = !picked.size;
+  }
+
+  function copySelected() {
+    const texts = state.messageCache
+      .filter((m) => state.selected?.has(m.id) && !isFileMessage(m))
+      .map((m) => m.text);
+    if (texts.length) copyMessageText(texts.join("\n"));
+    stopSelecting();
+  }
+
+  (function wireMessagePresses() {
+    const el = $("#messages");
+    if (!el) return;
+    let timer = null;
+    let start = null;
+    let fired = false;
+    const target = (ev) => ev.target.closest?.("[data-msg-id]");
+    const cancel = () => { clearTimeout(timer); timer = null; };
+    el.addEventListener("pointerdown", (ev) => {
+      if (ev.button > 0) return;
+      const row = target(ev);
+      fired = false;
+      if (!row || state.selected) return;
+      start = { x: ev.clientX, y: ev.clientY };
+      cancel();
+      timer = setTimeout(() => {
+        timer = null;
+        fired = true;
+        navigator.vibrate?.(12);
+        openMessageSheet(row.dataset.msgId, row.classList.contains("album-tile") ? row : (row.querySelector(".bubble") || row));
+      }, LONG_PRESS_MS);
+    });
+    el.addEventListener("pointermove", (ev) => {
+      if (timer && start && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) > 10) cancel();
+    });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((type) => el.addEventListener(type, cancel));
+    el.addEventListener("scroll", cancel, { passive: true });
+    el.addEventListener("contextmenu", (ev) => {  // (right-click on a PC; Android's own long-press)
+      const row = target(ev);
+      if (!row) return;
+      ev.preventDefault();
+      if (state.selected || fired) return;
+      cancel();
+      openMessageSheet(row.dataset.msgId, row.classList.contains("album-tile") ? row : (row.querySelector(".bubble") || row));
+    });
+    // The tap that ends a long-press opens nothing; while selecting, a tap toggles.
+    el.addEventListener("click", (ev) => {
+      if (fired) {
+        fired = false;
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
+      if (!state.selected) return;
+      const row = target(ev);
+      if (!row) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleSelected(row.dataset.msgId);
+    }, true);
+  })();
+
+  $("#msg-sheet")?.addEventListener("click", (ev) => {
+    const item = ev.target.closest("[data-sheet-action]");
+    if (item) {
+      runMessageAction(item.dataset.sheetAction, $("#msg-sheet-menu")?.dataset.msgId || "");
+    } else if (!ev.target.closest("#msg-sheet-menu")) {
+      closeMessageSheet();
+    }
+  });
+  $("#select-cancel")?.addEventListener("click", () => stopSelecting());
+  $("#select-copy")?.addEventListener("click", copySelected);
+  $("#select-delete")?.addEventListener("click", () => deleteMessages([...(state.selected || [])]));
+  $("#msg-info-close")?.addEventListener("click", () => closeModal($("#msg-info-modal")));
+  setupModalClose($("#msg-info-modal"));
 
   function isNearBottom(el, threshold = 80) {
     return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
@@ -3657,15 +3942,9 @@
         ? `<div class="bubble-sender" style="color:${hashColor(m.sender_hash)}">${escapeHtml(memberName(m.metadata.group_id, m.sender_hash))}</div>`
         : "";
       const body = senderLabel + (isFile ? renderFileBubble(m, out) : escapeHtml(m.text));
-      const actions = isFile
-        ? ""
-        : `<div class="bubble-actions">
-            <button type="button" class="bubble-action icon-only" data-copy="${escapeHtml(m.id)}" title="Copy" aria-label="Copy">${ICON_COPY}</button>
-            <button type="button" class="bubble-action icon-only danger" data-del-msg="${escapeHtml(m.id)}" title="Delete" aria-label="Delete">${ICON_TRASH}</button>
-          </div>`;
-      html += `<div class="bubble-row ${out ? "out" : "in"}" data-msg-id="${escapeHtml(m.id)}">
+      const picked = state.selected?.has(m.id) ? " selected" : "";
+      html += `<div class="bubble-row ${out ? "out" : "in"}${picked}" data-msg-id="${escapeHtml(m.id)}">
         <div class="bubble ${out ? "out" : "in"} ${mediaType === "image" ? "image" : ""}">
-          ${actions}
           ${body}
           <div class="bubble-meta">
             ${disappearIcon(m)}
@@ -3678,23 +3957,11 @@
     }
 
     el.innerHTML = html || '<div class="empty-hint" style="text-align:center;padding:2rem">No messages yet — say hello!</div>';
-    el.querySelectorAll("[data-copy]").forEach((btn) => {
-      btn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        const msg = state.messageCache.find((m) => m.id === btn.dataset.copy);
-        if (msg?.text) copyMessageText(msg.text);
-      });
-    });
-    el.querySelectorAll("[data-del-msg]").forEach((btn) => {
-      btn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        deleteMessage(btn.dataset.delMsg);
-      });
-    });
     el.querySelectorAll("[data-media-open]").forEach((btn) => {
       btn.addEventListener("click", (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
+        if (state.selected) return;  // (selecting: the row's tap toggles it)
         blurComposer();
         openMediaLightbox(
           btn.dataset.mediaOpen,
@@ -4459,6 +4726,22 @@
     if (!isAndroidApp()) return false;
     // During a call the back gesture must not hang up or leave the call screen.
     if ($("#call-overlay") && !$("#call-overlay").classList.contains("hidden")) return true;
+    if (!$("#msg-sheet")?.classList.contains("hidden")) {
+      closeMessageSheet();
+      return true;
+    }
+    if (!$("#group-menu")?.classList.contains("hidden")) {
+      closeGroupMenu();
+      return true;
+    }
+    if ($("#msg-info-modal")?.classList.contains("open")) {
+      closeModal($("#msg-info-modal"));
+      return true;
+    }
+    if (state.selected) {
+      stopSelecting();
+      return true;
+    }
     const menu = $("#contact-menu");
     if (menu && !menu.classList.contains("hidden")) {
       closeContactMenu();
@@ -4759,9 +5042,6 @@
     openFolderSendPicker(state.selectedPeer, state.selectedName);
   });
 
-  $("#btn-delete-chat")?.addEventListener("click", () => {
-    openDeleteChat(state.selectedPeer, state.selectedName);
-  });
   $("#delete-chat-cancel")?.addEventListener("click", () => closeModal($("#delete-chat-modal")));
   $("#delete-chat-submit")?.addEventListener("click", submitDeleteChat);
   setupModalClose($("#delete-chat-modal"));
@@ -4776,6 +5056,14 @@
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+      if (!$("#msg-sheet")?.classList.contains("hidden")) {
+        closeMessageSheet();
+        return;
+      }
+      if (state.selected) {
+        stopSelecting();
+        return;
+      }
       if ($("#media-lightbox")?.classList.contains("open")) {
         closeMediaLightbox();
         return;

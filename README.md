@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.13.7 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.13.8 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -37,11 +37,11 @@
 | **Works over WireGuard** | VPN-aware discovery (unicast sweep + replies), Find by IP, automatic address updates |
 | **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected. Discovery stays on **your own networks** (the Wi-Fi/LAN you're on and your VPN): never sent on mobile data or across the internet, and announces, Find by IP and contact requests from other networks are ignored, so nobody elsewhere can find you |
 | **Contact requests** | Unknown peers can't message you; they appear as "wants to chat" until you accept |
-| **Chat history** | Saved locally, encrypted, pruned by your retention setting; delete a single message or a whole chat (optionally with the files received in it) |
+| **Chat history** | Saved locally, encrypted, pruned by your retention setting; long-press a message (Copy, Save, Select, Info, Delete) or a chat (Delete chat, optionally with the files received in it), like in Signal |
 | **Albums** | Photos and videos sent together show as one grid, like Signal |
 | **Tap to download** | Received files above a size you choose (default 2 GB, 2 MB over a serial radio) wait for a tap instead of downloading by themselves |
 | **Trusted peers** | Trust-before-message security model |
-| **Ping / RTT** | Latency in ms (median of the last 5 round trips, measured by each phone itself); serial link quality % (RTT-based estimate, not RF RSSI) |
+| **Ping / RTT** | Latency in ms: the median of the last 5 round trips, averaged with the contact's own figure so both phones show the same number; pings travel encrypted. Serial link quality % (RTT-based estimate, not RF RSSI) |
 | **Cross-platform** | Linux, macOS, Windows CLI + Android (Chaquopy APK) |
 
 ---
@@ -238,7 +238,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.7.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.8.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -246,7 +246,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.7.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.7.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.8.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -388,13 +388,19 @@ telemetry radios, LoRa or ESP32 serial bridges), no network at all.
   saves it; the trash icon next to the list forgets it (back to Automatic).
 - **The radio comes first** when the two phones aren't on the same Wi-Fi/LAN:
   an internet or Tor session moves to the radio as soon as the contact is in
-  range (without a gap), and back to the shared Wi-Fi when there is one.
+  range (without a gap), and back to the shared Wi-Fi as soon as there is one
+  (a network change or the contact appearing on your Wi-Fi triggers it at
+  once). A file that was moving carries on over the new path. When one phone
+  leaves the radio, the other notices within seconds (its radio check gets
+  no answer) and both continue over the internet.
 - **PC:** `./run.sh web --serial --serial-port /dev/ttyUSB0` (or `COM3`).
 - Contacts are the **same contacts** as over Wi-Fi, and **only contacts**:
   nobody is discovered over the radio. Phones send private *beacons* that
-  only the contacts they name can read (no name, ID or key on the air; to
+  only the contacts they name can read (no name, ID or key in a beacon; to
   anyone else in range they're random bytes), then connect by themselves
-  (the header shows **SERIAL**). A stranger's radio gets no answer. Chat,
+  (the header shows **SERIAL**; that connection's handshake does carry both
+  names and keys, see SECURITY.md). A stranger's radio gets no answer, and
+  its handshakes are ignored. Chat,
   files and groups work over it, slowly; a file shows its speed and the time
   left, and chat, pings and call setup wait behind one turn of file data at
   most (under a second at 57600 baud). A cancelled file's queued data is
@@ -462,7 +468,7 @@ Several **photos or videos sent in a row** (within 2 minutes) show as one **albu
 
 **Download automatically up to** (*Settings → General*, default 2 GB; a separate *Over the serial radio* limit, default 2 MB): a received file larger than this waits in the chat with a **Download** button (✕ declines it) and nothing is stored until you tap; the sender sees *waiting for them to tap Download*. Over the API: `POST /api/transfers/{id}/download`.
 
-**Delete a chat** with the 🗑 button in the chat header (or *Delete chat…* in a contact's ⋮ menu): every message of that chat is deleted from this device, optionally with the files received in it; your contact keeps theirs. API: `POST /api/chats/delete` with `{"peer": "<hash>"}` or `{"group": "<id>"}` and optional `"delete_files": true`.
+**Long-press a message** (right-click on a PC), like in Signal: **Copy**, **Save** (files), **Select** (then Copy or Delete several), **Info** (sent/received time, delivery, connection, file) and **Delete** (from this device; a photo, video or file takes the received file with it). **Long-press a chat** in the list for *Delete chat…* (every message of that chat, optionally with the files received in it; your contact keeps theirs). API: `POST /api/messages/delete` with `{"ids": [...], "peer": "<hash>"}` (or `"group"`), `POST /api/chats/delete` with `{"peer": "<hash>"}` or `{"group": "<id>"}` and optional `"delete_files": true`.
 
 **Shrink photos before sending** (*Settings → General*, off by default) sends photos as JPEG with the longest side at most 2560 px: a 12 MP phone photo goes from ~5 MB to ~1 MB, which matters on mobile data. The re-encoded photo carries none of the original's metadata (GPS location, camera, time). Screenshots and PNG graphics, GIFs and anything the device can't decode are always sent as they are.
 

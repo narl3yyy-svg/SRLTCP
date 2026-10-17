@@ -337,6 +337,7 @@ class PunchMixin:
         for hash_id, link in list(self._links.items()):
             if link.handshake_complete and self.is_trusted(hash_id):
                 await self.send_rendezvous(hash_id)
+        self.check_paths_now()  # (we may share a Wi-Fi with someone on the radio now)
 
     async def note_public_address(self: MessagingBackend) -> None:
         current = self.public_candidates()
@@ -362,6 +363,7 @@ class PunchMixin:
             merged = [h for h in merged if h and h != peer.tcp_host][:4]
             if merged != peer.alt_hosts:
                 self.trusted.update(hash_id, alt_hosts=merged)
+                self._upgrade_attempts.pop(hash_id, None)  # (new place to try at once)
         if "u" in data:
             public = _clean_candidates(data.get("u"))
             if public and public != self._peer_public.get(hash_id):
@@ -598,11 +600,8 @@ class PunchMixin:
                     return
             if hash_id in self._upgrades:
                 return
-            kx = await self._send_upgrade_handshake(hash_id, peer_id)
-            if kx is None:
+            if await self._send_upgrade_handshake(hash_id, peer_id) is None:
                 await self.tcp_transport.disconnect(peer_id)
-                return
-            self._upgrades[hash_id] = (peer_id, kx, time.monotonic())
         finally:
             self._punching.discard(hash_id)
 

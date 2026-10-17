@@ -1,5 +1,101 @@
 # SRLTCP Release Notes
 
+## v0.13.8 (2026-10-17)
+
+### Switching between the radio, Wi-Fi and mobile data
+- **A file sent over the radio now finishes after you switch to Wi-Fi.**
+  Your test showed it: the receiving phone had every byte (132.2 KB of
+  132.2 KB) but the file never completed, and the sender stayed at 6 %.
+  - The cause: on the new path the sender resent part of the file in
+    larger pieces. The check it runs over the file (needed before the file
+    counts as finished) skipped those bytes, so "finished" was never sent.
+    Every stall then also tore the connection down, which is why the header
+    flipped between *Offline* and *DIRECT*.
+  - Fixed: the check now covers every byte, however the file was resent.
+- **A moving file carries on at once on the new path.** Both phones sync up
+  (the receiver says exactly what it has) instead of waiting out a timer
+  meant for the slow radio. In a simulation of two phones on 57600-baud
+  radios, a transfer moved to Wi-Fi in under 0.1 s (0.13.7: never finished).
+- **Wi-Fi takes over from the radio as soon as it's there.** A phone that
+  joins a Wi-Fi, a contact that shows up on your Wi-Fi, or new addresses
+  from a contact now trigger the switch right away. It used to wait up to
+  45 s for the next periodic check.
+- **One phone leaving the radio no longer leaves the other one stuck.**
+  When only one phone switched its radio off, the other kept its radio
+  session and refused the internet connection for up to a minute. Now it
+  checks the radio at once: no answer within 5 s, and it moves to the
+  internet too. In the simulation both phones were reconnected over the
+  internet 7 s after one switched its radio off.
+- **Fixed: one phone showing the contact connected and the other not.**
+  When a better path came up, a background reconnect could start a second
+  handshake on the same connection while the first was being answered. The
+  two phones then ended up with different keys, and nothing got through. A
+  connection now carries one handshake at a time, and a fast answer to a
+  path change is never thrown away as "unexpected".
+
+### Ping over the serial radio
+- **Both phones now show the same ping for their link.** Each phone used to
+  show only its own measurements, taken at different moments and behind
+  different traffic (in the simulation during a transfer: about 760 ms on
+  one phone, 440 ms on the other). Each ping now carries the sender's
+  figure, and both phones show the average of the two.
+- Over the radio the ping keeps updating during file transfers (it used to
+  freeze at the value from before the transfer).
+
+### Long-press, like Signal
+- **Long-press a message** (right-click on a PC): it lifts above the dimmed
+  chat with **Copy**, **Save** (files), **Select**, **Info** and
+  **Delete**.
+  - **Select:** tap more messages, then Copy or Delete them together.
+  - **Info:** when it was sent or received, delivery status, connection,
+    file details.
+  - Deleting a photo, video or file also deletes the received file, like in
+    Signal. Your contact keeps their copy.
+- **Long-press a chat in the list** for its menu: *Delete chat…* comes
+  first. For groups: *Delete chat…* and *Group info…*.
+- The trash button in the chat header is gone.
+
+### Security
+A full security review of the protocol, the radio, file transfers and the
+web interface found the issues below; each is fixed and has a test showing
+the attack no longer works.
+- **Encryption counter:** installing the same session keys twice (a
+  repeated handshake answer) used to start the message counter over, which
+  would reuse AES-GCM nonces under one key. That can no longer happen.
+- **Pings are encrypted.** Anyone able to inject packets (for example on the
+  radio) could forge answers that made a dead connection look alive and
+  faked the ping time. Pings and their answers now travel inside the
+  end-to-end encrypted session.
+- **Strangers on the radio:** everyone in range shares the radio, and a
+  validly signed handshake from any throwaway identity could tear down your
+  contact's radio session. Only contacts may open a session on the radio now,
+  and a session isn't given up for someone else's handshake.
+- **Replayed beacons:** an old beacon, replayed later, could drop a working
+  radio session. Beacons older than the newest one from that contact, or
+  from before the session started, are ignored.
+- **Radio link layer:** forged acknowledgements or packets with a guessed
+  message number could make real messages count as delivered while they
+  weren't. Answers must now match the message, and a "duplicate" must match
+  the content already received.
+- **Handshakes check the signature first.** The slow post-quantum work, and
+  any decision about the session, now come after the (fast) signature check;
+  a connection may open at most 12 handshakes a minute.
+- **Deleting files never touches another file.** A cancelled or failed
+  download kept the name its file would have had. In 0.13.7, *Delete chat*
+  with "Also delete the files received" could then delete a later file that
+  got that name. Only a file the app itself finished receiving is ever
+  deleted now, and deleting messages only affects the chat they're in.
+- **Web interface:** requests that change anything must come from this
+  exact page (https, this port): a web page on another port of the same
+  computer could otherwise act as you. The access token is no longer written
+  to the log, and received files open sandboxed (an SVG can't run script).
+- **Limits:** memory for out-of-order file pieces is capped in total, the
+  free-space check counts what other downloads will still write, and a
+  cancelled "tap to download" file can't be restarted.
+- Left for a later version (low risk, need a protocol change): a session
+  only proves itself with its first encrypted message on the radio today,
+  not on other paths; names and keys in a radio handshake are not hidden.
+
 ## v0.13.7 (2026-10-17)
 
 ### Scrolling the chat

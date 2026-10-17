@@ -25,7 +25,11 @@ class PeerLink:
     crypto: CryptoBox = field(default_factory=CryptoBox)
     connected: bool = False
     handshake_complete: bool = False
-    rtt_ms: float | None = None  # median of the last RTT_SAMPLES round trips
+    # Shown ping: our median of the last RTT_SAMPLES round trips, averaged with
+    # the contact's own figure (sent with their pings) so both phones agree.
+    rtt_ms: float | None = None
+    own_rtt_ms: float | None = None
+    peer_rtt_ms: float | None = None
     rtt_samples: list[float] = field(default_factory=list)
     link_quality_pct: float | None = None
     peer_name: str = ""
@@ -37,8 +41,9 @@ class PeerLink:
     pq_public: bytes = b""
     # Their addresses (RENDEZVOUS) arrived on this session.
     have_their_addresses: bool = False
-    # monotonic time the session keys were (last) set
+    # monotonic time the session keys were (last) set, and the same as wall time
     established: float = 0.0
+    established_wall: float = 0.0
     # They proved they have the keys too. Always, once we got their handshake
     # answer; as the answering side on a radio, only once something they
     # encrypted arrives (our answer may have been lost on the air).
@@ -50,7 +55,9 @@ class PeerLink:
         self.rtt_samples = [*self.rtt_samples[-(RTT_SAMPLES - 1):], rtt_ms]
         ordered = sorted(self.rtt_samples)
         mid = len(ordered) // 2
-        self.rtt_ms = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+        own = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+        self.own_rtt_ms = own
+        self.rtt_ms = own if self.peer_rtt_ms is None else (own + self.peer_rtt_ms) / 2
         return self.rtt_ms
 
     @property
@@ -134,3 +141,4 @@ class PeerLinkMixin:
             link.handshake_complete = True
             link.connected = True
             link.last_seen = link.established = time.monotonic()
+            link.established_wall = time.time()

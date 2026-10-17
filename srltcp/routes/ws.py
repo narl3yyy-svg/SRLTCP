@@ -19,7 +19,7 @@ def register_ws_routes(app: web.Application, node: SRLTCPNode) -> None:
         if host not in ("127.0.0.1", "localhost", "[::1]"):
             raise web.HTTPForbidden()
         origin = request.headers.get("Origin", "")
-        if origin and not _is_allowed_origin(origin):
+        if origin and not _is_allowed_origin(origin, request):
             raise web.HTTPForbidden(text="Invalid origin")
         ws = web.WebSocketResponse(heartbeat=30.0, max_msg_size=1024 * 1024)
         await ws.prepare(request)

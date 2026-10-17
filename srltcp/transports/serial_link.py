@@ -141,9 +141,15 @@ class SerialLink:
         self._tasks: list[asyncio.Task[None]] = []
         self._next_id = random.getrandbits(16)
         self._acked: dict[int, set[int]] = {}
+        self._sent_count: dict[int, int] = {}  # message id in flight -> its part count
         self._ack_events: dict[int, asyncio.Event] = {}
-        self._incoming: dict[int, _Incoming] = {}
-        self._delivered: OrderedDict[int, int] = OrderedDict()  # message id -> count
+        # Partial messages by (id, part count); unacknowledged ones (broadcasts,
+        # anyone can send them) apart, so they never push out a real message.
+        self._incoming: dict[tuple[int, int], _Incoming] = {}
+        self._incoming_noack: dict[tuple[int, int], _Incoming] = {}
+        # (id, part count) -> checksum of each part: a packet is a resend of a
+        # delivered message only if it matches (not just its visible id).
+        self._delivered: OrderedDict[tuple[int, int], list[int]] = OrderedDict()
         self._write_lock = asyncio.Lock()
         # The line is taken in turns (a burst of packets and the wait for its
         # answer); urgent messages get the next turn before bulk ones.
@@ -169,7 +175,7 @@ class SerialLink:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._tasks = []
-        for inc in self._incoming.values():
+        for inc in [*self._incoming.values(), *self._incoming_noack.values()]:
             if inc.ack_handle:
                 inc.ack_handle.cancel()
 
@@ -328,6 +334,7 @@ class SerialLink:
             return
         missing = set(range(count))
         self._acked[msg_id] = set()
+        self._sent_count[msg_id] = count
         answer = self._ack_events[msg_id] = asyncio.Event()
         started = time.monotonic()
         sent_once: set[int] = set()
@@ -357,7 +364,7 @@ class SerialLink:
                         answered = True
                 finally:
                     await self._end_turn()
-                missing -= self._acked.get(msg_id, set())
+                missing = set(range(count)) - self._acked.get(msg_id, set())
                 self._adapt(answered, sent_at, got=len(set(turn) - missing), sent=len(turn))
             if missing:
                 self.stats.given_up += 1
@@ -365,6 +372,7 @@ class SerialLink:
                 self.stats.messages_out += 1
         finally:
             self._acked.pop(msg_id, None)
+            self._sent_count.pop(msg_id, None)
             self._ack_events.pop(msg_id, None)
 
     def _adapt(self, answered: bool, sent_at: float, *, got: int, sent: int) -> None:
@@ -445,8 +453,10 @@ class SerialLink:
                 self._good()
                 bitmap = body[ACK_HDR.size :]
                 have = {i for i in range(count) if bitmap[i // 8] >> (i % 8) & 1}
-                if msg_id in self._acked:
-                    self._acked[msg_id] |= have
+                if msg_id in self._acked and self._sent_count.get(msg_id) == count:
+                    # The receiver's whole picture (it keeps what it got): the
+                    # latest answer counts, not everything any answer claimed.
+                    self._acked[msg_id] = have
                     self._ack_events[msg_id].set()
             else:
                 self._bad(buf)
@@ -466,17 +476,21 @@ class SerialLink:
 
     async def _on_data(self, kind: int, msg_id: int, idx: int, count: int, payload: bytes) -> None:
         reliable = kind != K_DATA_NOACK
-        if msg_id in self._delivered:  # a resend of something we have: confirm again
-            if reliable:
-                self._schedule_ack(msg_id, now=kind == K_DATA_LAST)
-            return
+        key = (msg_id, count)
+        done = self._delivered.get(key) if reliable else None
+        if done is not None:
+            if done[idx] == zlib.crc32(payload):  # a resend of something we have: confirm again
+                self._schedule_ack(key, now=kind == K_DATA_LAST)
+                return
+            del self._delivered[key]  # same id, other content: a new message (ids wrap)
         now = time.monotonic()
-        inc = self._incoming.get(msg_id)
-        if inc is None or inc.count != count:
-            inc = self._incoming[msg_id] = _Incoming(count, last_at=now)
-            while len(self._incoming) > 8:  # abandoned partial messages
-                old = next(iter(self._incoming))
-                stale = self._incoming.pop(old)
+        table = self._incoming if reliable else self._incoming_noack
+        inc = table.get(key)
+        if inc is None:
+            inc = table[key] = _Incoming(count, last_at=now)
+            while len(table) > (8 if reliable else 4):  # abandoned partial messages
+                old = min(table, key=lambda k: table[k].last_at)
+                stale = table.pop(old)
                 if stale.ack_handle:
                     stale.ack_handle.cancel()
         else:
@@ -485,46 +499,46 @@ class SerialLink:
             inc.last_at = now
         inc.parts[idx] = payload
         if len(inc.parts) == count:
-            self._incoming.pop(msg_id, None)
+            table.pop(key, None)
             if inc.ack_handle:
                 inc.ack_handle.cancel()
-            self._delivered[msg_id] = count
-            while len(self._delivered) > 512:
-                self._delivered.popitem(last=False)
             if reliable:
-                await self._send_ack(msg_id)
+                self._delivered[key] = [zlib.crc32(inc.parts[i]) for i in range(count)]
+                while len(self._delivered) > 512:
+                    self._delivered.popitem(last=False)
+                await self._send_ack(key)
             self.stats.messages_in += 1
             await self._deliver(b"".join(inc.parts[i] for i in range(count)))
         elif reliable:
-            self._schedule_ack(msg_id, now=kind == K_DATA_LAST)
+            self._schedule_ack(key, now=kind == K_DATA_LAST)
 
-    def _schedule_ack(self, msg_id: int, *, now: bool) -> None:
+    def _schedule_ack(self, key: tuple[int, int], *, now: bool) -> None:
         """Answer at the end of the sender's turn (its last packet says so).
         If that packet is lost, answer once the sender has gone quiet for a
         while: an answer sent while it's still transmitting would be lost on a
         half-duplex radio, and would make it resend what is still on the way."""
         loop = asyncio.get_running_loop()
-        inc = self._incoming.get(msg_id)
+        inc = self._incoming.get(key)
         if inc is not None and inc.ack_handle:
             inc.ack_handle.cancel()
             inc.ack_handle = None
         if now or inc is None:
-            asyncio.ensure_future(self._send_ack(msg_id))
+            asyncio.ensure_future(self._send_ack(key))
             return
         delay = min(3.0, max(0.3, 4.0 * inc.gap, 4 * PACKET / self.max_rate))
         inc.ack_handle = loop.call_later(
-            delay, lambda: asyncio.ensure_future(self._send_ack(msg_id))
+            delay, lambda: asyncio.ensure_future(self._send_ack(key))
         )
 
-    async def _send_ack(self, msg_id: int) -> None:
-        if msg_id in self._delivered:
-            count = self._delivered[msg_id]
+    async def _send_ack(self, key: tuple[int, int]) -> None:
+        msg_id, count = key
+        if key in self._delivered:
             have = set(range(count))
         else:
-            inc = self._incoming.get(msg_id)
+            inc = self._incoming.get(key)
             if inc is None:
                 return
-            count, have = inc.count, set(inc.parts)
+            have = set(inc.parts)
         bitmap = bytearray((count + 7) // 8)
         for i in have:
             bitmap[i // 8] |= 1 << (i % 8)

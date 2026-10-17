@@ -186,7 +186,7 @@ async def run_web_server(
     runner = web.AppRunner(
         app,
         access_log_class=QuietAccessLogger,
-        access_log_format='%a %t "%r" %s %b',
+        access_log_format='%a %t "%m %U" %s %b',  # (no query string: it can hold the token)
     )
     await runner.setup()
     site, bound_port = await start_web_site(

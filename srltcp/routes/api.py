@@ -241,12 +241,22 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response({"error": "invalid group"}, status=400)
         return web.json_response(node.backend.get_messages(limit=limit, peer=peer, group=group))
 
-    async def delete_message(request: web.Request) -> web.Response:
-        message_id = request.match_info.get("message_id", "")
-        if not message_id:
-            return web.json_response({"error": "message_id required"}, status=400)
-        ok = node.backend.delete_message(message_id)
-        return web.json_response({"deleted": ok})
+    async def delete_messages(request: web.Request) -> web.Response:
+        """Delete several messages (long-press → Select → Delete)."""
+        data = await request.json()
+        ids = data.get("ids")
+        if not isinstance(ids, list) or not ids or len(ids) > 5000:
+            return web.json_response({"error": "ids required"}, status=400)
+        peer = str(data.get("peer", "")).lower()
+        group = str(data.get("group", "")).lower()
+        if bool(peer) == bool(group):
+            return web.json_response({"error": "peer or group required"}, status=400)
+        if (peer and not is_valid_hash_id(peer)) or (group and not is_valid_group_id(group)):
+            return web.json_response({"error": "invalid chat"}, status=400)
+        removed = await node.backend.delete_messages(
+            [str(i)[:64] for i in ids], peer=peer, group=group
+        )
+        return web.json_response({"deleted": removed})
 
     async def send_message(request: web.Request) -> web.Response:
         data = await request.json()
@@ -1286,8 +1296,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_delete("/api/trusted/{hash_id}", trusted_remove)
     app.router.add_post("/api/trusted/{hash_id}/diagnose", trusted_diagnose)
     app.router.add_get("/api/messages", messages)
-    app.router.add_delete("/api/messages/{message_id}", delete_message)
     app.router.add_post("/api/chats/delete", delete_chat)
+    app.router.add_post("/api/messages/delete", delete_messages)
     app.router.add_post("/api/messages", send_message)
     app.router.add_post("/api/connect", connect)
     app.router.add_post("/api/disconnect", disconnect)

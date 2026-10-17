@@ -48,9 +48,31 @@ def _origin_host(value: str) -> str | None:
     return host or None
 
 
-def _is_allowed_origin(value: str) -> bool:
+def _own_port(request: web.Request) -> int:
+    """The port this request was made to ("[::1]:9876", "127.0.0.1:9876")."""
+    host = request.host
+    tail = host.rsplit("]", 1)[-1] if host.startswith("[") else host
+    _name, _, port = tail.rpartition(":")
+    return int(port) if port.isdigit() else 443
+
+
+def _is_allowed_origin(value: str, request: web.Request | None = None) -> bool:
+    """Exactly this web UI: https, a localhost name, and (given the request)
+    the port it is served on. Another port on the same machine is another
+    site (anything could listen there), and so is plain http."""
+    parsed = urlparse(value or "")
     host = _origin_host(value)
-    return bool(host and host in ALLOWED_ORIGIN_HOSTS)
+    if not host or host not in {h.strip("[]") for h in ALLOWED_ORIGIN_HOSTS}:
+        return False
+    if parsed.scheme != "https":
+        return False
+    if request is None:
+        return True
+    try:
+        port = parsed.port or 443
+    except ValueError:
+        return False
+    return port == _own_port(request)
 
 
 @web.middleware
@@ -69,10 +91,15 @@ async def security_middleware(request: web.Request, handler):  # type: ignore[no
     if request.method in ("POST", "DELETE", "PATCH"):
         origin = request.headers.get("Origin", "")
         referer = request.headers.get("Referer", "")
-        if origin and not _is_allowed_origin(origin):
+        if origin and not _is_allowed_origin(origin, request):
             raise web.HTTPForbidden(text="Invalid origin")
-        if referer and not _is_allowed_origin(referer):
+        if referer and not _is_allowed_origin(referer, request):
             raise web.HTTPForbidden(text="Invalid referer")
+        bearer = request.headers.get("Authorization", "").startswith("Bearer ")
+        if not origin and not bearer:
+            # Browsers always say where a request comes from; a change made
+            # with only the cookie and no origin is not from this page.
+            raise web.HTTPForbidden(text="Missing origin")
 
     try:
         response = await handler(request)
@@ -80,6 +107,10 @@ async def security_middleware(request: web.Request, handler):  # type: ignore[no
         response = web.json_response({"error": "invalid JSON"}, status=400)
     for key, value in SECURITY_HEADERS.items():
         response.headers[key] = value
+    if request.path.startswith("/api/transfers/") and request.path.endswith("/file"):
+        # A received file (an SVG, an HTML page) opened on its own never runs
+        # script with this page's rights.
+        response.headers["Content-Security-Policy"] += "; sandbox"
     return response
 
 

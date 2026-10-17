@@ -120,3 +120,20 @@ def test_stun_field_rejects_dns_servers_and_junk(text: str) -> None:
     with pytest.raises(ValueError):
         parse_stun_servers(text)
     assert parse_stun_servers("stun.nextcloud.com:443") == (("stun.nextcloud.com", 443),)
+
+
+async def test_deleting_messages_takes_their_received_files(pair, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]  # noqa: F811
+    a, b = pair
+    src = tmp_path / "clip.mp4"
+    src.write_bytes(os.urandom(10 * 1024))
+    tid = (await a.send_file(b.identities["tcp"].hash_id, src))["id"]
+    await a.send_message(b.identities["tcp"].hash_id, "keep me")
+    assert await wait_for(lambda: tid in b._transfers and b._transfers[tid].state == "complete"
+                          and any(m["text"] == "keep me" for m in b.get_messages()), timeout=10)
+    received = b._transfers[tid].path
+    file_msg = next(m for m in b.get_messages() if m["metadata"].get("transfer_id") == tid)
+    ah = a.identities["tcp"].hash_id
+    assert await b.delete_messages([file_msg["id"]], peer="0" * 32) == 0  # (another chat's)
+    assert await b.delete_messages([file_msg["id"], "no-such-id"], peer=ah) == 1
+    assert not received.exists() and tid not in b._transfers
+    assert [m["text"] for m in b.get_messages()] == ["keep me"]

@@ -26,6 +26,7 @@ normal signed, quantum-safe handshake over the radio:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING
@@ -45,6 +46,10 @@ RADIO_REPLY_EVERY = 5.0  # answer beacons at most this often
 RADIO_NEAR_FOR = 120.0  # a contact counts as in range this long after its last beacon
 RADIO_DIAL_GRACE = 45.0  # the higher hash dials too when the lower one hasn't by then
 RADIO_ALIVE_WINDOW = 32.0  # any packet from the radio this recently: the line is alive
+# A contact dialing us over the internet has no radio session on their side
+# (it would keep that one): ours only wins while the radio is busy right now.
+RADIO_HEARD_RECENTLY = 12.0
+RADIO_CHECK_WAIT = 5.0  # a ping over a working radio is answered well within this
 # A beacon can wait on the radio behind a handshake (one message at a time,
 # slow line): one naming us this soon after our session came up may predate it.
 RADIO_SESSION_SETTLE = 120.0
@@ -58,7 +63,11 @@ class RadioMixin:
         self._radio_heard: dict[str, float] = {}  # hash -> last beacon naming us
         self._radio_waiting: dict[str, float] = {}  # hash -> heard while we had no session
         self._radio_dialing: set[str] = set()
+        self._radio_checking: set[str] = set()
         self._radio_seen: OrderedDict[bytes, None] = OrderedDict()  # beacon heads (replays)
+        # hash -> newest beacon time naming us (kept, unlike _radio_seen: junk
+        # beacons can't push it out, so an old beacon replayed later is ignored)
+        self._radio_newest: dict[str, int] = {}
         self._radio_beacon_at = 0.0
         self._radio_replied_at = 0.0
 
@@ -81,14 +90,15 @@ class RadioMixin:
         self._radio_keys[hash_id] = (peer.public_key, key)
         return key
 
-    def radio_alive(self: MessagingBackend) -> bool:
-        """The radio delivered a good packet lately (the line is point to
-        point: whatever arrives comes from the contact at the other end)."""
+    def radio_alive(self: MessagingBackend, window: float = RADIO_ALIVE_WINDOW) -> bool:
+        """The radio delivered a good packet in the last ``window`` seconds
+        (the line is point to point: whatever arrives comes from the contact
+        at the other end)."""
         transport = self.serial_transport
         if transport is None or not getattr(transport, "alive", False):
             return False
         last_rx = float(transport.link_stats().get("last_rx", 0.0))
-        return bool(last_rx) and time.time() - last_rx < RADIO_ALIVE_WINDOW
+        return bool(last_rx) and time.time() - last_rx < window
 
     def radio_contact_near(self: MessagingBackend, hash_id: str) -> bool:
         """The contact's beacon was heard on the radio lately."""
@@ -103,10 +113,16 @@ class RadioMixin:
         link = self.get_link(hash_id)
         return bool(link and link.handshake_complete and link.transport == "serial")
 
-    def _radio_holds(self: MessagingBackend, hash_id: str) -> bool:
-        """A working radio session with this contact."""
+    def _radio_holds(
+        self: MessagingBackend, hash_id: str, window: float = RADIO_ALIVE_WINDOW
+    ) -> bool:
+        """A working radio session with this contact: something it encrypted
+        arrived within ``window`` (any packet on the radio could be anyone's)."""
         link = self.get_link(hash_id)
-        return bool(link and link.up and link.transport == "serial" and self.radio_alive())
+        return bool(
+            link and link.up and link.transport == "serial" and self.radio_alive(window)
+            and time.monotonic() - link.last_seen < window
+        )
 
     def _tcp_peer_on_lan(self: MessagingBackend, peer_id: str) -> bool:
         """A TCP/UDP connection to an address on our own Wi-Fi/LAN or VPN."""
@@ -195,7 +211,10 @@ class RadioMixin:
             peer.hash_id
             for peer in self.trusted.list_peers()
             if (key := self._radio_key(peer.hash_id)) and heard.names(key)
+            and heard.timestamp > self._radio_newest.get(peer.hash_id, 0)
         ]
+        for hash_id in named:
+            self._radio_newest[hash_id] = heard.timestamp
         if not named:
             return  # not for us (or not a contact): no answer, nothing learnt
         log.debug("Radio beacon from %s", ", ".join(h[:8] for h in named))
@@ -204,7 +223,10 @@ class RadioMixin:
             self._radio_heard[hash_id] = now
             link = self.get_link(hash_id)
             if link and self._radio_session(hash_id):
-                if link.confirmed and now - link.established < RADIO_SESSION_SETTLE:
+                if link.confirmed and (
+                    now - link.established < RADIO_SESSION_SETTLE
+                    or heard.timestamp <= link.established_wall
+                ):
                     continue  # (sent before our session came up)
                 # They name us only while they have no radio session: theirs is gone.
                 log.info("Radio session with %s lost on their side — reconnecting", hash_id[:8])
@@ -217,6 +239,39 @@ class RadioMixin:
                 await self.send_radio_beacon(reply=True)
             except (OSError, ConnectionError, RuntimeError) as exc:
                 log.debug("Radio beacon answer not sent: %s", exc)
+
+    def check_radio_session(self: MessagingBackend, hash_id: str) -> None:
+        """Ping the radio session; no answer in RADIO_CHECK_WAIT: drop it and
+        connect over the other paths at once."""
+        if hash_id in self._radio_checking:
+            return
+        self._radio_checking.add(hash_id)
+        task = asyncio.create_task(self._check_radio_session(hash_id))
+        self.__dict__.setdefault("_radio_tasks", set()).add(task)
+        task.add_done_callback(self.__dict__["_radio_tasks"].discard)
+
+    async def _check_radio_session(self: MessagingBackend, hash_id: str) -> None:
+        try:
+            link = self.get_link(hash_id)
+            if not link or link.transport != "serial":
+                return
+            asked = time.monotonic()
+            with contextlib.suppress(KeyError, OSError, ConnectionError, RuntimeError):
+                await self.ping_peer(hash_id)
+            while time.monotonic() - asked < RADIO_CHECK_WAIT:
+                await asyncio.sleep(0.2)
+                current = self.get_link(hash_id)
+                if current is not link:
+                    return  # replaced meanwhile
+                if link.last_seen > asked:
+                    return  # it answered: the radio session works
+            log.info("Radio session with %s doesn't answer — moving to the internet", hash_id[:8])
+            await self._drop_radio_session(hash_id)
+            await self.connect_to_peer(hash_id, transport="tcp")
+        except (OSError, ConnectionError, RuntimeError, KeyError, TimeoutError) as exc:
+            log.debug("Radio check for %s failed: %s", hash_id[:8], exc)
+        finally:
+            self._radio_checking.discard(hash_id)
 
     async def _drop_radio_session(self: MessagingBackend, hash_id: str) -> None:
         link = self.get_link(hash_id)
@@ -253,10 +308,8 @@ class RadioMixin:
                 # Connected over the internet or Tor: open the radio session
                 # alongside; it replaces the current one once it's proven.
                 peer_id = peers[0].peer_id
-                kx = await self._send_upgrade_handshake(hash_id, peer_id, "serial")
-                if kx is None:
+                if await self._send_upgrade_handshake(hash_id, peer_id, "serial") is None:
                     return
-                self._upgrades[hash_id] = (peer_id, kx, time.monotonic())
             else:
                 await self.connect_to_peer(hash_id, transport="serial", force=link is not None)
             deadline = time.monotonic() + SERIAL_HANDSHAKE_TTL

@@ -810,36 +810,6 @@ body {
   background: rgba(0,0,0,0.12);
 }
 .bubble { position: relative; }
-.bubble-actions {
-  display: none;
-  gap: 3px;
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  z-index: 2;
-}
-.bubble:hover .bubble-actions { display: flex; }
-.bubble-action {
-  font-size: 0.65rem;
-  padding: 0.15rem 0.4rem;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.bubble-action.icon-only {
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.bubble-action.icon-only svg { width: 13px; height: 13px; }
-.bubble-action:hover { color: var(--text); background: var(--surface-hover); }
-.bubble-action.danger { color: #f07178; border-color: rgba(240, 113, 120, 0.35); }
-.bubble-action.danger:hover { background: rgba(240, 113, 120, 0.12); }
 #media-lightbox.open { display: flex; }
 .media-lightbox-panel {
   position: relative;
@@ -1860,3 +1830,85 @@ html, body { touch-action: pan-x pan-y; }
   letter-spacing: normal;
   color: var(--text-secondary);
 }
+
+/* Long-press a message: the action sheet next to it (like Signal) */
+.bubble, .album-tile { -webkit-touch-callout: none; }
+.messages .bubble { -webkit-user-select: none; user-select: none; }
+.msg-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(5, 7, 12, 0.55);
+  backdrop-filter: blur(2px);
+}
+.msg-sheet.hidden { display: none; }
+.msg-sheet-menu {
+  position: fixed;
+  min-width: 210px;
+  padding: 0.35rem 0;
+  border-radius: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.msg-sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  width: 100%;
+  padding: 0.75rem 1.1rem;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 1rem;
+  text-align: left;
+  cursor: pointer;
+}
+.msg-sheet-item svg { width: 22px; height: 22px; flex: none; }
+.msg-sheet-item:hover, .msg-sheet-item:focus-visible { background: var(--surface-hover); outline: none; }
+.msg-sheet-item.danger { color: var(--danger, #f07178); }
+.msg-sheet-lift {
+  position: fixed !important;
+  margin: 0 !important;
+  max-width: none !important;
+  box-sizing: border-box;
+  pointer-events: none;
+  overflow: hidden;
+  transform: scale(1.02);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+/* Selecting several messages */
+.select-bar {
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+.select-bar .spacer { flex: 1; }
+.select-count { font-weight: 600; }
+#chat-active.selecting .select-bar { display: flex; }
+#chat-active.selecting .bubble-row { cursor: pointer; }
+.bubble-row.selected .bubble, .album-tile.selected {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.bubble-row.selected { background: rgba(80, 130, 255, 0.08); border-radius: 12px; }
+.album-tile.selected::after {
+  content: "✓";
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.msg-info { display: grid; grid-template-columns: auto 1fr; gap: 0.45rem 1rem; margin: 0.75rem 0; }
+.msg-info dt { color: var(--text-muted); font-size: 0.85rem; }
+.msg-info dd { margin: 0; word-break: break-word; }

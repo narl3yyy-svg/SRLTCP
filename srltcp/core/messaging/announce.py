@@ -341,6 +341,9 @@ class AnnounceMixin:
                 self._verify_link_soon(peer.hash_id)
         if trusted and fresh and peer.transport == "tcp" and peer.tcp_host:
             self.request_direct_upgrade(peer.hash_id)  # same Wi-Fi again: leave Tor
+            link = self.get_link(peer.hash_id)
+            if link and link.up and link.transport == "serial" and newer:
+                self.check_paths_now(peer.hash_id)  # on our Wi-Fi: it beats the radio
         # Answer so the sender discovers us too (one press on one phone is enough).
         src_ip = address.rsplit(":", 1)[0] if ":" in address else ""
         if (

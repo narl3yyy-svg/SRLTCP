@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 import time
 from typing import TYPE_CHECKING
 
@@ -11,10 +12,13 @@ from srltcp.core.protocol.messages import MessageType, build_header, decode_payl
 from srltcp.utils.logging import get_logger
 
 LINK_DEAD_AFTER = 3.2 * PING_INTERVAL  # ~32 s without any frame or pong
+MAX_PINGS_IN_FLIGHT = 4
+MAX_RTT_MS = 120_000.0
 NETWORK_CHECK_EVERY = 3.0
 
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
+    from srltcp.core.messaging.links import PeerLink
 
 log = get_logger(__name__)
 
@@ -22,7 +26,7 @@ log = get_logger(__name__)
 class PingMixin:
     """Measure RTT and link quality for connected peers."""
 
-    _pending_pings: dict[str, float]
+    _pending_pings: dict[str, dict[str, float]]
     _ping_tasks: list[asyncio.Task[None]]
 
     def _init_ping(self: MessagingBackend) -> None:
@@ -52,8 +56,11 @@ class PingMixin:
                         log.debug("Address change check failed: %s", exc)
                 for link in self.list_links():
                     hash_id = link.get("hash_id", "")
-                    if link.get("handshake_complete") and not self.has_active_transfer_for(
-                        hash_id
+                    # (On the radio a ping is one packet ahead of file data: it
+                    # keeps going during transfers, so the figure stays current.)
+                    if link.get("handshake_complete") and (
+                        link.get("transport") == "serial"
+                        or not self.has_active_transfer_for(hash_id)
                     ):
                         try:
                             await self.ping_peer(hash_id)
@@ -138,26 +145,47 @@ class PingMixin:
         link = self.get_link(hash_id)
         if not link or not link.handshake_complete:
             return None
-        sent_at = time.time()
-        self._pending_pings[hash_id] = sent_at
-        body = encode_payload({"sent_at": sent_at, "hash_id": hash_id})
-        packet = build_header(MessageType.PING, body=body)
+        sent_at = time.monotonic()
+        nonce = secrets.token_hex(8)  # the pong must echo it: no blind forgeries
+        waiting = self._pending_pings.setdefault(hash_id, {})
+        waiting[nonce] = sent_at
+        while len(waiting) > MAX_PINGS_IN_FLIGHT:
+            waiting.pop(next(iter(waiting)))
+        fields: dict[str, object] = {"n": nonce}
+        if link.own_rtt_ms is not None:
+            # Our measurement, so both phones can show the same figure for the
+            # link (each alone measures at different moments: 300 vs 400 ms).
+            fields["r"] = round(link.own_rtt_ms)
+        # Inside the session (encrypted and authenticated): an answer nobody
+        # else can fake, so a dead connection can't be made to look alive.
+        packet = self._seal(link, MessageType.PING, encode_payload(fields))
         await self._send_raw(link.transport_peer_id, link.transport, packet)
         return sent_at
 
-    async def _handle_pong(self: MessagingBackend, peer_id: str, body: bytes) -> None:
+    async def _answer_ping(self: MessagingBackend, link: PeerLink, body: bytes) -> None:
+        """An encrypted ping from the contact: answer it the same way."""
         try:
             data = decode_payload(body)
-            sent_at = float(data.get("sent_at", 0))
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
-        if sent_at <= 0:
+        reported = data.get("r")
+        if isinstance(reported, (int, float)) and 0 < reported < MAX_RTT_MS:
+            link.peer_rtt_ms = float(reported)  # (their measurement of this link)
+        packet = self._seal(
+            link, MessageType.PONG, encode_payload({"n": str(data.get("n", ""))[:32]})
+        )
+        await self._send_raw(link.transport_peer_id, link.transport, packet)
+
+    async def _handle_pong(self: MessagingBackend, link: PeerLink, body: bytes) -> None:
+        """An encrypted answer to one of our pings."""
+        try:
+            nonce = str(decode_payload(body).get("n", ""))
+        except Exception:  # noqa: BLE001
             return
-        rtt_ms = (time.time() - sent_at) * 1000.0
-        link = self.get_link_by_peer_id(peer_id)
-        if not link:
-            return
-        link.last_seen = time.monotonic()
+        sent_at = self._pending_pings.get(link.hash_id, {}).pop(nonce, None)
+        if sent_at is None:
+            return  # not an answer to a ping of ours (replayed, or very late)
+        rtt_ms = (time.monotonic() - sent_at) * 1000.0
         self.discovery.update_metrics(link.hash_id, rtt_ms=link.add_rtt(rtt_ms))
         if link.transport == "serial" and self.serial_transport:
             self.serial_transport.record_ping_success(rtt_ms)
@@ -168,13 +196,15 @@ class PingMixin:
             await self._on_peer_metrics(link.hash_id, self.get_peer_metrics(link.hash_id))
 
     async def _reply_pong_with_rtt(self: MessagingBackend, peer: object, body: bytes) -> None:
+        """A plaintext ping (older versions): echo it. Its answer changes
+        nothing here, since anyone could send one."""
         from srltcp.transports.base import TransportPeer
 
         if not isinstance(peer, TransportPeer):
             return
         try:
             data = decode_payload(body)
-        except Exception:
+        except Exception:  # noqa: BLE001
             data = {}
         pong_body = encode_payload({"sent_at": data.get("sent_at", time.time())})
         packet = build_header(MessageType.PONG, body=pong_body)

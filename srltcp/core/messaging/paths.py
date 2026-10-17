@@ -67,6 +67,10 @@ class PathsMixin:
         link.have_their_addresses = True
         if not data.get("h"):
             await self.send_rendezvous(hash_id)  # they don't have ours yet (once: ours says "h")
+        if hash_id not in self._upgrade_attempts and (
+            link.transport == "serial" or self._link_on_tor(link)
+        ):
+            self.check_paths_now(hash_id)  # their new addresses: a better path now?
 
     # ── Path switching ──
 
@@ -109,6 +113,20 @@ class PathsMixin:
                 continue
             self._upgrade_attempts[hash_id] = now
             asyncio.create_task(self._try_direct_upgrade(hash_id, lan_only=on_radio))
+
+    def check_paths_now(self: MessagingBackend, hash_id: str | None = None) -> None:
+        """Where we or a contact are just changed (new network, they showed up
+        on our Wi-Fi, new addresses from them): look for a better path now
+        instead of at the next periodic check (up to 45 s later)."""
+        if hash_id is None:
+            self._upgrade_attempts.clear()
+        else:
+            self._upgrade_attempts.pop(hash_id, None)
+        if not self._running:
+            return
+        task = asyncio.create_task(self.maintain_paths())
+        self.__dict__.setdefault("_path_tasks", set()).add(task)
+        task.add_done_callback(self.__dict__["_path_tasks"].discard)
 
     def _has_waiting(self: MessagingBackend, hash_id: str) -> bool:
         return hash_id in self.peers_with_undelivered() or hash_id in self.peers_with_queued_files()
@@ -157,7 +175,6 @@ class PathsMixin:
                 if kx is None:
                     await self.tcp_transport.disconnect(peer_id)
                     return
-                self._upgrades[hash_id] = (peer_id, kx, time.monotonic())
                 log.info("Trying a direct path to %s at %s:%d", hash_id[:8], host, port)
                 return
         if not lan_only:

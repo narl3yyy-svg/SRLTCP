@@ -72,6 +72,8 @@ async def test_transfer_file_prefers_incoming_path(tmp_path: Path) -> None:
     node.backend._transfers = {tid: transfer}
     node.backend._incoming_paths = {tid: incoming}
     node.backend.transfer_file_path = lambda t: TransferMixin.transfer_file_path(node.backend, t)
+    node.backend.received_file = lambda t: TransferMixin.received_file(node.backend, t)
+    node.backend._is_outgoing = lambda t: False  # (received)
     app = web.Application()
     register_api_routes(app, node)
 

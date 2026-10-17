@@ -91,6 +91,8 @@ TERMINAL = frozenset(
 ACTIVE = frozenset({TransferState.OFFERED, TransferState.ACCEPTED, TransferState.TRANSFERRING})
 MAX_CHUNK = 1024 * 1024  # largest chunk a receiver accepts (after decompression)
 RX_BUFFER_MAX = 48 * 1024 * 1024  # early + unwritten bytes kept per incoming file
+RX_BUFFER_TOTAL = 128 * 1024 * 1024  # …and for all incoming files together
+RX_AHEAD_ENTRIES = 4096  # early chunks kept per file (tiny chunks cost more than their bytes)
 SPEED_WINDOW = 8.0  # the speed shown is measured over this many seconds…
 SPEED_MIN_SPAN = 1.0  # …once at least this much has been seen
 PROGRESS_TICK = 1.0  # moving transfers are refreshed this often
@@ -448,12 +450,20 @@ class TransferMixin:
         transfer = self._transfers.get(transfer_id)
         if not transfer:
             return None
-        incoming = self._incoming_paths.get(transfer_id)
-        if incoming and incoming.is_file():
-            return incoming
-        if transfer.path.is_file():
-            return transfer.path
-        return None
+        if self._is_outgoing(transfer):
+            return transfer.path if transfer.path.is_file() else None
+        # A received file only once it's complete: before that its name may be
+        # another file's (a cancelled offer doesn't reserve it).
+        path = self.received_file(transfer)
+        return path if path is not None and path.is_file() else None
+
+    def received_file(self: MessagingBackend, transfer: FileTransfer) -> Path | None:
+        """The file we wrote for a completed incoming transfer (None otherwise)."""
+        if self._is_outgoing(transfer) or transfer.state != TransferState.COMPLETE:
+            return None
+        if transfer.metadata.get("sync"):
+            return None  # (lives in the synced folder: never ours to serve or delete here)
+        return self._incoming_paths.get(transfer.id) or transfer.path
 
     def list_transfers(self: MessagingBackend, *, active_only: bool = False) -> list[dict]:
         items = list(self._transfers.values())
@@ -751,7 +761,7 @@ class TransferMixin:
                     hash_id, MessageType.FILE_ACK,
                     {"transfer_id": transfer_id, "offset": existing.size, "ok": True},
                 )
-            elif existing.metadata.get("ask"):
+            elif existing.metadata.get("ask") and existing.state not in TERMINAL:
                 await self._send_waiting(hash_id, transfer_id)  # (still waits for a tap)
             elif existing.state in TERMINAL:
                 await self._send_reject(
@@ -779,7 +789,11 @@ class TransferMixin:
             free = shutil.disk_usage(self._transfer_dir).free
         except OSError:
             free = size + 1
-        if free < size + 16 * MiB:
+        promised = sum(  # (bytes other unfinished downloads will still write)
+            max(0, t.size - t.offset) for t in self._transfers.values()
+            if t.state not in TERMINAL and not self._is_outgoing(t) and not t.metadata.get("ask")
+        )
+        if free < size + promised + 16 * MiB:
             log.warning("No room for %s (%d bytes) from %s", filename, size, hash_id[:8])
             await self._send_reject(hash_id, transfer_id, "no_space")
             return
@@ -877,7 +891,7 @@ class TransferMixin:
             return False
         transfer = self._transfers.get(tid)
         if (
-            not transfer or self._is_outgoing(transfer)
+            not transfer or self._is_outgoing(transfer) or transfer.state in TERMINAL
             or not transfer.metadata.pop("ask", None)
         ):
             return False
@@ -938,7 +952,11 @@ class TransferMixin:
         if offset < rx.expected:
             data, offset = data[rx.expected - offset:], rx.expected  # overlaps what we have
         if offset > rx.expected:
-            if rx.ahead_bytes + rx.queued_bytes + len(data) > RX_BUFFER_MAX:
+            if (
+                rx.ahead_bytes + rx.queued_bytes + len(data) > RX_BUFFER_MAX
+                or len(rx.ahead) >= RX_AHEAD_ENTRIES
+                or self._rx_buffered() + len(data) > RX_BUFFER_TOTAL
+            ):
                 return  # the sender resends it once the gap is filled
             rx.ahead[offset] = data
             rx.ahead_bytes += len(data)
@@ -947,6 +965,9 @@ class TransferMixin:
         self._rx_take_ahead(rx)
         if rx.writer is None or rx.writer.done():
             rx.writer = asyncio.create_task(self._rx_write_loop(transfer, rx))
+
+    def _rx_buffered(self: MessagingBackend) -> int:
+        return sum(r.ahead_bytes + r.queued_bytes for r in self._in.values())
 
     def _rx_append(self: MessagingBackend, rx: _Incoming, data: bytes) -> None:
         rx.queue.append(data)
@@ -1250,21 +1271,17 @@ class TransferMixin:
         framed: bool,
     ) -> tuple[bytes, int]:
         """Worker thread: read, hash, maybe compress, encrypt (and frame) one chunk."""
-        if out.hashed < offset:  # resumed after a restart: hash what they already have
-            fh.seek(out.hashed)
-            while out.hashed < offset:
-                block = fh.read(min(MiB, offset - out.hashed))
-                if not block:
-                    raise OSError("file shrank while sending")
-                out.hasher.update(block)
-                out.hashed += len(block)
+        self._hash_up_to(fh, out, offset)  # (resumed: hash what they already have)
         fh.seek(offset)
         data = fh.read(length)
         if not data:
             raise OSError("file shrank while sending")
-        if offset == out.hashed:
-            out.hasher.update(data)
-            out.hashed += len(data)
+        if offset <= out.hashed < offset + len(data):
+            # Hash only the bytes not hashed yet: a resend after a rewind (path
+            # change, the receiver's offset) can start before what was hashed
+            # and, with a larger chunk on the new path, reach past it.
+            out.hasher.update(data[out.hashed - offset:])
+            out.hashed = offset + len(data)
         payload, flags = data, 0
         if level and out.compress and len(data) >= 4096:
             if out.skip:
@@ -1282,6 +1299,19 @@ class TransferMixin:
         sealed = nonce + aes.encrypt(nonce, body, header_aad(MessageType.FILE_CHUNK, flags))
         packet = build_header(MessageType.FILE_CHUNK, flags=flags, body=sealed)
         return (pack_frame(packet) if framed else packet), len(data)
+
+    @staticmethod
+    def _hash_up_to(fh: BinaryIO, out: _Outgoing, end: int) -> None:
+        """Worker thread: feed the file to the hasher up to byte ``end``."""
+        if out.hashed >= end:
+            return
+        fh.seek(out.hashed)
+        while out.hashed < end:
+            block = fh.read(min(MiB, end - out.hashed))
+            if not block:
+                raise OSError("file shrank while sending")
+            out.hasher.update(block)
+            out.hashed += len(block)
 
     async def _send_file_chunks(
         self: MessagingBackend, hash_id: str, transfer: FileTransfer
@@ -1350,6 +1380,10 @@ class TransferMixin:
                     if params.delay:
                         await asyncio.sleep(params.delay)
                     continue
+                if out.next >= transfer.size and out.hashed < transfer.size:
+                    # The receiver has it all (its offset moved us here) but
+                    # part of the file wasn't read yet: hash the rest from disk.
+                    await asyncio.to_thread(self._hash_up_to, fh, out, transfer.size)
                 now = time.monotonic()
                 all_sent = out.next >= transfer.size and out.hashed >= transfer.size
                 if all_sent and not out.complete_sent:
@@ -1459,6 +1493,22 @@ class TransferMixin:
                     transfer.metadata.pop("reject_unsent", None)
                     self._journal_changed()
                 continue
+            moving = transfer.state in (TransferState.ACCEPTED, TransferState.TRANSFERRING)
+            if moving and self._is_outgoing(transfer):
+                # A new path (radio -> Wi-Fi, a reconnect): don't wait out the old
+                # path's stall timer, go on at once (the receiver says from where).
+                out = self._out.get(tid)
+                if out is not None:
+                    out.rewind = True
+                    out.progress_at = time.monotonic()
+                    out.wake.set()
+                continue
+            if moving and tid in self._in:
+                # What we have is authoritative: whatever was in flight on the
+                # old path is gone, and acks may have been lost with it.
+                with contextlib.suppress(Exception):
+                    await self.resume_transfer(tid)
+                continue
             if transfer.state != TransferState.PAUSED:
                 continue
             try:
@@ -1475,6 +1525,8 @@ class TransferMixin:
         if not transfer or transfer.state in TERMINAL:
             return False
         transfer.state = TransferState.CANCELLED
+        transfer.metadata.pop("ask", None)
+        transfer.metadata.pop("waiting", None)
         self._offer_sent_at.pop(tid, None)
         await self._stop_transfer_work(transfer)
         peer_hash = self._peer_hash_for_transfer(transfer)

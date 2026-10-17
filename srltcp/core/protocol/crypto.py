@@ -242,6 +242,12 @@ class CryptoBox:
         return self._keys is not None
 
     def set_keys(self, keys: SessionKeys) -> None:
+        if self._keys is not None and (keys.send_key, keys.recv_key) == (
+            self._keys.send_key, self._keys.recv_key
+        ):
+            # The same keys again (a repeated handshake answer): starting the
+            # counter over would reuse nonces under one AES-GCM key. Keep it.
+            return
         self._keys = keys
         self._send_aes = AESGCM(keys.send_key)
         self._recv_aes = AESGCM(keys.recv_key)
