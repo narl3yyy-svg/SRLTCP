@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import random
 import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING
@@ -41,7 +42,11 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-RADIO_BEACON_EVERY = 30.0  # while a contact we have no session with may be in range
+RADIO_BEACON_EVERY = 30.0  # while a contact we have no session with may be in range…
+RADIO_BEACON_EAGER = 4.0  # …and this often for RADIO_EAGER_FOR after the radio opens or a
+RADIO_EAGER_FOR = 90.0  # radio session drops (each time ±30 %: two phones never stay in step)
+RADIO_TICK = 1.0  # the radio loop: beacons, dialing
+RADIO_WATCHDOG_EVERY = 2  # ticks: an adapter plugged in is noticed within ~2 s
 RADIO_REPLY_EVERY = 5.0  # answer beacons at most this often
 RADIO_NEAR_FOR = 120.0  # a contact counts as in range this long after its last beacon
 RADIO_DIAL_GRACE = 45.0  # the higher hash dials too when the lower one hasn't by then
@@ -69,6 +74,8 @@ class RadioMixin:
         # beacons can't push it out, so an old beacon replayed later is ignored)
         self._radio_newest: dict[str, int] = {}
         self._radio_beacon_at = 0.0
+        self._radio_beacon_due = 0.0  # monotonic time of the next beacon
+        self._radio_eager_until = 0.0
         self._radio_replied_at = 0.0
 
     # ── State ──
@@ -186,10 +193,41 @@ class RadioMixin:
         log.debug("Radio beacon sent (%d contact tag(s)%s)", len(keys), ", answer" if reply else "")
         return True
 
+    def radio_eager(self: MessagingBackend) -> None:
+        """The radio just opened or a session on it dropped: beacon often for a
+        while, the first one after a short random delay (on a radio without
+        its own medium access, two phones that start at the same moment would
+        otherwise send at the same moment, and keep doing so)."""
+        now = time.monotonic()
+        self._radio_eager_until = now + RADIO_EAGER_FOR
+        self._radio_beacon_due = min(
+            self._radio_beacon_due or now + 2.0, now + random.uniform(0.2, 1.5)
+        )
+
+    async def radio_loop(self: MessagingBackend) -> None:
+        """Every RADIO_TICK: the adapter (plugged in, unplugged), beacons, dialing."""
+        tick = 0
+        while self._running:
+            await asyncio.sleep(RADIO_TICK)
+            tick += 1
+            try:
+                if tick % RADIO_WATCHDOG_EVERY == 0:
+                    await self.serial_watchdog()
+                if self.serial_transport is not None:
+                    await self.radio_tick()
+            except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                log.debug("Radio check failed: %s", exc)
+
     async def radio_tick(self: MessagingBackend, *, now_open: bool = False) -> None:
-        """From the ping loop (and when the port opens): beacon while a contact
-        may be waiting, and take over from a contact that didn't dial."""
-        if now_open or time.monotonic() - self._radio_beacon_at >= RADIO_BEACON_EVERY:
+        """Beacon while a contact may be waiting (at a jittered interval), and
+        take over from a contact that didn't dial."""
+        if now_open:
+            self.radio_eager()
+        now = time.monotonic()
+        if now >= self._radio_beacon_due:
+            eager = now < self._radio_eager_until
+            every = RADIO_BEACON_EAGER if eager else RADIO_BEACON_EVERY
+            self._radio_beacon_due = now + every * random.uniform(0.7, 1.3)
             try:
                 await self.send_radio_beacon()
             except (OSError, ConnectionError, RuntimeError) as exc:
@@ -231,6 +269,14 @@ class RadioMixin:
                 # They name us only while they have no radio session: theirs is gone.
                 log.info("Radio session with %s lost on their side — reconnecting", hash_id[:8])
                 await self._drop_radio_session(hash_id)
+            elif (
+                link and link.up and self._beats_radio(link)
+                and heard.timestamp > link.established_wall
+            ):
+                # They name us only while they have no session with us on the
+                # radio or a shared Wi-Fi: our Wi-Fi session is stale on their
+                # side (they switched Wi-Fi off, restarted). Check it now.
+                self._verify_or_radio(hash_id)
             self._radio_waiting.setdefault(hash_id, now)
             self._maybe_dial_radio(hash_id)
         if not heard.reply and now - self._radio_replied_at >= RADIO_REPLY_EVERY:
@@ -239,6 +285,41 @@ class RadioMixin:
                 await self.send_radio_beacon(reply=True)
             except (OSError, ConnectionError, RuntimeError) as exc:
                 log.debug("Radio beacon answer not sent: %s", exc)
+
+    def _verify_or_radio(self: MessagingBackend, hash_id: str) -> None:
+        """Ping our (Wi-Fi) session with a contact whose beacon says it has
+        none; no answer in RADIO_CHECK_WAIT: drop it and dial over the radio
+        at once (whoever's turn it would be: they're waiting)."""
+        if hash_id in self._radio_checking:
+            return
+        self._radio_checking.add(hash_id)
+
+        async def check() -> None:
+            try:
+                link = self.get_link(hash_id)
+                if not link:
+                    return
+                asked = time.monotonic()
+                with contextlib.suppress(KeyError, OSError, ConnectionError, RuntimeError):
+                    await self.ping_peer(hash_id)
+                while time.monotonic() - asked < RADIO_CHECK_WAIT:
+                    await asyncio.sleep(0.2)
+                    if self.get_link(hash_id) is not link or link.last_seen > asked:
+                        return  # answered (or replaced): it works
+                log.info("Session with %s doesn't answer and they call on the radio — "
+                         "moving to the radio", hash_id[:8])
+                self.path_went_dead(hash_id)
+                try:
+                    await self._teardown_link(hash_id)
+                finally:
+                    self._radio_waiting[hash_id] = time.monotonic() - RADIO_DIAL_GRACE
+                    self._maybe_dial_radio(hash_id)
+            finally:
+                self._radio_checking.discard(hash_id)
+
+        task = asyncio.create_task(check())
+        self.__dict__.setdefault("_radio_tasks", set()).add(task)
+        task.add_done_callback(self.__dict__["_radio_tasks"].discard)
 
     def check_radio_session(self: MessagingBackend, hash_id: str) -> None:
         """Ping the radio session; no answer in RADIO_CHECK_WAIT: drop it and
@@ -277,6 +358,7 @@ class RadioMixin:
         link = self.get_link(hash_id)
         name, was_up = (link.peer_name, link.up) if link else ("", False)
         await self._teardown_link(hash_id)
+        self.radio_eager()
         if was_up and self._on_link_down:
             await self._on_link_down(hash_id, name)  # (the chat header shows it)
 
@@ -314,7 +396,12 @@ class RadioMixin:
                 await self.connect_to_peer(hash_id, transport="serial", force=link is not None)
             deadline = time.monotonic() + SERIAL_HANDSHAKE_TTL
             while time.monotonic() < deadline:
-                if self._radio_session(hash_id):
+                link = self.get_link(hash_id)
+                if self._radio_session(hash_id) or (
+                    link and link.handshake_complete and self._beats_radio(link)
+                ):
+                    # (Also when the session went on to a shared Wi-Fi at
+                    # once: a dial still "in progress" would block the next.)
                     self._radio_waiting.pop(hash_id, None)
                     return
                 await asyncio.sleep(0.2)

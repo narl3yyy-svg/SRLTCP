@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.13.8 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.13.9 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -22,7 +22,7 @@
 | **Verified contacts** | 60-digit safety numbers over both identity keys; automatic when you pair in person (QR or NFC) |
 | **Encrypted on the device** | Keys, contacts, chats, groups and settings sealed at rest (Android Keystore / Windows DPAPI); encrypted backup and restore |
 | **Privacy options** | Disappearing messages, app lock and private lock-screen notifications (all off by default) |
-| **Fast file transfer** | Windowed streaming (1 MiB chunks direct, 256 KiB over UDP, 8 KiB over a serial radio), zstd, verified while streaming; speed and time left on every path; survives dropped connections and app restarts; several files at once; optional photo shrinking |
+| **Fast file transfer** | Windowed streaming (1 MiB chunks direct, 256 KiB over UDP, 2–24 KiB over a serial radio, sized by its measured speed), zstd, verified while streaming; speed and time left on every path; survives dropped connections and app restarts; several files at once; optional photo shrinking |
 | **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
 | **Folder sync** | Keep a folder the same on your device and a contact's: two-way, incremental, conflicts kept as copies, deletes go to a 30-day trash |
 | **Drag-and-drop send** | Drop files onto a contact in the Web UI |
@@ -238,7 +238,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.8.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.9.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -246,7 +246,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.8.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.8.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.9.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -308,7 +308,7 @@ After that, addresses look after themselves: when a contact's IP changes (new Wi
 
 Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data usually has **no IPv4 address another phone can connect to**. SRLTCP still connects them **directly over UDP** in most cases (below): they meet over **Tor** (built in, no setup), swap addresses inside the encrypted session and punch through both NATs, and Tor never carries your messages, files or calls: they wait for the direct connection. There are no relays and no servers in between.
 
-**Direct without port forwarding (UDP).** With *Settings → Network → Try direct internet connections* on (default), two phones on different networks (two mobile carriers, mobile data and a home Wi-Fi, two homes) connect straight to each other: each learns its public address from a STUN server, they swap addresses and key shares inside the session they already have over Tor, and both send UDP packets to each other at once, which opens both NATs (hole punching). The connection is encrypted per packet with keys only the two of you have, the signed quantum-safe handshake runs inside it, and it carries chat, files and calls at the full speed of both connections (the header shows **DIRECT**). In our simulation (two carrier NATs, TCP between them blocked, packet loss) the phones were direct after about 10 s. Speed follows BBR (like YouTube/QUIC on mobile), so random radio losses don't slow it down: on an emulated LTE path with a 140 ms round trip and 1 % loss a file moves at about 2.1 of the link's 2.5 MB/s (before 0.12.1: 0.1 MB/s), and chat goes out ahead of file data. "Symmetric" carrier NAT (a new port for every destination) on *both* sides can't be crossed by any direct technique: messages wait until one phone is on Wi-Fi or both have IPv6, and *Check connection* (with its copyable report) says so. A phone on a home Wi-Fi asks its router to forward the direct-connection port (UPnP / NAT-PMP, like video-call and game apps; on by default, *Open a port on my home router*), so a phone on mobile data, whose carrier changes ports per destination, can still get in. Phones on a VPN and the home Wi-Fi also connect directly (LAN/VPN addresses are shared inside the session). This shares your public IP address with your contacts (and the STUN server); turn it off to connect only on the same Wi-Fi or VPN. Details: [docs/NETWORKING.md](docs/NETWORKING.md#direct-connections-across-networks-hole-punching).
+**Direct without port forwarding (UDP).** With *Settings → Network → Try direct internet connections* on (default), two phones on different networks (two mobile carriers, mobile data and a home Wi-Fi, two homes) connect straight to each other: each learns its public address from a STUN server, they swap addresses and key shares inside the session they already have over Tor, and both send UDP packets to each other at once, which opens both NATs (hole punching). The connection is encrypted per packet with keys only the two of you have, the signed quantum-safe handshake runs inside it, and it carries chat, files and calls at the full speed of both connections (the header shows **DIRECT**). In our simulation (two carrier NATs, TCP between them blocked, packet loss) the phones were direct after about 10 s. Speed follows BBR (like YouTube/QUIC on mobile), so random radio losses don't slow it down: on an emulated LTE path with a 140 ms round trip and 1 % loss a file moves at about 2.1 of the link's 2.5 MB/s (before 0.12.1: 0.1 MB/s), and chat goes out ahead of file data. "Symmetric" carrier NAT (a new port for every destination) on *both* sides can't be crossed by any direct technique: messages wait until one phone is on Wi-Fi or both have IPv6, and *Check connection* (with its copyable report) says so. When only *one* side has such a strict NAT, the phones do a "birthday" punch (many sockets on the strict side, random port probes from the other) and still connect directly (21 s in our simulation). A phone on a home Wi-Fi asks its router to forward the direct-connection port (UPnP / NAT-PMP, like video-call and game apps; on by default, *Open a port on my home router*), so a phone on mobile data, whose carrier changes ports per destination, can still get in. Phones on a VPN and the home Wi-Fi also connect directly (LAN/VPN addresses are shared inside the session). This shares your public IP address with your contacts (and the STUN server); turn it off to connect only on the same Wi-Fi or VPN. Details: [docs/NETWORKING.md](docs/NETWORKING.md#direct-connections-across-networks-hole-punching).
 
 **No server, no port forwarding: Tor as the doorbell.** With *Settings → Network → Find contacts on other networks (Tor)* on (default) on both devices, they find each other from any network through the Tor network: phone on mobile data, PC on a VPN, a friend's Wi-Fi. Each device publishes a private onion service; its address goes only to trusted contacts (inside the encrypted connection), and only trusted contacts can connect through it. Tor is **only the doorbell**: over it the two devices swap their current addresses and keys and set up a direct UDP or IPv6 connection (the badge shows CONNECTING, then DIRECT, usually within seconds). Messages, files and calls never go over Tor; they wait and go out at full speed the moment the direct connection is up. Tor is built into the Android app; on a PC install [Tor Browser](https://www.torproject.org/download/) (SRLTCP starts its Tor by itself). Tested on a private Tor network (`scripts/tor_testnet.sh` + `scripts/simulate_tor.py`).
 
@@ -405,11 +405,18 @@ telemetry radios, LoRa or ESP32 serial bridges), no network at all.
   left, and chat, pings and call setup wait behind one turn of file data at
   most (under a second at 57600 baud). A cancelled file's queued data is
   dropped at once.
-- **Speed:** 57600 baud is at most ~5.7 KB/s on the line, ~4.5 KB/s of file
-  data after packet overhead; in a simulation of two phones on 57600-baud
-  radios (3 % of frames lost) a file moves at ~3.3 KB/s
-  (`scripts/bench_serial_file.py`). Radios and phones set to 115200 baud
-  roughly double it, if the radios' air speed keeps up. *Settings → Serial*
+- **Plug and go:** plug the second phone's adapter in while the app runs and
+  the phones connect by themselves (about 6 s on a cable or SiK radio, ~17 s
+  on a LoRa bridge in simulations): after an adapter is plugged in or a radio
+  session drops, each phone calls its contacts every ~4 s at random moments
+  for 90 s, then every ~30 s.
+- **Speed:** 57600 baud is at most ~5.7 KB/s on the line. Packet headers,
+  checksums, acknowledgements and taking turns on the air use part of it: in
+  simulations of two full apps at 57600 baud a file moves at ~3.45 KB/s over
+  a cable, ~2.8 KB/s over SiK telemetry radios and ~0.9 KB/s over a LoRa
+  bridge (`scripts/bench_radio.py`, `scripts/bench_link_matrix.py`). Radios
+  and phones set to 115200 baud roughly double it, if the radios' air speed
+  keeps up. *Settings → Serial*
   shows what the radio carries right now (↑/↓ per second).
 - **Voice calls** work over the radio: low-bitrate Opus (~8 kbit/s, 60 ms
   packets, nothing sent in silence), each voice packet one unacknowledged
@@ -421,10 +428,13 @@ telemetry radios, LoRa or ESP32 serial bridges), no network at all.
   answer), its next beacon makes the other reconnect too, and a busy radio
   session is never dropped for late pings.
 - The link is **reliable over lossy, half-duplex radios**: messages go in
-  64-byte packets with a CRC-32, sent in turns of up to 64 packets (listening
-  first, so the two sides never transmit over each other); the receiver
-  acknowledges each turn, missing packets are sent again, and the sending
-  rate and the wait for an answer follow what the radio really does
+  packets of 50 or 114 bytes (bigger while the link is clean) with a CRC-32,
+  several messages per turn, a turn lasting up to 1.5 s (3 s for file data;
+  chat cuts in), listening first so the two sides never transmit over each
+  other. The receiver acknowledges each turn with the speed it measured;
+  the sender paces at that speed, sends only the missing packets again, and
+  backs off only when losses pile up at the end of bursts (an overflowing
+  radio buffer), not for random noise
   (`srltcp/transports/serial_link.py`). The answering phone shows the
   contact as connected only once the other side proves it has the session.
 - *Settings → Serial* shows live stats (sent/received, good/bad packets,

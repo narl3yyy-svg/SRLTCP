@@ -20,6 +20,7 @@ from srltcp.core.protocol.framing import FrameReader, FrameWriter
 STREAM_LIMIT = 1024 * 1024
 READ_SIZE = 1024 * 1024
 WRITE_HIGH = 2 * 1024 * 1024
+CLOSE_WAIT = 2.0  # seconds a closing connection may take before it is cut
 
 
 @dataclass
@@ -184,14 +185,18 @@ class Connection:
         if self._closed:
             return
         self._closed = True
-        if self._read_task and not self._read_task.done():
-            self._read_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._read_task
+        task = self._read_task
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+            # (Bounded: a dead path must never hold up whoever closes it.)
+            with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+                await asyncio.wait_for(asyncio.shield(task), CLOSE_WAIT)
         try:
             self.writer.close()
-            await self.writer.wait_closed()
+            # Unsent data to a peer that stopped reading would wait forever.
+            await asyncio.wait_for(self.writer.wait_closed(), CLOSE_WAIT)
         except Exception:
-            pass
+            with contextlib.suppress(Exception):
+                self.writer.transport.abort()
         if self._on_close:
             await self._on_close(self.peer)

@@ -59,6 +59,9 @@ def _unb64(value: object, size: int) -> bytes:
 PENDING_HANDSHAKE_TTL = 15.0
 HANDSHAKES_PER_MINUTE = 12  # per connection (a radio retries a few times; floods are refused)
 SERIAL_HANDSHAKE_TTL = 180.0
+# Over Tor a handshake (~9 KiB each way) takes several circuit round trips; a
+# second try before the first is answered would replace our key half.
+TOR_HANDSHAKE_TTL = 45.0
 DIRECT_ALIVE_WINDOW = 15.0  # a direct session heard from this recently is working (pings: 10 s)
 HANDSHAKE_VERSION = 6  # v6: hybrid post-quantum (X25519+ML-KEM-768, Ed25519+ML-DSA-65)
 # v5: windowed file transfers (FILE_ACK), Tor lanes
@@ -273,7 +276,10 @@ class ConnectMixin:
                 await self._teardown_link(hash_id)
                 existing = None
             else:
-                in_flight = SERIAL_HANDSHAKE_TTL if transport == "serial" else 10.0
+                in_flight = (
+                    SERIAL_HANDSHAKE_TTL if transport == "serial"
+                    else TOR_HANDSHAKE_TTL if self._link_on_tor(existing) else 10.0
+                )
                 if pending is not None and time.time() - pending.timestamp < in_flight:
                     # A handshake on this connection is already in flight. A
                     # second one would replace our key half while the peer
@@ -630,7 +636,10 @@ class ConnectMixin:
         if not link or link.handshake_complete:
             return False
         # (A slow radio needs far longer for the ~9 KiB handshake each way.)
-        ttl = SERIAL_HANDSHAKE_TTL if link.transport == "serial" else PENDING_HANDSHAKE_TTL
+        ttl = (
+            SERIAL_HANDSHAKE_TTL if link.transport == "serial"
+            else TOR_HANDSHAKE_TTL if self._link_on_tor(link) else PENDING_HANDSHAKE_TTL
+        )
         if time.time() - started > ttl:
             return False
         return self._is_link_reachable(link)

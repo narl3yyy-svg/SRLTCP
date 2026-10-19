@@ -57,10 +57,13 @@ class PingMixin:
                 for link in self.list_links():
                     hash_id = link.get("hash_id", "")
                     # (On the radio a ping is one packet ahead of file data: it
-                    # keeps going during transfers, so the figure stays current.)
+                    # keeps going during transfers, so the figure stays current.
+                    # Only one side pings there: each costs radio time, and the
+                    # answer gives both phones the same figure anyway.)
+                    serial = link.get("transport") == "serial"
                     if link.get("handshake_complete") and (
-                        link.get("transport") == "serial"
-                        or not self.has_active_transfer_for(hash_id)
+                        (serial and self._pings_on_radio(hash_id))
+                        or (not serial and not self.has_active_transfer_for(hash_id))
                     ):
                         try:
                             await self.ping_peer(hash_id)
@@ -75,10 +78,6 @@ class PingMixin:
                     await self.expire_messages()
                 except Exception as exc:  # noqa: BLE001 - keep the loop alive
                     log.debug("Stale offer check failed: %s", exc)
-                try:
-                    await self.serial_watchdog()
-                except Exception as exc:  # noqa: BLE001 - keep the loop alive
-                    log.debug("Serial check failed: %s", exc)
                 try:
                     await self.maintain_paths()  # Tor-only sessions → direct
                     self.kick_port_mapping()  # (renewal, new Wi-Fi; cheap when current)
@@ -162,6 +161,14 @@ class PingMixin:
         await self._send_raw(link.transport_peer_id, link.transport, packet)
         return sent_at
 
+    def _pings_on_radio(self: MessagingBackend, hash_id: str) -> bool:
+        """On the radio the lower identity pings; the other one only if it
+        hasn't heard anything from the contact for a while (a lost session)."""
+        if self._me_hash() < hash_id:
+            return True
+        link = self.get_link(hash_id)
+        return link is None or time.monotonic() - link.last_seen > 2.5 * PING_INTERVAL
+
     async def _answer_ping(self: MessagingBackend, link: PeerLink, body: bytes) -> None:
         """An encrypted ping from the contact: answer it the same way."""
         try:
@@ -171,6 +178,10 @@ class PingMixin:
         reported = data.get("r")
         if isinstance(reported, (int, float)) and 0 < reported < MAX_RTT_MS:
             link.peer_rtt_ms = float(reported)  # (their measurement of this link)
+            if link.own_rtt_ms is None:
+                link.rtt_ms = link.peer_rtt_ms  # (we don't ping on this link: theirs it is)
+            else:
+                link.rtt_ms = (link.own_rtt_ms + link.peer_rtt_ms) / 2
         packet = self._seal(
             link, MessageType.PONG, encode_payload({"n": str(data.get("n", ""))[:32]})
         )

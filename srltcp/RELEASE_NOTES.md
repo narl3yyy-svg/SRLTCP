@@ -1,5 +1,77 @@
 # SRLTCP Release Notes
 
+## v0.13.9 (2026-10-19)
+
+**Update both phones:** the serial radio's acknowledgements changed format
+(they now carry the measured speed), so 0.13.9 and 0.13.8 don't talk over
+the radio.
+
+### Serial radio: faster, and connects by itself
+- **Plug in the second adapter and the phones connect.** No more switching
+  Wi-Fi off and pressing *Apply* on both phones. Each phone now runs its own
+  radio loop (every second) and, for 90 s after an adapter is plugged in or
+  a radio session drops, calls its contacts every ~4 s at random moments, so
+  two radios never keep talking over each other. In simulations, a phone
+  whose adapter was plugged in while the app ran was connected in about
+  6 s on a cable or SiK telemetry radio, and 17 s on a LoRa bridge (0.13.8
+  never connected on the LoRa model).
+- **Much closer to the line speed.** The sender now paces itself by the
+  speed the receiving phone actually measures (sent back in every
+  acknowledgement) instead of guessing. It sends bigger packets when the
+  link is clean, fills each turn on the air with several messages, and
+  only treats losses at the end of a burst as "too fast". A lost
+  acknowledgement no longer resends a whole turn. File pieces on the radio
+  are sized to about 6 s of the measured speed (2–24 KB). Simulated link
+  speed at 57600 baud (5.76 KB/s line), before → after: cable 3.46 → 3.84
+  KB/s, SiK radio 3.01 → 3.39 KB/s, SiK with error correction 1.57 → 1.82
+  KB/s, LoRa 1.15 → 1.23 KB/s, noisy link 2.07 → 2.47 KB/s. Whole files in
+  the full app: about 3.45 KB/s on a cable and 2.8 KB/s on SiK. The rest of
+  the line goes to packet headers, checksums, acknowledgements and taking
+  turns on the air.
+- **Chat cuts in ahead of a file on the radio.** A chat message during a
+  transfer arrived in 0.1–0.4 s on cable and SiK.
+- **Live progress on the radio moves smoothly**, from what the link has
+  actually delivered rather than once per finished piece.
+- **Ping on the radio** is measured by one phone and shared, so both show
+  the same figure without doubling the traffic.
+- **Turning Wi-Fi off on one phone moves both to the radio within
+  seconds.** The other phone checks its Wi-Fi session as soon as the radio
+  says the contact has none, and moves over if it doesn't answer in 5 s.
+  It then waits 30 s before trying that Wi-Fi path again (at once if its
+  own network changes).
+- **Fixed: the radio not reconnecting for up to 3 minutes.** When a radio
+  session moved on to a shared Wi-Fi right after it came up, the phone
+  still counted its radio call as "in progress" for 3 minutes. If the
+  Wi-Fi then went away, it didn't call over the radio again until that
+  ran out.
+- Closing a dead connection can no longer hang the app's next steps: it's
+  cut after 2 s.
+
+### Wi-Fi ↔ mobile data
+- **Phones behind a strict carrier NAT now connect directly.** Many
+  carriers give a new public port for every destination, so a phone on
+  Wi-Fi and one on mobile data never found each other. Now a phone that
+  sees this (two STUN servers report different ports) tells its contact,
+  and the two do a "birthday" punch: 192 extra sockets on the strict side,
+  random port probes from the other, all encrypted, for 10 s. In the
+  network simulation (a strict NAT on one side, a normal home router on
+  the other) the message went over a direct connection after 21 s.
+  0.13.8 never connected. Strict NAT on *both* sides still can't be
+  crossed without a relay; messages wait, as before.
+- **Less "stuck on handshaking" over Tor.** A slow first handshake over
+  Tor was replaced by a second one after 10 s, which could leave the two
+  phones with different keys. A handshake over Tor now gets 45 s.
+
+### Tested
+- Two full app instances over simulated radio modems (cable, SiK, SiK with
+  ECC, LoRa, a noisy link; random loss, half duplex, collisions, buffer
+  overflow, plugging in while running), several random seeds each.
+- Network simulations with real Tor (a private Tor network), NAT routers,
+  STUN and packet loss: two homes, strict NAT on one or both sides, carrier
+  NAT with a 40 MB file (10.8 MB/s), a VPN phone with a home Wi-Fi phone.
+- Results on real hardware depend on the radios and adapters; tell us what
+  you see.
+
 ## v0.13.8 (2026-10-17)
 
 ### Switching between the radio, Wi-Fi and mobile data

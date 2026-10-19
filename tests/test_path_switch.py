@@ -137,3 +137,39 @@ def test_installing_the_same_keys_again_never_reuses_a_nonce() -> None:
     assert first != second and box.epoch == 1
     box.set_keys(SessionKeys(send_key=os.urandom(32), recv_key=os.urandom(32), salt=b""))
     assert box.epoch == 2  # new keys: the counter may start over
+
+
+@pytest.mark.parametrize("who", ["lower", "higher"])
+async def test_wifi_off_on_one_phone_moves_both_to_the_radio(
+    radio_pair: Any, monkeypatch: Any, who: str
+) -> None:
+    """Both on the same Wi-Fi (that beats the radio), radios plugged in. One
+    phone loses its Wi-Fi; the other's session looks fine to it (no goodbye
+    arrives). The first phone's beacon tells the other: both are on the radio
+    within seconds, whichever of them would normally dial."""
+    a, b, _bridge = radio_pair
+    _learn_addresses(a, b)
+    for node in (a, b):
+        await node.addresses_changed()
+    assert await wait_for(lambda: _on_tcp(a, b) and _on_tcp(b, a), timeout=30)
+    low, high = sorted((a, b), key=lambda n: n.identities["tcp"].hash_id)
+    off, other = (low, high) if who == "lower" else (high, low)
+    oh = other.identities["tcp"].hash_id
+    real_send = off._send_raw
+
+    async def no_wifi(peer_id: str, transport: str, packet: bytes) -> None:
+        if transport == "serial":
+            await real_send(peer_id, transport, packet)
+
+    async def no_dial(*_a: Any, **_k: Any) -> str:
+        raise OSError("network unreachable")
+
+    monkeypatch.setattr(off, "_send_raw", no_wifi)
+    assert off.tcp_transport is not None
+    monkeypatch.setattr(off.tcp_transport, "connect", no_dial)
+    if off.tcp_transport._server is not None:
+        off.tcp_transport._server.close()  # (nothing reaches it over the Wi-Fi either)
+    started = time.monotonic()
+    off.remove_link(oh)  # (its Wi-Fi is gone: no goodbye reaches the other phone)
+    assert await wait_for(lambda: _on_radio(off, other) and _on_radio(other, off), timeout=60)
+    assert time.monotonic() - started < 20

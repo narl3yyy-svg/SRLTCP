@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any
 from srltcp.core.protocol.messages import MessageType, decode_payload, encode_payload
 from srltcp.transports.portmap import PortMapper
 from srltcp.transports.udp import (
+    SPRAY_SOCKETS,
     STUN_SERVERS,
     UdpConnection,
     UdpEndpoint,
@@ -55,6 +56,7 @@ log = get_logger(__name__)
 
 PUNCH_WINDOW = 8.0  # seconds both sides keep dialing
 UDP_PUNCH_WINDOW = 4.0  # seconds both sides keep probing over UDP (it works within 1-2 s or not)
+UDP_BIRTHDAY_WINDOW = 10.0  # …and for a birthday punch (one side behind a strict NAT)
 UDP_RETRY_SOON = 4.0  # after a failed UDP round with a lower priming hop limit left
 STUN_FRESH = 20.0  # re-ask STUN before a round if the answer is older (carrier NATs forget)
 PUNCH_ATTEMPT_TIMEOUT = 1.5
@@ -164,6 +166,7 @@ class PunchMixin:
         self._last_public: list[tuple[str, int]] = []
         self.udp: UdpEndpoint | None = None
         self._peer_udp: dict[str, list[tuple[str, int]]] = {}
+        self._peer_strict: dict[str, bool] = {}  # contact behind a strict NAT (its word)
         self._udp_offers: dict[str, tuple[bytes, bytes, float]] = {}  # our secret, id, when
         self._prime_max: dict[str, int] = {}  # highest priming hop limit per contact
         self._punch_asked: dict[str, float] = {}
@@ -402,7 +405,8 @@ class PunchMixin:
         if udp_ok:
             secret, my_id = secrets.token_bytes(32), secrets.token_bytes(8)
             self._udp_offers[hash_id] = (secret, my_id, now)
-            udp_fields = {"w": [list(c) for c in mine_udp], "k": secret.hex(), "i": my_id.hex()}
+            udp_fields = {"w": [list(c) for c in mine_udp], "k": secret.hex(), "i": my_id.hex(),
+                          **self._strict_nat_field()}
         await self._send_punch(hash_id, "o", mine, udp_fields)
 
     def ask_for_punch(self: MessagingBackend, hash_id: str) -> None:
@@ -504,7 +508,11 @@ class PunchMixin:
         conn.expected_hash = hash_id
         # Before answering: the leader probes as soon as it hears.
         self.udp.prime(targets, self._prime_hops(hash_id), conn.socks)
-        return conn, targets, {"w": [list(c) for c in mine], "k": secret.hex(), "i": my_id.hex()}
+        self._peer_strict[hash_id] = bool(data.get("s"))
+        return conn, targets, {
+            "w": [list(c) for c in mine], "k": secret.hex(), "i": my_id.hex(),
+            **self._strict_nat_field(),
+        }
 
     def _udp_lead(
         self: MessagingBackend, hash_id: str, data: dict[str, Any]
@@ -519,6 +527,7 @@ class PunchMixin:
         targets = _same_family(theirs, self.udp_candidates())
         if not targets or their_key is None or their_id is None or time.monotonic() - when > 15:
             return None, []
+        self._peer_strict[hash_id] = bool(data.get("s"))
         l2f, f2l = derive_keys(combine_secrets(secret, their_key), self._me_hash(), hash_id)
         conn = self.udp.new_connection(their_id, send_key=l2f, recv_key=f2l, my_id=my_id)
         if conn is None:
@@ -546,10 +555,13 @@ class PunchMixin:
             peer_id: str | None = None
             if udp_conn:
                 # UDP first: it gets through carrier NATs far more often than TCP.
+                spray_sockets, spray_hosts = self._birthday(hash_id, udp_targets or [])
                 if self.udp and udp_targets and await self.udp.punch(
-                    udp_conn, udp_targets, UDP_PUNCH_WINDOW,
+                    udp_conn, udp_targets,
+                    UDP_BIRTHDAY_WINDOW if spray_sockets or spray_hosts else UDP_PUNCH_WINDOW,
                     delay=0.0 if leader else PUNCH_FOLLOWER_DELAY,
                     hops=self._prime_hops(hash_id),
+                    spray_sockets=spray_sockets, spray_hosts=spray_hosts,
                 ):
                     peer_id = await self.tcp_transport.adopt_udp(udp_conn)
                     log.info("Direct UDP connection to %s via %s", hash_id[:8], udp_conn.address)
@@ -604,6 +616,27 @@ class PunchMixin:
                 await self.tcp_transport.disconnect(peer_id)
         finally:
             self._punching.discard(hash_id)
+
+    def _strict_nat_field(self: MessagingBackend) -> dict[str, int]:
+        """Tell the contact we're behind a strict NAT (a new public port for
+        every destination, seen from two STUN servers): a birthday punch."""
+        return {"s": 1} if self.udp is not None and self.udp.symmetric else {}
+
+    def _birthday(
+        self: MessagingBackend, hash_id: str, targets: list[tuple[str, int]]
+    ) -> tuple[int, list[str]]:
+        """Birthday punch when exactly one side is behind a strict NAT: it
+        probes from many extra ports, the other probes many random ports of
+        its address. (Both strict: nothing direct gets through; IPv6 or a
+        port mapped on a home router still may.)"""
+        me = bool(self.udp is not None and self.udp.symmetric)
+        them = self._peer_strict.get(hash_id, False)
+        if me and not them:
+            return SPRAY_SOCKETS, []
+        if them and not me:
+            hosts = sorted({h for h, _p in targets if ":" not in h and _public_address(h, 1)})
+            return 0, hosts[:2]
+        return 0, []
 
     def _note_round(
         self: MessagingBackend, hash_id: str, targets: list[tuple[str, int]], outcome: str

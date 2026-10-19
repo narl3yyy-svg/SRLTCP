@@ -215,6 +215,7 @@ class MessagingBackend(
             try:
                 await self.serial_transport.start()
                 self._serial_error = None
+                self.radio_eager()
             except Exception as exc:
                 self._record_serial_failure(self.serial_transport.port, exc)
                 self.serial_transport = None
@@ -222,6 +223,7 @@ class MessagingBackend(
         if self.config.announce:
             await self.start_announce_loop()
         await self.start_ping_loop()
+        self._ping_tasks.append(asyncio.create_task(self.radio_loop()))
         self.start_progress_ticker()
         await self.start_call_relay()
         if self.tcp_transport:
@@ -294,7 +296,6 @@ class MessagingBackend(
         if transport is not None and getattr(transport, "alive", True):
             wanted = resolve_serial_port(self.config.serial_port)
             if not wanted or wanted == transport.port:
-                await self.radio_tick()
                 return
             log.info("Serial adapter %s plugged in — switching to it", wanted)
         if transport is not None:
@@ -347,6 +348,7 @@ class MessagingBackend(
             try:
                 await self.serial_transport.start()
                 self._serial_error = None
+                self.radio_eager()  # (just opened: let contacts in range know)
             except Exception as exc:
                 port_name = port or self.serial_transport.port
                 self._record_serial_failure(port_name, exc)

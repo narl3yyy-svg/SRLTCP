@@ -49,7 +49,7 @@ start_node() {  # start_node NS NAME
   mkdir -p "$W/data-$1"
   [ -f "$W/data-$1/settings.json" ] ||  # keep settings across restarts
     echo '{"setup_complete": true, "auto_announce": false, "version": "0.6.0", "display_name": "'"$2"'",
-           "tor_enabled": true, "stun_servers": "198.51.100.1:3478"}' > "$W/data-$1/settings.json"
+           "tor_enabled": true, "stun_servers": "198.51.100.1:3478, 198.51.100.1:3479"}' > "$W/data-$1/settings.json"
   (cd "$ROOT" && SRLTCP_DATA_DIR="$W/data-$1" SRLTCP_TOR_EXTRA_TORRC="$W/tornet/client.torrc" \
      ip netns exec "$1" "$PY" -m srltcp web --name "$2" \
      >> "$W/$1.log" 2>&1 < /dev/null &)
@@ -101,6 +101,7 @@ ip -n ha addr add 10.9.9.1/24 dev meet; ip -n ha link set meet up
 ip -n hb addr add 10.9.9.2/24 dev meet; ip -n hb link set meet up
 
 (cd "$ROOT" && ip netns exec inet "$PY" scripts/stun_server.py --host 198.51.100.1 > "$W/stun.log" 2>&1 < /dev/null &)
+(cd "$ROOT" && ip netns exec inet "$PY" scripts/stun_server.py --host 198.51.100.1 --port 3479 > "$W/stun2.log" 2>&1 < /dev/null &)
 ADDR=198.51.100.1 ip netns exec inet bash "$ROOT/scripts/tor_testnet.sh" start "$W/tornet" > "$W/tornet.log" 2>&1
 sleep 45  # (the private Tor network needs its first consensus)
 
@@ -125,21 +126,39 @@ wait_for 20 got hb "$HA" "direct across networks" || fail "message over the punc
 pass "messages flow over the punched direct path"
 
 # strict NAT (random ports, like many carrier NATs) on one side, port-dependent
-# filtering on the other: no direct technique gets through -> the message waits
+# filtering on the other: only a birthday punch gets through (many sockets on
+# the strict side, many guessed ports from the other)
 ip netns exec rb iptables -t nat -F POSTROUTING
 ip netns exec rb iptables -t nat -A POSTROUTING -o wan -j MASQUERADE --random-fully
 ip netns exec rb conntrack -F 2>/dev/null || true
 for ns in ha hb; do ip netns pids $ns | xargs -r kill; done; sleep 2
 start_node ha PhoneA; start_node hb PhoneB
+start=$(date +%s)
 api hb POST /api/messages "{\"recipient_hash\":\"$HA\",\"text\":\"strict nat\"}" >/dev/null
+wait_for 240 got ha "$HB" "strict nat" || fail "strict NAT on one side: birthday punch"
+wait_for 30 direct || fail "strict NAT: delivered but not over a direct path"
+pass "strict NAT on one side: birthday punch, delivered directly after $(( $(date +%s) - start ))s — A sees B at $(link_addr ha "$HB")"
+api ha POST /api/messages "{\"recipient_hash\":\"$HB\",\"text\":\"reply through strict\"}" >/dev/null
+wait_for 20 got hb "$HA" "reply through strict" || fail "reply over the birthday-punched path"
+pass "messages flow both ways over the birthday-punched path"
+
+# strict NAT on both sides: nothing direct is possible -> the message waits
+ip netns exec ra iptables -t nat -F POSTROUTING
+ip netns exec ra iptables -t nat -A POSTROUTING -o wan -j MASQUERADE --random-fully
+for r in ra rb; do ip netns exec $r conntrack -F 2>/dev/null || true; done
+for ns in ha hb; do ip netns pids $ns | xargs -r kill; done; sleep 2
+start_node ha PhoneA; start_node hb PhoneB
+api hb POST /api/messages "{\"recipient_hash\":\"$HA\",\"text\":\"both strict\"}" >/dev/null
 sleep 90
-got ha "$HB" "strict nat" && fail "strict NAT: delivered — over what? (test setup?)"
-pass "strict NAT on one side: the message waits (nothing goes over Tor)"
+got ha "$HB" "both strict" && fail "both strict: delivered — over what? (test setup?)"
+pass "strict NAT on both sides: the message waits (nothing goes over Tor)"
+ip netns exec ra iptables -t nat -F POSTROUTING
+ip netns exec ra iptables -t nat -A POSTROUTING -o wan -j MASQUERADE
 ip netns exec rb iptables -t nat -F POSTROUTING  # back to a normal router
 ip netns exec rb iptables -t nat -A POSTROUTING -o wan -j MASQUERADE
 ip netns exec rb conntrack -F 2>/dev/null || true
 start=$(date +%s)
-wait_for 240 got ha "$HB" "strict nat" || fail "waiting message after the NAT became normal"
+wait_for 240 got ha "$HB" "both strict" || fail "waiting message after the NAT became normal"
 pass "normal NAT again: the waiting message went out directly after $(( $(date +%s) - start ))s"
 for ns in ha hb inet; do ip netns pids $ns | xargs -r kill; done; sleep 1
 

@@ -130,6 +130,7 @@ class _Outgoing:
 
     acked: int = 0  # bytes the receiver has on disk
     next: int = 0  # next byte to send
+    link_origin: int = 0  # radio: file offset its link-level confirmations count from
     hashed: int = 0  # bytes fed to the hasher (file order)
     hasher: Any = field(default_factory=hashlib.sha256)
     result: bool | None = None  # receiver's verdict on the finished file
@@ -286,6 +287,9 @@ class TransferMixin:
             for transfer in list(self._transfers.values()):
                 if transfer.state == TransferState.TRANSFERRING:
                     try:
+                        link = self.get_link(self._peer_hash_for_transfer(transfer))
+                        if link is not None and link.transport == "serial":
+                            self._live_offset(transfer)
                         await self._emit_transfer_progress(transfer)
                     except Exception as exc:  # noqa: BLE001 - keep ticking
                         log.debug("Progress update for %s failed: %s", transfer.id, exc)
@@ -516,10 +520,21 @@ class TransferMixin:
 
     def _path_params(self: MessagingBackend, link: PeerLink) -> PathParams:
         if link.transport == "serial":
-            return PathParams(
-                C.SERIAL_CHUNK_SIZE, C.SERIAL_WINDOW, C.TRANSFER_STALL_SLOW, 0,
-                C.SERIAL_CHUNK_DELAY,
-            )
+            rate = 0.0
+            if self.serial_transport is not None:
+                rate = float(self.serial_transport.link_stats().get("delivery") or 0.0)
+            if rate <= 0:
+                return PathParams(
+                    C.SERIAL_CHUNK_SIZE, C.SERIAL_WINDOW, C.TRANSFER_STALL_SLOW, 0,
+                    C.SERIAL_CHUNK_DELAY,
+                )
+            chunk = int(min(C.SERIAL_CHUNK_MAX,
+                            max(C.SERIAL_CHUNK_MIN, rate * C.SERIAL_CHUNK_SECONDS)))
+            chunk -= chunk % 1024
+            window = chunk * C.SERIAL_WINDOW_CHUNKS
+            # Nothing confirmed for the time the window takes, twice over: stalled.
+            stall = max(C.TRANSFER_STALL_SLOW, 2.0 * window / rate)
+            return PathParams(chunk, window, stall, 0, C.SERIAL_CHUNK_DELAY)
         if link.address.startswith("udp:"):
             return PathParams(C.UDP_CHUNK_SIZE, C.CHUNK_WINDOW, C.TRANSFER_STALL, 1)
         return PathParams(C.CHUNK_SIZE, C.CHUNK_WINDOW, C.TRANSFER_STALL, 1)
@@ -1317,6 +1332,9 @@ class TransferMixin:
         self: MessagingBackend, hash_id: str, transfer: FileTransfer
     ) -> None:
         out = self._out.setdefault(transfer.id, _Outgoing())
+        out.link_origin = out.acked
+        if self.serial_transport is not None:
+            self.serial_transport.forget_bulk(transfer.id)
         out.compress = not transfer.metadata.get("no_compress")
         fh: BinaryIO | None = None
         path_key: tuple[str, int] | None = None
@@ -1544,6 +1562,21 @@ class TransferMixin:
             dropped = self.serial_transport.cancel_bulk(transfer_id)
             if dropped:
                 log.debug("Dropped %d queued radio pieces of %s", dropped, transfer_id)
+        out = self._out.get(transfer_id)
+        if out is not None:
+            out.link_origin = out.acked  # (the link counts its confirmations afresh)
+
+    def _live_offset(self: MessagingBackend, transfer: FileTransfer) -> None:
+        """Over the radio a file piece is confirmed only once it's complete
+        (seconds of radio time): between confirmations, show what the radio
+        link has already confirmed of it, so progress and speed move live."""
+        out = self._out.get(transfer.id)
+        if out is None or self.serial_transport is None or not self._is_outgoing(transfer):
+            return
+        delivered = self.serial_transport.bulk_delivered(transfer.id)
+        if delivered:
+            live = min(out.next, transfer.size, out.link_origin + delivered)
+            transfer.offset = max(transfer.offset, out.acked, live)
 
     async def _stop_transfer_work(self: MessagingBackend, transfer: FileTransfer) -> None:
         """Stop the send loop or the writer; delete an unfinished download."""

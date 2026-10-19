@@ -109,6 +109,19 @@ app stops. Routers with UPnP and NAT-PMP turned off still work for
 everything else. *Settings → Network → Open a port on my home router*
 (on by default).
 
+**Strict NAT on one side (birthday punch).** When the router doesn't map a
+port (UPnP off, or both phones on different carriers where one is "hard"),
+the phones still meet: each asks two STUN servers for its address, and a
+phone that sees two different public ports is behind a strict NAT and says
+so inside the session. For that round it opens 192 extra UDP sockets that
+send towards the other phone with a low hop limit (they open its own NAT but
+expire before reaching the other router), while the other phone probes 40
+random ports of its address every 0.2 s for 10 s. One probe nearly always
+meets one of the strict side's open ports (the "birthday" effect, like
+Tailscale's hard-NAT traversal); the socket that got through carries the
+connection and the rest are closed. Probes are encrypted like every UDP
+packet, go only to the contact's public address, and stop when one answers.
+
 A round that fails is retried after 4 s from a fresh UDP port (routers can
 hold stale state for the old pair of ports for ~30 s), then after 15, 30, 60
 and 120 s, and at once whenever either phone's network changes.
@@ -151,10 +164,9 @@ works:
   the phones on Wi-Fi (most home and public Wi-Fi routers are "easy"), or IPv6
   on both (most US and EU carriers offer it on mobile data; on Android check
   *Settings → Network → SIM → Access Point Names → APN protocol: IPv4/IPv6*).
-- **Mobile data with a hard NAT, and a home router with UPnP and NAT-PMP
-  turned off.** The report on the home phone says "Home router port
-  mapping: router doesn't offer UPnP / NAT-PMP". **Fix:** turn UPnP on in
-  the router's settings.
+- **Only one STUN server reachable.** A strict NAT can't be recognised with
+  a single server, so the birthday punch isn't tried; the default list has
+  several (*Settings → Network → STUN servers*).
 - **A Wi-Fi that keeps devices apart** (plane, hotel, guest Wi-Fi) for two
   phones on that same Wi-Fi, or both behind one public address (Starlink).
 - **Networks that block UDP** (some corporate and guest networks).

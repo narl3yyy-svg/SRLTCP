@@ -119,6 +119,10 @@ class PeerLinkMixin:
         link = self._links.pop(hash_id, None)
         if link:
             self._peer_id_to_hash.pop(link.transport_peer_id, None)
+            if link.up and self.serial_transport is not None:
+                # A session ended (Wi-Fi off, out of range): if the contact is
+                # in radio range, find out now rather than at the next beacon.
+                self.radio_eager()
 
     def remove_link_for_peer(self: MessagingBackend, peer_id: str) -> str | None:
         """Remove link only if peer_id is still the active transport peer. Returns hash_id."""

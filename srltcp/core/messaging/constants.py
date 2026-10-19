@@ -12,9 +12,14 @@ CHUNK_SIZE = 1024 * 1024  # direct TCP (LAN / VPN / punched)
 CHUNK_WINDOW = 24 * 1024 * 1024
 UDP_CHUNK_SIZE = 256 * 1024  # direct UDP: a message waits behind at most one chunk
 # Serial radio: the link sends file data in the turns chat and calls leave
-# (a message waits behind one turn at most), so pieces can be larger; the
-# window is several seconds of radio time.
-SERIAL_CHUNK_SIZE = 8 * 1024
+# (a message waits behind one turn at most). A piece is about
+# SERIAL_CHUNK_SECONDS of the radio's measured rate (long turns waste less
+# time waiting for answers; never so long that the stall timer fires), and
+# SERIAL_WINDOW_CHUNKS pieces may be on their way.
+SERIAL_CHUNK_SIZE = 8 * 1024  # (before the rate is known)
+SERIAL_CHUNK_MIN, SERIAL_CHUNK_MAX = 2 * 1024, 24 * 1024
+SERIAL_CHUNK_SECONDS = 6.0
+SERIAL_WINDOW_CHUNKS = 3
 SERIAL_CHUNK_DELAY = 0.0  # (the radio link paces itself)
 SERIAL_WINDOW = 32 * 1024
 TRANSFER_STALL = 12.0  # no confirmation this long: resend from the last confirmed byte

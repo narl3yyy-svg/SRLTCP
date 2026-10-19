@@ -25,6 +25,7 @@ log = get_logger(__name__)
 
 UPGRADE_EVERY = 45.0  # try a direct path this often while only Tor connects us
 UPGRADE_EVERY_BUSY = 15.0  # …and this often while something waits for it
+DEAD_PATH_HOLD = 30.0  # a Wi-Fi/LAN session that just stopped answering isn't retried sooner
 DIRECT_TIMEOUT = 3.0
 
 
@@ -33,6 +34,7 @@ class PathsMixin:
 
     def _init_paths(self: MessagingBackend) -> None:
         self._upgrade_attempts: dict[str, float] = {}
+        self._dead_path_until: dict[str, float] = {}  # (until our own network changes)
         self._upgrades: dict[str, tuple[str, Any, float]] = {}  # hash -> (tcp peer_id, kx, started)
 
     def _me_hash(self: MessagingBackend) -> str:
@@ -89,6 +91,11 @@ class PathsMixin:
                 out.append((host, port or self.config.tcp_port))
         return out[:4]
 
+    def path_went_dead(self: MessagingBackend, hash_id: str) -> None:
+        """The direct session stopped answering (their Wi-Fi went off): don't
+        offer it again for a while, unless our own network changes."""
+        self._dead_path_until[hash_id] = time.monotonic() + DEAD_PATH_HOLD
+
     async def maintain_paths(self: MessagingBackend) -> None:
         """Periodically: a session that only Tor carries → try the direct path."""
         now = time.monotonic()
@@ -107,6 +114,8 @@ class PathsMixin:
             # One side drives upgrades so both don't race each other.
             if self._me_hash() > hash_id or hash_id in self._upgrades:
                 continue
+            if now < self._dead_path_until.get(hash_id, 0.0):
+                continue  # (it just failed us: the radio carries on meanwhile)
             busy = self.has_active_transfer_for(hash_id) or self._has_waiting(hash_id)
             every = UPGRADE_EVERY_BUSY if busy else UPGRADE_EVERY
             if now - self._upgrade_attempts.get(hash_id, 0.0) < every:
@@ -120,6 +129,7 @@ class PathsMixin:
         instead of at the next periodic check (up to 45 s later)."""
         if hash_id is None:
             self._upgrade_attempts.clear()
+            self._dead_path_until.clear()
         else:
             self._upgrade_attempts.pop(hash_id, None)
         if not self._running:

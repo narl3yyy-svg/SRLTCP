@@ -13,7 +13,15 @@ import srltcp.core  # noqa: F401  (import order: core before transports)
 from srltcp.core.protocol import beacon
 from srltcp.core.protocol.crypto import KeyExchange
 from srltcp.core.protocol.messages import MessageType, build_header, encode_payload
-from srltcp.transports.serial_link import ACK_HDR, CRC, K_ACK, K_DATA_LAST, MAGIC, SerialLink
+from srltcp.transports.serial_link import (
+    ACK_HDR,
+    ACK_RATE,
+    CRC,
+    K_ACK,
+    K_DATA_LAST,
+    MAGIC,
+    SerialLink,
+)
 from tests.test_e2e_nodes import make_node, wait_for
 from tests.test_path_switch import radio_pair  # noqa: F401  (fixture)
 from tests.test_radio import _on_radio
@@ -121,7 +129,8 @@ def _ack(msg_id: int, count: int, have: set[int]) -> bytes:
     bitmap = bytearray((count + 7) // 8)
     for i in have:
         bitmap[i // 8] |= 1 << (i % 8)
-    head = ACK_HDR.pack(MAGIC, K_ACK, msg_id, count, len(bitmap)) + bytes(bitmap)
+    head = (ACK_HDR.pack(MAGIC, K_ACK, msg_id, count, len(bitmap)) + bytes(bitmap)
+            + ACK_RATE.pack(0))
     return head + CRC.pack(zlib.crc32(head))
 
 

@@ -537,3 +537,32 @@ def test_connection_report_has_no_addresses() -> None:
     report = node.connection_report(peer, "tor")
     assert "hard NAT" in report and "IPv4, IPv6" in report and "no answer" in report
     assert not re.search(r"\d+\.\d+\.\d+\.\d+|2001:db8|41000|40000", report)
+
+
+async def test_birthday_punch_only_when_exactly_one_side_is_strict(tmp_path: Path) -> None:
+    from srltcp.transports.udp import SPRAY_SOCKETS
+
+    node = make_node(tmp_path, "alice")
+    peer = "f" * 64
+    targets = [("198.51.101.2", 40000), ("192.168.1.5", 7828), ("2001:db8::1", 7828)]
+    node.udp = SimpleNamespace(symmetric=False)
+    node._peer_strict[peer] = True  # they are strict: probe their public IPv4 address
+    assert node._birthday(peer, targets) == (0, ["198.51.101.2"])
+    node.udp = SimpleNamespace(symmetric=True)  # both strict: nothing to try
+    assert node._birthday(peer, targets) == (0, [])
+    node._peer_strict[peer] = False  # only we are: many sockets of our own
+    assert node._birthday(peer, targets) == (SPRAY_SOCKETS, [])
+    assert node._strict_nat_field() == {"s": 1}
+    node.udp = SimpleNamespace(symmetric=False)
+    assert node._birthday(peer, targets) == (0, []) and node._strict_nat_field() == {}
+
+
+async def test_a_dead_wifi_path_is_not_offered_again_at_once(tmp_path: Path) -> None:
+    node = make_node(tmp_path, "alice")
+    peer = "f" * 64
+    node.path_went_dead(peer)
+    assert node._dead_path_until[peer] > 0
+    node.check_paths_now(peer)  # (new addresses from them: still held)
+    assert peer in node._dead_path_until
+    node.check_paths_now()  # our own network changed: try everything again
+    assert not node._dead_path_until

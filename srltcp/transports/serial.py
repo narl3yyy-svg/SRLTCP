@@ -158,6 +158,14 @@ class SerialTransport(Transport):
             raise RuntimeError("serial port not open")
         await self._link.send(payload, bulk=True, tag=tag)
 
+    def bulk_delivered(self, tag: str) -> int:
+        """Bytes of ``tag``'s queued data the other side has confirmed so far."""
+        return self._link.tag_delivered(tag) if self._link else 0
+
+    def forget_bulk(self, tag: str) -> None:
+        if self._link:
+            self._link.forget_tag(tag)
+
     def cancel_bulk(self, tag: str) -> int:
         """Drop the queued file data with ``tag`` (cancelled, or resent from
         an earlier point): otherwise it would still take minutes of radio time."""
