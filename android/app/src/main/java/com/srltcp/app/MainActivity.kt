@@ -657,6 +657,35 @@ class MainActivity : AppCompatActivity() {
     private var callAudioActive = false
     private var callSpeakerWanted = false
     private var callDeviceCallback: android.media.AudioDeviceCallback? = null
+
+    /**
+     * At your ear (call audio on the earpiece), the proximity sensor turns the
+     * screen off like the phone app does: an ear or cheek can't end the call,
+     * go home or pull down the notifications. Not on speaker or a headset.
+     */
+    private var proximityLock: android.os.PowerManager.WakeLock? = null
+
+    private fun setProximityGuard(on: Boolean) {
+        try {
+            val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+            val level = android.os.PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK
+            if (on) {
+                if (!pm.isWakeLockLevelSupported(level)) return  // (no proximity sensor)
+                val lock = proximityLock ?: pm.newWakeLock(level, "SRLTCP:call-proximity").also {
+                    it.setReferenceCounted(false)
+                    proximityLock = it
+                }
+                if (!lock.isHeld) lock.acquire(6 * 60 * 60 * 1000L)  // (released when the call ends)
+            } else {
+                proximityLock?.let {
+                    // The screen comes back once the phone leaves your ear.
+                    if (it.isHeld) it.release(android.os.PowerManager.RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Proximity screen lock failed", e)
+        }
+    }
     private val reapplyCallRoute = Runnable {
         if (callAudioActive) applyCallRoute(getSystemService(AUDIO_SERVICE) as android.media.AudioManager)
     }
@@ -707,6 +736,7 @@ class MainActivity : AppCompatActivity() {
         val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
         try {
             if (!active) {
+                setProximityGuard(false)
                 if (!callAudioActive) return
                 callAudioActive = false
                 handler.removeCallbacks(reapplyCallRoute)
@@ -779,13 +809,25 @@ class MainActivity : AppCompatActivity() {
                     @Suppress("DEPRECATION")
                     am.isSpeakerphoneOn = speaker
                 }
+                setProximityGuard(!speaker && headset == null)
             } else {
                 @Suppress("DEPRECATION")
                 am.isSpeakerphoneOn = speaker
+                @Suppress("DEPRECATION")
+                setProximityGuard(!speaker && !am.isWiredHeadsetOn && !am.isBluetoothScoOn)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Call audio routing failed", e)
         }
+    }
+
+    fun copyText(text: String): Boolean = try {
+        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("SRLTCP", text))
+        true
+    } catch (e: Exception) {
+        Log.w(TAG, "Copy to clipboard failed", e)
+        false
     }
 
     fun shareText(title: String, text: String) {

@@ -98,6 +98,29 @@
 
   const ICON_COPY = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
   const ICON_SAVE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>`;
+  /* Copy text: the Android app's own clipboard (the WebView often refuses
+     the web one), else the web clipboard, else the old copy command. */
+  async function writeClipboard(text) {
+    const b = window.SRLTCPAndroid;
+    if (typeof b?.copyText === "function") {
+      try { if (b.copyText(String(text))) return; } catch (_) { /* below */ }
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (_) { /* below */ }
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    Object.assign(area.style, { position: "fixed", top: "-1000px", opacity: "0" });
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    if (!ok) throw new Error("copy refused");
+  }
+
+  const ICON_TEXT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg>`;
   const ICON_SELECT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>`;
   const ICON_INFO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>`;
   const ICON_TRASH = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>`;
@@ -884,7 +907,7 @@
     const onion = $("#me-onion")?.dataset.fullOnion || "";
     if (!onion) return;
     try {
-      await navigator.clipboard.writeText(onion);
+      await writeClipboard(onion);
       toast("Tor address copied — share it only with people you add");
     } catch (_) {
       toast(onion);
@@ -1478,7 +1501,7 @@
     if (!state.pairUri) return;
     markPairLinkShared();
     try {
-      await navigator.clipboard.writeText(state.pairUri);
+      await writeClipboard(state.pairUri);
       toast("Pairing link copied — send it over a channel you trust");
     } catch (_) {
       setInputValue("pair-code-input", state.pairUri);
@@ -3506,7 +3529,7 @@
 
   async function copyMessageText(text) {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboard(text);
       toast("Copied to clipboard");
     } catch (_) {
       toast("Copy failed");
@@ -3561,6 +3584,7 @@
     const live = file ? mergeTransferMeta(m.metadata?.transfer_id || "", m.metadata || {}) : null;
     const items = [
       !file && { action: "copy", label: "Copy", icon: ICON_COPY },
+      !file && m.text && { action: "select-text", label: "Select text", icon: ICON_TEXT },
       file && live?.state === "complete" && { action: "save", label: "Save", icon: ICON_SAVE },
       { action: "select", label: "Select", icon: ICON_SELECT },
       { action: "info", label: "Info", icon: ICON_INFO },
@@ -3608,6 +3632,8 @@
       const tid = m.metadata?.transfer_id || "";
       const url = `/api/transfers/${encodeURIComponent(tid)}/file?download=1`;
       saveTransferFile(tid, url, m.metadata?.filename || m.text || "file");
+    } else if (action === "select-text") {
+      selectMessageText(id);
     } else if (action === "select") {
       startSelecting(id);
     } else if (action === "info") {
@@ -3709,7 +3735,7 @@
       if (ev.button > 0) return;
       const row = target(ev);
       fired = false;
-      if (!row || state.selected) return;
+      if (!row || state.selected || row.classList.contains("text-selecting")) return;
       start = { x: ev.clientX, y: ev.clientY };
       cancel();
       timer = setTimeout(() => {
@@ -3727,6 +3753,8 @@
     el.addEventListener("contextmenu", (ev) => {  // (right-click on a PC; Android's own long-press)
       const row = target(ev);
       if (!row) return;
+      // (Selecting its text: the phone's own menu, with Copy.)
+      if (row.classList.contains("text-selecting") || textSelectedIn(el)) return;
       ev.preventDefault();
       if (state.selected || fired) return;
       cancel();
@@ -3949,12 +3977,45 @@
     return (address || "").includes(".onion") || address === "tor";
   }
 
+  /* Selecting a message's text: with a mouse just drag over it; on a phone,
+     long-press → "Select text", then the phone's own handles and Copy. */
+  function textSelectedIn(el) {
+    const sel = window.getSelection?.();
+    return !!(sel && !sel.isCollapsed && sel.rangeCount && el.contains(sel.anchorNode));
+  }
+
+  function selectMessageText(id) {
+    const row = document.querySelector(`#messages [data-msg-id="${CSS.escape(id)}"]`);
+    const text = row?.querySelector(".bubble-text");
+    if (!text) return;
+    document.querySelectorAll("#messages .text-selecting").forEach((r) => r.classList.remove("text-selecting"));
+    row.classList.add("text-selecting");
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  document.addEventListener("selectionchange", () => {
+    const el = $("#messages");
+    if (!el || textSelectedIn(el)) return;
+    el.querySelectorAll(".text-selecting").forEach((r) => r.classList.remove("text-selecting"));
+    if (state.renderDeferred) renderMessages(state.messageCache, state.renderDeferred);
+  });
+
   function renderMessages(msgs, { preserveScroll = false, scrollToBottom = false } = {}) {
     const el = $("#messages");
     if (!el) return;
     if (scrollToBottom || !preserveScroll) state.stickBottom = true;
     const wasAtBottom = state.stickBottom || (el.clientHeight > 0 && isNearBottom(el));
     state.messageCache = msgs;
+    if (textSelectedIn(el)) {
+      // (Rebuilding now would drop the text you're selecting: once you're done.)
+      state.renderDeferred = { preserveScroll, scrollToBottom };
+      return;
+    }
+    state.renderDeferred = null;
     let lastDate = "";
     let html = "";
     // (Connection state shows in the header only, never in the chat.)
@@ -3996,7 +4057,7 @@
       const senderLabel = !out && m.metadata?.group_id
         ? `<div class="bubble-sender" style="color:${hashColor(m.sender_hash)}">${escapeHtml(memberName(m.metadata.group_id, m.sender_hash))}</div>`
         : "";
-      const body = senderLabel + (isFile ? renderFileBubble(m, out) : escapeHtml(m.text));
+      const body = senderLabel + (isFile ? renderFileBubble(m, out) : `<span class="bubble-text">${escapeHtml(m.text)}</span>`);
       const picked = state.selected?.has(m.id) ? " selected" : "";
       html += `<div class="bubble-row ${out ? "out" : "in"}${picked}" data-msg-id="${escapeHtml(m.id)}">
         <div class="bubble ${out ? "out" : "in"} ${mediaType === "image" ? "image" : ""}">
@@ -5382,7 +5443,7 @@
         <small class="muted"> (no IP addresses in it: send it along when something doesn't connect)</small>` : "");
     $("#btn-copy-conn-report")?.addEventListener("click", async () => {
       try {
-        await navigator.clipboard.writeText(data.report);
+        await writeClipboard(data.report);
         toast("Report copied");
       } catch (_) {
         window.SRLTCPAndroid?.shareText?.("SRLTCP connection report", data.report);
@@ -5502,7 +5563,7 @@
     const hash = $("#me-hash")?.dataset.fullHash || $("#me-hash")?.textContent || "";
     if (!hash) return;
     try {
-      await navigator.clipboard.writeText(hash);
+      await writeClipboard(hash);
       toast("Hash ID copied");
     } catch (_) {
       toast(hash);

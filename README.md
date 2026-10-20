@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.14.0 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.14.1 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -37,7 +37,7 @@
 | **Works over WireGuard** | VPN-aware discovery (unicast sweep + replies), Find by IP, automatic address updates |
 | **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected. Discovery stays on **your own networks** (the Wi-Fi/LAN you're on and your VPN): never sent on mobile data or across the internet, and announces, Find by IP and contact requests from other networks are ignored, so nobody elsewhere can find you |
 | **Contact requests** | Unknown peers can't message you; they appear as "wants to chat" until you accept |
-| **Chat history** | Saved locally, encrypted, pruned by your retention setting; long-press a message (Copy, Save, Select, Info, Delete) or a chat (Delete chat, optionally with the files received in it), like in Signal |
+| **Chat history** | Saved locally, encrypted, pruned by your retention setting; long-press a message (Copy, Select text, Save, Select, Info, Delete; drag over text with a mouse) or a chat (Delete chat, optionally with the files received in it), like in Signal |
 | **Albums** | Photos and videos sent together show as one grid, like Signal |
 | **Tap to download** | Received files above a size you choose (default 2 GB, 2 MB over a serial radio) wait for a tap instead of downloading by themselves |
 | **Trusted peers** | Trust-before-message security model |
@@ -238,7 +238,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.14.0.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.14.1.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -246,7 +246,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.14.0.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.14.0.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.14.1.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -355,6 +355,8 @@ Tap the contact's name at the top of a chat, the **⋮** next to a contact, or l
 Voice and video calls use WebRTC. Offer/answer are sent inside the encrypted SRLTCP session, so DTLS fingerprints are authenticated by the contact's identity key. The media itself also goes through the session: each device runs a tiny media forwarder on localhost (127.0.0.1) for its own browser/WebView, which passes the (already DTLS-SRTP encrypted) packets to the other phone as encrypted `CALL_MEDIA` messages. So **calls work wherever chat works** — same Wi-Fi, WireGuard/VPN or direct UDP/IPv6 — with no STUN/TURN server. Calls never go over Tor: if a contact is only reachable there, the call starts once the direct connection is up (usually a few seconds). During a video call the camera button switches between the **front and rear camera**; on Android, **Answer** on the ringing notification answers straight away. **Switching networks mid-call** (Wi-Fi ↔ mobile data) doesn't end the call: it shows *Reconnecting…* and resumes once the session is back (it waits up to 90 s), restarting the WebRTC connection over the new path.
 
 **Earpiece / speaker (Android).** Calls start on the earpiece (voice) or the loudspeaker (video). A wired or Bluetooth headset takes over when connected. The speaker button switches between them. The app applies the route again when the other side's audio starts and when a headset is plugged in or removed, because the WebView's audio engine can reset it on some phones. On Android 12+ it uses `setCommunicationDevice` and falls back to the speakerphone switch if the phone refuses. Speaker volume during a call is the phone's *call* volume: press the volume keys while in the call.
+
+**At your ear (Android).** While call audio is on the earpiece, the proximity sensor turns the screen off when the phone is at your ear, like the phone app (an ear or cheek can't end the call, go home or open the notifications); it comes back when you move the phone away. Not on speaker or a headset. As a backup, touches with a large contact area or several points at once press nothing on the call screen.
 
 **PC camera (Windows).** The browser needs the camera twice: allowed for the SRLTCP page (icon at the left of the address bar) and allowed by Windows in *Settings → Privacy & security → Camera* (and *Microphone*), including **Let desktop apps access your camera**, since browsers count as desktop apps. Only one app can use a webcam at a time on Windows: close Teams, Zoom, Skype, the Camera app or another tab using it. Some laptops also have a camera privacy switch or key. If the camera still can't be opened, the call continues with voice and the app shows the reason.
 
@@ -480,7 +482,7 @@ Several **photos or videos sent in a row** (within 2 minutes) show as one **albu
 
 **Download automatically up to** (*Settings → General*, default 2 GB; a separate *Over the serial radio* limit, default 2 MB): a received file larger than this waits in the chat with a **Download** button (✕ declines it) and nothing is stored until you tap; the sender sees *waiting for them to tap Download*. Over the API: `POST /api/transfers/{id}/download`.
 
-**Long-press a message** (right-click on a PC), like in Signal: **Copy**, **Save** (files), **Select** (then Copy or Delete several), **Info** (sent/received time, delivery, connection, file) and **Delete** (from this device; a photo, video or file takes the received file with it). **Long-press a chat** in the list for *Delete chat…* (every message of that chat, optionally with the files received in it; your contact keeps theirs). API: `POST /api/messages/delete` with `{"ids": [...], "peer": "<hash>"}` (or `"group"`), `POST /api/chats/delete` with `{"peer": "<hash>"}` or `{"group": "<id>"}` and optional `"delete_files": true`.
+**Long-press a message** (right-click on a PC), like in Signal: **Copy**, **Select text** (the phone's own handles, to copy part of it; on a PC just drag over the text), **Save** (files), **Select** (then Copy or Delete several), **Info** (sent/received time, delivery, connection, file) and **Delete** (from this device; a photo, video or file takes the received file with it). **Long-press a chat** in the list for *Delete chat…* (every message of that chat, optionally with the files received in it; your contact keeps theirs). API: `POST /api/messages/delete` with `{"ids": [...], "peer": "<hash>"}` (or `"group"`), `POST /api/chats/delete` with `{"peer": "<hash>"}` or `{"group": "<id>"}` and optional `"delete_files": true`.
 
 **Shrink photos before sending** (*Settings → General*, off by default) sends photos as JPEG with the longest side at most 2560 px: a 12 MP phone photo goes from ~5 MB to ~1 MB, which matters on mobile data. The re-encoded photo carries none of the original's metadata (GPS location, camera, time). Screenshots and PNG graphics, GIFs and anything the device can't decode are always sent as they are.
 

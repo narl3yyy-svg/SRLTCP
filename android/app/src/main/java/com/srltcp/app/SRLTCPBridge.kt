@@ -133,4 +133,11 @@ class SRLTCPBridge(private val activity: MainActivity) {
         if (!activity.isTrustedPage) return
         activity.runOnUiThread { activity.shareText(title, text) }
     }
+
+    /** Copy text to the phone's clipboard (the WebView often refuses the web clipboard). */
+    @JavascriptInterface
+    fun copyText(text: String): Boolean {
+        if (!activity.isTrustedPage) return false
+        return activity.copyText(text)
+    }
 }

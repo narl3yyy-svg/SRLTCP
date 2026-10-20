@@ -54,6 +54,7 @@
   // Answer tapped on the ringing notification, possibly before the offer
   // reached this (freshly opened) page: answer it when it arrives.
   let answerWanted = 0;
+  const EAR_TOUCH_PX = 40;  // a fingertip is ~10-30 px across; an ear or cheek far more
 
   // Android app: route call audio like a phone call (earpiece/speaker).
   const nativeAudio = () => {
@@ -788,6 +789,22 @@
     $("#call-toggle-camera")?.addEventListener("click", toggleCamera);
     $("#call-speaker")?.addEventListener("click", toggleSpeaker);
     $("#call-switch-camera")?.addEventListener("click", switchCamera);
+    // Phone at your ear (earpiece, not speaker): an ear or cheek touches with a
+    // big contact area or several points at once; such touches press nothing.
+    // (The Android app also turns the screen off by the proximity sensor.)
+    const ov = $("#call-overlay");
+    let earUntil = 0;
+    const earLike = (e) => e.pointerType === "touch"
+      && ((e.width || 0) > EAR_TOUCH_PX || (e.height || 0) > EAR_TOUCH_PX || !e.isPrimary);
+    ov?.addEventListener("pointerdown", (e) => {
+      if (inCall() && !call.speaker && earLike(e)) earUntil = Date.now() + 800;
+    }, true);
+    ov?.addEventListener("click", (e) => {
+      if (Date.now() < earUntil) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
     // Show the remote picture only once frames arrive (no empty player / play icon).
     const rv = $("#call-remote-video");
     const markPlaying = () => {

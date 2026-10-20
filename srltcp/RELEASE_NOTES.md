@@ -1,5 +1,30 @@
 # SRLTCP Release Notes
 
+## v0.14.1 (2026-10-20)
+
+### Copy and select message text
+- **Copy works on the phone.** Long-press a message → *Copy* now uses the
+  phone's own clipboard; the web clipboard it used before is often refused
+  inside the app. Copying your hash ID, Tor address, a pairing link or a
+  connection report uses it too.
+- **Select part of a message.** Long-press a message → *Select text*: the
+  text is highlighted with the phone's own handles; drag them to the part
+  you want and use the phone's *Copy*. On a computer, just drag over the
+  text with the mouse. The chat waits to refresh while you're selecting, so
+  a new message or a delivery tick doesn't drop your selection.
+
+### Calls with the phone at your ear
+- **The screen turns off at your ear**, like the phone app. While call
+  audio is on the earpiece, the proximity sensor switches the screen off
+  when something is close to it. Then your ear or cheek can't end the
+  call, go to the home screen or open the notification panel. It comes back
+  on when you move the phone away. On speaker or a headset (and video calls,
+  which start on speaker) the screen stays on as before.
+- **Backup for phones with a weak proximity sensor:** during a call on the
+  earpiece, touches with a large contact area (an ear or cheek rather than
+  a fingertip) or several points at once don't press any button.
+- Nothing on the call screen can be highlighted any more.
+
 ## v0.14.0 (2026-10-20)
 
 ### Add a contact on another network without meeting first
