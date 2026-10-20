@@ -160,6 +160,31 @@ ip netns exec rb conntrack -F 2>/dev/null || true
 start=$(date +%s)
 wait_for 240 got ha "$HB" "both strict" || fail "waiting message after the NAT became normal"
 pass "normal NAT again: the waiting message went out directly after $(( $(date +%s) - start ))s"
+
+# Never met: two new devices on different networks add each other by hash ID
+# and Tor address (copied from under each one's hash ID), nothing else.
+for ns in ha hb; do ip netns pids $ns | xargs -r kill; done; sleep 2
+for ns in ha hb; do mv "$W/data-$ns" "$W/data-$ns-before"; done
+start_node ha NewA; start_node hb NewB
+onion_of() { api "$1" GET /api/status | q "(d.get('tor') or d.get('transports', {}).get('tor') or {}).get('onion', '')"; }
+has_onion() { onion_of "$1" | grep -q '\.onion$'; }
+wait_for 180 has_onion ha && wait_for 180 has_onion hb || fail "Tor addresses published"
+NA=$(hash_of ha); NB=$(hash_of hb); OA=$(onion_of ha); OB=$(onion_of hb)
+api ha POST /api/trusted "{\"hash_id\":\"$NB\",\"name\":\"NewB\",\"onion\":\"$OB\"}" >/dev/null
+api hb POST /api/trusted "{\"hash_id\":\"$NA\",\"name\":\"NewA\",\"onion\":\"$OA\"}" >/dev/null
+start=$(date +%s)
+api hb POST /api/messages "{\"recipient_hash\":\"$NA\",\"text\":\"never met\"}" >/dev/null
+wait_for 240 got ha "$NB" "never met" || fail "added by hash + Tor address: message from another network"
+pass "never met, added by hash ID + Tor address: found over Tor and delivered after $(( $(date +%s) - start ))s (path: $(path ha "$NB"))"
+api ha POST /api/messages "{\"recipient_hash\":\"$NB\",\"text\":\"hello back\"}" >/dev/null
+wait_for 60 got hb "$NA" "hello back" || fail "reply to a contact added by Tor address"
+pass "reply delivered the other way"
+OLD="$OA"; api ha POST /api/tor/new-address >/dev/null || fail "new Tor address"
+sleep 5
+NEWO=$(onion_of ha); [ -n "$NEWO" ] && [ "$NEWO" != "$OLD" ] || fail "new Tor address differs"
+seen() { api hb GET /api/trusted | q "[p.get('onion') for p in d if p['hash_id']=='$NA'][0]" | grep -q "$NEWO"; }
+wait_for 60 seen || fail "contact learnt the new Tor address"
+pass "new Tor address: the connected contact learnt it at once"
 for ns in ha hb inet; do ip netns pids $ns | xargs -r kill; done; sleep 1
 
 # ---------------- Part 2: one phone on the VPN, the other on the home Wi-Fi ----------------

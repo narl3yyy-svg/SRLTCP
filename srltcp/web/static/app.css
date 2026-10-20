@@ -134,6 +134,7 @@ body {
   cursor: pointer;
 }
 .me-hash:hover { color: var(--accent); }
+.me-onion { margin-top: 1px; word-break: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .avatar {
   width: 44px;
   height: 44px;

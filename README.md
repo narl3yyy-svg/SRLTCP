@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.13.9 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.14.0 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -238,7 +238,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.9.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.14.0.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -246,7 +246,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.13.9.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.13.9.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.14.0.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -323,6 +323,8 @@ Every setting explained, plus common setups and troubleshooting: **[docs/NETWORK
 | **NFC (Android)** | Open *Pair* on **both** phones and hold them back to back (NFC on, screens unlocked). The phones take turns reading each other and exchange contact cards automatically; you feel a short vibration when it worked |
 
 Pairing is always two-way. With QR, link and NFC both phones add each other: the device that showed the code adds whoever scanned it automatically (the scan carries a one-time secret from that code) and opens the new chat — even if the two only reach each other later, or an app restarts in between. If you add someone from *Discovered* (or with an old code), their phone pops up **Contact request — Add them back?**; tapping *Accept* makes you contacts on both sides.
+
+**Contacts on another network you've never met:** add each other with *Add contact* → the hash ID and the **Tor address** (each copies theirs by tapping the `Tor: …onion` line under their hash ID at the top of the contact list, shown once Tor is connected). Both of you add each other; then you find each other over Tor and connect directly, as if you had paired. Anyone with your Tor address can tell when you're online, so share it like a phone number; *Settings → Network → New Tor address* replaces it.
 
 A pairing code is a signed contact card (hash ID, public keys, name, and every address the device has — VPN first). It works once and expires after 15 minutes.
 

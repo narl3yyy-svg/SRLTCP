@@ -865,6 +865,50 @@
     }
   }, 3000);
 
+  /* Your Tor address under your hash ID: shortened, tap copies all of it. */
+  function shortOnion(onion) {
+    const id = (onion || "").replace(/\.onion$/, "");
+    return id.length > 20 ? `${id.slice(0, 10)}…${id.slice(-6)}.onion` : onion;
+  }
+
+  function renderMyOnion(tor) {
+    const el = $("#me-onion");
+    if (!el) return;
+    const onion = tor && tor.enabled && tor.state === "ready" ? (tor.onion || "") : "";
+    el.dataset.fullOnion = onion;
+    el.textContent = onion ? `Tor: ${shortOnion(onion)}` : "";
+    el.classList.toggle("hidden", !onion);
+  }
+
+  async function copyMyOnion() {
+    const onion = $("#me-onion")?.dataset.fullOnion || "";
+    if (!onion) return;
+    try {
+      await navigator.clipboard.writeText(onion);
+      toast("Tor address copied — share it only with people you add");
+    } catch (_) {
+      toast(onion);
+    }
+  }
+
+  async function newTorAddress() {
+    if (!confirm("Make a new Tor address? Contacts you're connected to get it at once; "
+      + "anyone else you gave the old one to will need the new one.")) return;
+    const btn = $("#tor-new-address");
+    if (btn) btn.disabled = true;
+    try {
+      const { ok, data } = await apiPost("/api/tor/new-address", {});
+      if (!ok) {
+        toast(data?.error || "Could not make a new Tor address", "error");
+        return;
+      }
+      toast("New Tor address ready");
+      await fetchStatus();
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   /* Settings → Network: Tor. */
   function renderTorStatus(tor) {
     const el = $("#tor-status");
@@ -881,6 +925,8 @@
     else text = "Tor: starting…";
     el.textContent = text;
     el.className = `net-status ${ok ? "ok" : ""}`;
+    $("#tor-new-address")?.classList.toggle("hidden", !ok);
+    $("#tor-new-address-hint")?.classList.toggle("hidden", !ok);
   }
 
   /* ── Group chats ── */
@@ -1202,6 +1248,7 @@
     setSelectValue("add-contact-transport", "tcp");
     setInputValue("add-contact-host", "");
     setInputValue("add-contact-port", "7825");
+    setInputValue("add-contact-onion", "");
   }
 
   function openAddContactModal() {
@@ -1268,6 +1315,7 @@
     const transport = $("#add-contact-transport")?.value || "tcp";
     const tcpHost = ($("#add-contact-host")?.value || "").trim();
     const tcpPort = parseInt($("#add-contact-port")?.value || "7825", 10);
+    const onion = ($("#add-contact-onion")?.value || "").trim();
     if (!/^[0-9a-f]{32}$/.test(hashId)) {
       toast("Hash ID must be exactly 32 hex characters");
       return;
@@ -1285,6 +1333,7 @@
         transport,
         tcp_host: tcpHost,
         tcp_port: tcpPort,
+        onion,
       });
       if (!ok) {
         toast(data?.error || "Failed to add contact", "error");
@@ -1758,6 +1807,8 @@
     setInputValue("edit-contact-name", peer.name || "");
     setInputValue("edit-contact-host", peer.tcp_host || "");
     setInputValue("edit-contact-port", String(peer.tcp_port || 7825));
+    state.editContactOnion = peer.onion || "";
+    setInputValue("edit-contact-onion", state.editContactOnion);
     const alts = (peer.alt_hosts || []).filter(Boolean);
     const altEl = $("#edit-contact-alts");
     if (altEl) {
@@ -1796,6 +1847,9 @@
       tcp_host: ($("#edit-contact-host")?.value || "").trim(),
       tcp_port: port,
     };
+    const onion = ($("#edit-contact-onion")?.value || "").trim();
+    // (Only when you changed it: the app may have learnt a newer one meanwhile.)
+    if (onion !== (state.editContactOnion || "")) body.onion = onion;
     const { ok, data } = await apiPatch(`/api/trusted/${encodeURIComponent(hashId)}`, body, { silent: true });
     if (!ok) {
       toast(data?.error || "Could not save contact", "error");
@@ -3139,6 +3193,7 @@
         meHash.title = "Click to copy full hash ID";
         meHash.dataset.fullHash = primary.hash_id;
       }
+      renderMyOnion(transportStatus.tor);
       setAvatar($("#me-avatar"), primary.name, primary.hash_id);
     }
 
@@ -5438,6 +5493,11 @@
     }
   });
 
+  $("#me-onion")?.addEventListener("click", copyMyOnion);
+  $("#me-onion")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); copyMyOnion(); }
+  });
+  $("#tor-new-address")?.addEventListener("click", newTorAddress);
   $("#me-hash")?.addEventListener("click", async () => {
     const hash = $("#me-hash")?.dataset.fullHash || $("#me-hash")?.textContent || "";
     if (!hash) return;

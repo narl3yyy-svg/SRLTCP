@@ -15,6 +15,7 @@ from aiohttp import web
 
 from srltcp import __version__
 from srltcp.core.messaging.groups import GroupError, is_valid_group_id
+from srltcp.core.messaging.tor import normalize_onion
 from srltcp.core.protocol.messages import is_valid_transfer_id
 from srltcp.core.settings import AppSettings, SettingsStore
 from srltcp.core.trusted import TrustedPeer, is_valid_hash_id
@@ -72,9 +73,18 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response({"error": "invalid hash_id"}, status=400)
         transport = data.get("transport")
         try:
+            # Their Tor address (optional): lets us reach a contact on another
+            # network before we've ever shared one.
+            onion = normalize_onion(str(data.get("onion") or ""))
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        try:
             peer = node.add_trusted_from_discovered(hash_id, transport)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
+        if peer and onion:
+            updated = node.backend.trusted.update(hash_id, onion=onion)
+            peer = updated.public_dict() if updated else peer
         if peer:
             # Accepting a contact request / discovered peer: bring the session up
             # so anything they queued for us is delivered.
@@ -109,10 +119,13 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                         wan_port=wan_port,
                         wan_enabled=bool(data.get("wan_enabled")),
                         connection_mode=connection_mode,
+                        onion=onion,
                     )
                 ).public_dict()
             except ValueError as exc:
                 return web.json_response({"error": str(exc)}, status=400)
+            if onion:
+                node.backend._kick_connect(hash_id.lower())  # (over Tor, at once)
         return web.json_response(peer)
 
     async def trusted_update(request: web.Request) -> web.Response:
@@ -126,10 +139,17 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         connection_mode = data.get("connection_mode")
         tcp_host = data.get("tcp_host")
         tcp_port = data.get("tcp_port")
+        onion = data.get("onion")
+        if onion is not None:
+            try:
+                onion = normalize_onion(str(onion))
+            except ValueError as exc:
+                return web.json_response({"error": str(exc)}, status=400)
         if all(
             v is None
             for v in (
                 name,
+                onion,
                 blocked,
                 wan_host,
                 wan_port,
@@ -183,11 +203,14 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             wan_port=wan_port,
             wan_enabled=wan_enabled,
             connection_mode=connection_mode,
+            onion=onion,
         )
         if not peer:
             return web.json_response({"error": "peer not found"}, status=404)
         if blocked is True:
             await node.backend.disconnect_peer(hash_id)
+        elif onion and not peer.blocked:
+            node.backend._kick_connect(peer.hash_id)  # (try the new address now)
         return web.json_response(peer.public_dict())
 
     async def trusted_clear_chat(request: web.Request) -> web.Response:
@@ -212,6 +235,13 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             peer=peer, group=group, delete_files=bool(data.get("delete_files"))
         )
         return web.json_response({"deleted": removed})
+
+    async def tor_new_address(_request: web.Request) -> web.Response:
+        try:
+            onion = await node.backend.new_tor_address()
+        except RuntimeError as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+        return web.json_response({"onion": onion})
 
     async def trusted_diagnose(request: web.Request) -> web.Response:
         hash_id = request.match_info.get("hash_id", "").lower()
@@ -1295,6 +1325,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_post("/api/trusted/{hash_id}/clear-chat", trusted_clear_chat)
     app.router.add_delete("/api/trusted/{hash_id}", trusted_remove)
     app.router.add_post("/api/trusted/{hash_id}/diagnose", trusted_diagnose)
+    app.router.add_post("/api/tor/new-address", tor_new_address)
     app.router.add_get("/api/messages", messages)
     app.router.add_post("/api/chats/delete", delete_chat)
     app.router.add_post("/api/messages/delete", delete_messages)

@@ -69,6 +69,23 @@ def valid_onion(address: str) -> bool:
     return checksum == want
 
 
+def normalize_onion(text: str) -> str:
+    """A Tor address as someone pasted it (with or without ".onion", a
+    scheme, a port or a trailing slash) -> "<56 chars>.onion"; "" for empty.
+    Raises ValueError when it isn't a valid v3 address."""
+    address = (text or "").strip().lower()
+    if not address:
+        return ""
+    for prefix in ("http://", "https://"):
+        address = address.removeprefix(prefix)
+    address = address.split("/", 1)[0].split(":", 1)[0]
+    if not address.endswith(".onion"):
+        address += ".onion"
+    if not valid_onion(address):
+        raise ValueError("not a valid Tor address (56 letters and digits, ending in .onion)")
+    return address
+
+
 class TorControlError(RuntimeError):
     pass
 
@@ -218,7 +235,8 @@ class TorMixin:
         if self._tor_state in ("unavailable", "error"):
             return f"not working on this device — {self._tor_detail or 'unknown error'}"
         if not self.peer_onion(hash_id):
-            return ("this contact hasn't shared a Tor address yet — open this chat once while "
+            return ("this contact hasn't shared a Tor address yet — paste theirs in Edit contact "
+                    "(they copy it from under their hash ID), or open this chat once while "
                     "you're both on the same network, with Tor on and connected on both devices")
         return ""
 
@@ -382,6 +400,24 @@ class TorMixin:
         log.info("Tor ready; onion service published")
         await self.addresses_changed()  # tell contacts (inside E2EE) where to find us
         self.connect_known_contacts()
+
+    async def new_tor_address(self: MessagingBackend) -> str:
+        """Replace our onion address with a fresh one. Contacts we have a
+        session with learn it at once (inside the session); the old address
+        stops answering a moment later."""
+        if self._tor_state != "ready" or not self._tor_control:
+            raise RuntimeError("Tor isn't connected")
+        old = self._tor_onion
+        with contextlib.suppress(OSError):
+            (self._tor_dir() / "onion_key").unlink()
+        await self._tor_publish_onion()
+        log.info("New Tor address published")
+        await self.addresses_changed()
+        await asyncio.sleep(2)  # (sessions over the old address carry the news first)
+        if old and self._tor_control:
+            with contextlib.suppress(TorControlError, OSError, TimeoutError):
+                await self._tor_control.command(f"DEL_ONION {old.removesuffix('.onion')}")
+        return self._tor_onion
 
     async def _tor_publish_onion(self: MessagingBackend) -> None:
         assert self._tor_control and self.tcp_transport

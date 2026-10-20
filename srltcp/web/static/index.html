@@ -33,6 +33,7 @@
 <div class="me-info">
 <div class="me-name" id="me-name">Loading…</div>
 <div class="me-hash" id="me-hash">—</div>
+<div class="me-hash me-onion hidden" id="me-onion" role="button" tabindex="0" title="Your Tor address — click to copy"></div>
 </div>
 </div>
 <div class="search-wrap">
@@ -278,8 +279,10 @@
 <input type="checkbox" id="set-tor-enabled" />
 <span>Find contacts on other networks (Tor)</span>
 </label>
-<small class="field-hint">How two phones on different networks find each other with no server of anyone's: only to swap addresses and set up the direct connection. Messages, files and calls never go over Tor; they wait for the direct connection (the header shows CONNECTING meanwhile). Only your trusted contacts get your Tor address (inside the encrypted connection), and only they can connect through it. Both of you need it on. Built into the Android app; on a PC install Tor Browser.</small>
+<small class="field-hint">How two phones on different networks find each other with no server of anyone's: only to swap addresses and set up the direct connection. Messages, files and calls never go over Tor; they wait for the direct connection (the header shows CONNECTING meanwhile). Your contacts get your Tor address inside the encrypted connection; you can also copy it from under your hash ID to give to someone you add by hand (anyone who has it can tell when you're online, so share it like a phone number). Only your contacts can connect through it. Both of you need it on. Built into the Android app; on a PC install Tor Browser.</small>
 <div class="net-status" id="tor-status" aria-live="polite"></div>
+<button type="button" class="action-btn small hidden" id="tor-new-address">New Tor address</button>
+<small class="field-hint hidden" id="tor-new-address-hint">If your Tor address got around more than you wanted: contacts you're connected to get the new one at once; anyone else needs it again.</small>
 </fieldset>
 <fieldset class="net-settings">
 <legend>Same Wi-Fi / VPN</legend>
@@ -648,6 +651,10 @@
 <label class="field"><span>Hash ID</span>
 <input type="text" id="add-contact-hash" placeholder="32 hex characters" autocomplete="off" spellcheck="false" />
 </label>
+<label class="field"><span>Tor address (optional)</span>
+<input type="text" id="add-contact-onion" placeholder="56 characters ending in .onion" autocomplete="off" spellcheck="false" autocapitalize="off" />
+<small>Lets you reach them on another network before you've ever been on the same one. They copy it from the top of their contact list (under their hash ID) and must add you too.</small>
+</label>
 <label class="field"><span>Display name</span>
 <input type="text" id="add-contact-name" placeholder="Peer name" />
 </label>
@@ -721,6 +728,9 @@
 </label>
 </div>
 <p class="hint" id="edit-contact-alts"></p>
+<label class="field"><span>Tor address</span>
+<input type="text" id="edit-contact-onion" placeholder="Learnt automatically, or paste theirs (…onion)" autocomplete="off" spellcheck="false" autocapitalize="off" />
+</label>
 <div class="contact-check">
 <button type="button" class="action-btn small" id="edit-contact-check">Check connection</button>
 <div id="edit-contact-check-result" class="contact-check-result hidden" aria-live="polite"></div>

@@ -1,5 +1,36 @@
 # SRLTCP Release Notes
 
+## v0.14.0 (2026-10-20)
+
+### Add a contact on another network without meeting first
+- **Your Tor address is under your hash ID.** At the top of the contact
+  list, once Tor is connected, a line `Tor: abcdefghij…uvwxyz.onion` shows
+  your Tor address, shortened. Tap it to copy the whole address, just like
+  the hash ID above it.
+- **Add contact takes their Tor address.** *Add contact → Tor address
+  (optional)*: paste theirs with their hash ID, and the app rings them over
+  Tor straight away. You no longer need to be on the same network once
+  first. Both of you add each other: a Tor connection from someone who
+  isn't your contact is still refused. Pasted addresses are cleaned up (with
+  or without `.onion`, `http://` or a slash) and checked, so a typo is
+  caught before saving.
+- **Edit contact shows and takes their Tor address** too, so you can fix it
+  or paste it in later.
+- **New Tor address** (*Settings → Network*, while Tor is connected): if
+  your address got around more than you wanted, make a fresh one. Contacts
+  you're connected to get it at once; anyone else needs the new one.
+- **Privacy:** anyone who has your Tor address can tell when your device is
+  online (never its IP address or what you send), so share it like a phone
+  number. A wrong address for a contact can't let anyone impersonate them:
+  their signed, quantum-safe handshake is still checked.
+
+### Tested
+- Network simulation with real Tor (a private Tor network) and NAT routers:
+  two new devices on different home networks that never met added each
+  other by hash ID and Tor address only. The message arrived over a direct
+  connection after 17 s and the reply came back. After *New Tor address*
+  the connected contact had the new address within seconds.
+
 ## v0.13.9 (2026-10-19)
 
 **Update both phones:** the serial radio's acknowledgements changed format

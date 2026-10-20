@@ -60,15 +60,26 @@ shares and sync **never go over Tor**.
 - **Turn it on:** *Settings → Network → Find contacts on other networks
   (Tor)*, on both devices. It's on by default.
 - **Android:** Tor is built into the app.
-- **PC:** install [Tor Browser](https://www.torproject.org/download/). SRLTCP
-  finds its `tor.exe` and starts its own copy in the background.
-- **First connection:** the two devices must have met once (pairing on the same
-  Wi-Fi/VPN, or with a pairing code). That's how they swap onion addresses,
-  inside the encrypted connection.
+- **PC:** install [Tor Browser](https://www.torproject.org/download/) on
+  Windows or macOS, or the `tor` package on Linux (`sudo apt install tor`).
+  SRLTCP finds it and starts its own copy in the background.
+- **First connection:** the two devices swap onion addresses inside their
+  encrypted connection, so normally they meet once first (the same Wi-Fi/VPN,
+  or a pairing code). **Never met?** Each copies its Tor address from under its
+  hash ID at the top of the contact list (tap it; shown once Tor is
+  connected) and sends it to the other with the hash ID; each adds the other
+  with *Add contact → Hash ID + Tor address*. Both must add each other: a Tor
+  connection from someone who isn't your contact is refused. After that the
+  addresses stay up to date by themselves.
 
-Privacy: only your trusted contacts get your onion address, and connections
-through it are only accepted from trusted contacts. A stranger who learns the
-address gets no session, not even a contact request.
+Privacy: the app gives your onion address only to your trusted contacts (or
+you copy it yourself), and connections through it are only accepted from
+trusted contacts. A stranger who learns the address gets no session, not even
+a contact request, but can tell when your device is online, so share it like
+a phone number. *Settings → Network → New Tor address* replaces it: contacts
+you're connected to get the new one at once; anyone else needs it again. A
+wrong address for a contact can't let anyone impersonate them: the signed
+handshake still checks their keys.
 
 ## Direct connections across networks (hole punching)
 
