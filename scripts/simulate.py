@@ -186,6 +186,18 @@ async def desktop_flow() -> None:
         assert await alice.is_visible("#call-accept-video") and "Video call" in kind, (
             await alice.is_visible("#call-accept-video"), kind)
         await shot(alice, "04-alice-incoming-call")
+        # Alice's device has a front and a rear camera, but (like a real browser)
+        # lists only one until a camera has been opened.
+        await alice.evaluate("""(() => {
+            const md = navigator.mediaDevices, real = md.enumerateDevices.bind(md);
+            const gum = md.getUserMedia.bind(md);
+            window.__realMedia = { enumerateDevices: md.enumerateDevices, getUserMedia: md.getUserMedia };
+            let opened = false;
+            md.getUserMedia = async (c) => { const s = await gum(c); if (c && c.video) opened = true; return s; };
+            md.enumerateDevices = async () => { const d = await real();
+              const cam = d.find((x) => x.kind === "videoinput");
+              return cam && opened ? [...d, { kind: "videoinput", deviceId: "rear", label: "rear", groupId: "" }] : d; };
+        })()""")
         await alice.click("#call-accept-video")
         await alice.wait_for_function("document.querySelector('#call-status').textContent.includes('encrypted')", timeout=20000)
         await bob.wait_for_function("document.querySelector('#call-status').textContent.includes('encrypted')", timeout=20000)
@@ -207,7 +219,35 @@ async def desktop_flow() -> None:
         assert bg == "rgb(240, 84, 106)", bg
         await alice.click("#call-mute")
         print("call: remote audio playing, picture shown, mic on by default, mute is red")
+        await alice.wait_for_selector("#call-switch-camera:not(.hidden)", timeout=5000)
+        print("answering phone shows the front/rear camera button")
+        await alice.evaluate("Object.assign(navigator.mediaDevices, window.__realMedia)")  # one camera again
         await shot(alice, "05-alice-in-call")
+        # Back to the chat while the call goes on: a small window with their video.
+        await alice.click("#call-minimize")
+        await alice.wait_for_selector("#call-overlay.mini.remote-playing", timeout=5000)
+        assert await alice.is_visible("#msg-input")
+        await alice.fill("#msg-input", "Typing during the video call")
+        await alice.press("#msg-input", "Enter")
+        await bob.wait_for_selector("text=Typing during the video call", timeout=10000)
+        t0 = await alice.evaluate("document.querySelector('#call-remote-video').currentTime")
+        await asyncio.sleep(1.5)
+        t1 = await alice.evaluate("document.querySelector('#call-remote-video').currentTime")
+        assert t1 > t0, ("video stopped in the small window", t0, t1)
+        await shot(alice, "05b-alice-chat-during-call")
+        box = await alice.locator("#call-overlay").bounding_box()
+        await alice.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        await alice.mouse.down()
+        await alice.mouse.move(box["x"] - 120, box["y"] - 160, steps=6)
+        await alice.mouse.up()
+        moved = await alice.locator("#call-overlay").bounding_box()
+        assert await alice.evaluate("document.querySelector('#call-overlay').classList.contains('mini')")
+        assert abs(moved["x"] - box["x"]) > 50, (box, moved)  # dragged, still small
+        await alice.click("#call-overlay", position={"x": 20, "y": 60})
+        await alice.wait_for_function(
+            "!document.querySelector('#call-overlay').classList.contains('mini')", timeout=5000)
+        print("call: back to chat in a small window (video kept playing, message sent, "
+              "window dragged), tap brings the call back")
         # Network switch mid-call: Bob's node goes silent for longer than
         # WebRTC waits (~30 s). The call must hold on and resume by itself.
         import signal as _signal
@@ -224,10 +264,11 @@ async def desktop_flow() -> None:
             await pg.wait_for_function(
                 "document.querySelector('#call-status').textContent.includes('encrypted')",
                 timeout=60000)
+        # (After a 35 s outage the picture takes a few seconds to come back
+        # (measured: ~3 s after the call says it's reconnected); within 10 s.)
         t0 = await alice.evaluate("document.querySelector('#call-remote-video').currentTime")
-        await asyncio.sleep(2)
-        t1 = await alice.evaluate("document.querySelector('#call-remote-video').currentTime")
-        assert t1 > t0, (t0, t1)
+        await alice.wait_for_function(
+            f"document.querySelector('#call-remote-video').currentTime > {t0} + 0.5", timeout=10000)
         print("call survived a 35 s outage (network switch) and resumed with video")
         await bob.click("#call-hangup")
         await alice.wait_for_selector("#call-overlay", state="hidden", timeout=10000)
@@ -430,6 +471,7 @@ async def features_flow() -> None:
         # Clear chat
         await alice.click("#contacts .contact[data-name='Bobby'] .contact-more")
         await alice.click("#contact-menu [data-action=clear-chat]")
+        await alice.click("#delete-chat-submit")  # (it asks first, like Signal)
         await alice.wait_for_selector("text=No messages yet", timeout=5000)
         print("clear chat: history cleared")
 

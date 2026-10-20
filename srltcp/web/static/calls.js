@@ -204,6 +204,8 @@
     $("#call-toggle-camera")?.classList.toggle("hidden", !call.video);
     $("#call-speaker")?.classList.toggle("hidden", !nativeAudio());
     $("#call-switch-camera")?.classList.add("hidden");
+    $("#call-minimize")?.classList.toggle("hidden", mode === "incoming");
+    if (mode === "incoming") expand();  // (a ringing call is always full screen)
     if (call.video && mode !== "incoming") showSwitchIfTwoCameras();
     updateButtons();
   }
@@ -212,7 +214,8 @@
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const cams = devices.filter((d) => d.kind === "videoinput").length;
-      $("#call-switch-camera")?.classList.toggle("hidden", !(call.video && cams > 1));
+      const show = call.video && call.state !== "idle" && call.state !== "incoming" && cams > 1;
+      $("#call-switch-camera")?.classList.toggle("hidden", !show);
     } catch (_) { /* leave it hidden */ }
   }
 
@@ -284,7 +287,35 @@
     }
   }
 
+  /* ── Back to the chat while the call goes on ──
+   * The call shrinks to a small window over the app (their video, or a pill
+   * with the timer for a voice call): drag it anywhere, tap it for full
+   * screen, or hang up from it. Android's back gesture does the same. */
+  function minimize() {
+    const ov = $("#call-overlay");
+    if (!ov || ov.classList.contains("hidden") || call.state === "incoming" || call.state === "idle") {
+      return false;
+    }
+    if (!ov.classList.contains("mini")) {
+      ov.classList.add("mini");
+      ov.setAttribute("aria-modal", "false");
+      if (call.peer) app().openChat?.(call.peer, call.peerName);
+    }
+    return true;
+  }
+
+  function expand() {
+    const ov = $("#call-overlay");
+    if (!ov) return;
+    ov.classList.remove("mini");
+    ov.style.left = ov.style.top = ov.style.right = ov.style.bottom = "";
+    ov.setAttribute("aria-modal", "true");
+  }
+
+  const isMini = () => !!$("#call-overlay")?.classList.contains("mini");
+
   function hideOverlay() {
+    expand();
     $("#call-overlay")?.classList.add("hidden");
     $("#call-overlay")?.classList.remove("remote-playing", "local-on");
     const ra = $("#call-remote-audio");
@@ -458,6 +489,9 @@
       lv.muted = true;
     }
     stream.getTracks().forEach((t) => call.pc.addTrack(t, stream));
+    // Only now: before the camera is open, browsers list at most one camera
+    // (privacy), so a check made earlier hid the button on a phone answering.
+    if (call.video) showSwitchIfTwoCameras();
   }
 
   /* ── Surviving a network switch ──
@@ -764,7 +798,7 @@
   }
 
   window.srltcpOnCallSignal = onSignal;
-  window.srltcpCalls = { startCall, hangup, state: () => call.state };
+  window.srltcpCalls = { startCall, hangup, minimize, expand, isMini, state: () => call.state };
 
   document.addEventListener("DOMContentLoaded", bind);
   if (document.readyState !== "loading") bind();
@@ -805,6 +839,43 @@
         e.stopPropagation();
       }
     }, true);
+    $("#call-minimize")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      minimize();
+    });
+    $("#call-mini-hangup")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hangup();
+    });
+    // The small window: drag it; a tap (no drag) brings the call back.
+    let drag = null;
+    ov?.addEventListener("pointerdown", (e) => {
+      if (!isMini() || e.target.closest("#call-mini-hangup")) return;
+      const r = ov.getBoundingClientRect();
+      e.preventDefault();  // (dragging the window never selects the chat's text)
+      drag = { id: e.pointerId, dx: e.clientX - r.left, dy: e.clientY - r.top, x: e.clientX, y: e.clientY, moved: false };
+      ov.setPointerCapture?.(e.pointerId);
+    });
+    ov?.addEventListener("pointermove", (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 8) return;
+      drag.moved = true;
+      const r = ov.getBoundingClientRect();
+      const left = Math.max(4, Math.min(window.innerWidth - r.width - 4, e.clientX - drag.dx));
+      const top = Math.max(4, Math.min(window.innerHeight - r.height - 4, e.clientY - drag.dy));
+      Object.assign(ov.style, { left: `${left}px`, top: `${top}px`, right: "auto", bottom: "auto" });
+    });
+    const endDrag = (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const tapped = !drag.moved && e.type === "pointerup";
+      drag = null;
+      if (tapped && isMini() && Date.now() >= earUntil) expand();
+    };
+    ov?.addEventListener("pointerup", endDrag);
+    ov?.addEventListener("pointercancel", endDrag);
+    navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+      if (call.local && call.video) showSwitchIfTwoCameras();
+    });
     // Show the remote picture only once frames arrive (no empty player / play icon).
     const rv = $("#call-remote-video");
     const markPlaying = () => {

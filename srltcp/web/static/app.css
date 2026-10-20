@@ -1677,6 +1677,25 @@ label.field > span {
 /* ── Calls ── */
 .call-overlay { position: fixed; inset: 0; z-index: 900; background: radial-gradient(circle at 50% 30%, #1d2333, #07080c); display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: max(2rem, env(safe-area-inset-top)) 1rem max(2rem, env(safe-area-inset-bottom)); }
 .call-overlay.hidden { display: none; }
+/* Back to chat during a call: the call shrinks to a small window you can
+   drag; tap it for full screen again. */
+.call-minimize { position: absolute; left: 1rem; top: max(1rem, env(safe-area-inset-top)); z-index: 3; display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.8rem; border: none; border-radius: 999px; background: rgba(0,0,0,0.45); color: #fff; font: inherit; font-size: 0.85rem; cursor: pointer; }
+.call-minimize svg { width: 18px; height: 18px; }
+.call-minimize.hidden { display: none; }
+.call-mini-hangup { display: none; }
+.call-overlay.mini { inset: auto; right: 12px; top: calc(72px + env(safe-area-inset-top)); width: min(34vw, 150px); height: min(46vw, 200px); padding: 0; border-radius: 16px; overflow: hidden; justify-content: flex-end; box-shadow: 0 10px 30px rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.15); cursor: pointer; touch-action: none; z-index: 900; }
+.call-overlay.mini:not(.video), .call-overlay.mini:not(.remote-playing) { width: 190px; height: 64px; flex-direction: row; align-items: center; justify-content: flex-start; padding: 0 3rem 0 0.75rem; border-radius: 999px; }
+.call-overlay.mini .call-actions, .call-overlay.mini .call-local-video, .call-overlay.mini .call-kind,
+.call-overlay.mini .call-minimize { display: none !important; }
+.call-overlay.mini .call-info { margin: 0; text-align: left; font-size: 0.75rem; line-height: 1.25; min-width: 0; }
+.call-overlay.mini.video.remote-playing .call-info { position: absolute; left: 0; right: 0; bottom: 0; padding: 1.2rem 0.5rem 0.4rem; background: linear-gradient(transparent, rgba(0,0,0,0.65)); }
+.call-overlay.mini .call-avatar { display: none; }
+.call-overlay.mini .call-peer-name { font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.call-overlay.mini .call-status { margin-top: 0; font-size: 0.7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.call-overlay.mini .call-mini-hangup { display: inline-flex; align-items: center; justify-content: center; position: absolute; top: 8px; right: 8px; z-index: 3; width: 36px; height: 36px; border: none; border-radius: 50%; background: #f0546a; color: #fff; cursor: pointer; }
+.call-overlay.mini:not(.video) .call-mini-hangup, .call-overlay.mini:not(.remote-playing) .call-mini-hangup { top: 14px; }
+.call-overlay.mini .call-mini-hangup svg { width: 20px; height: 20px; }
+@media (min-width: 900px) { .call-overlay.mini { top: 84px; right: 24px; width: 240px; height: 180px; } }
 /* Nothing on the call screen highlights or pops a menu (an ear on the glass). */
 .call-overlay { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
 .call-remote-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; background: #000; }

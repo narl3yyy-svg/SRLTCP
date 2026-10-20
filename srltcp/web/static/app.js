@@ -3981,7 +3981,9 @@
      long-press → "Select text", then the phone's own handles and Copy. */
   function textSelectedIn(el) {
     const sel = window.getSelection?.();
-    return !!(sel && !sel.isCollapsed && sel.rangeCount && el.contains(sel.anchorNode));
+    if (!sel || sel.isCollapsed || !sel.rangeCount || !el.contains(sel.anchorNode)) return false;
+    const node = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+    return !!node?.closest?.(".bubble-text");  // (message text, not anything else)
   }
 
   function selectMessageText(id) {
@@ -4010,7 +4012,7 @@
     if (scrollToBottom || !preserveScroll) state.stickBottom = true;
     const wasAtBottom = state.stickBottom || (el.clientHeight > 0 && isNearBottom(el));
     state.messageCache = msgs;
-    if (textSelectedIn(el)) {
+    if (msgs.length && textSelectedIn(el)) {
       // (Rebuilding now would drop the text you're selecting: once you're done.)
       state.renderDeferred = { preserveScroll, scrollToBottom };
       return;
@@ -4840,8 +4842,13 @@
 
   function androidNavigateBack() {
     if (!isAndroidApp()) return false;
-    // During a call the back gesture must not hang up or leave the call screen.
-    if ($("#call-overlay") && !$("#call-overlay").classList.contains("hidden")) return true;
+    // During a call, back goes to the chat while the call goes on (a small
+    // window); it never hangs up. A ringing call stays on screen.
+    const callOv = $("#call-overlay");
+    if (callOv && !callOv.classList.contains("hidden") && !callOv.classList.contains("mini")) {
+      window.srltcpCalls?.minimize?.();
+      return true;
+    }
     if (!$("#msg-sheet")?.classList.contains("hidden")) {
       closeMessageSheet();
       return true;
@@ -5008,6 +5015,8 @@
     notifyUser,
     peerByHash,
     getSettings: () => state.settings,
+    // (A call shrunk to its small window: show the chat with that contact.)
+    openChat: (hash, name) => selectPeer(hash, name || peerByHash(hash)?.name || ""),
     getSelected: () => (state.selectedPeer
       ? { hash: state.selectedPeer, name: state.selectedName || state.selectedPeer.slice(0, 8) }
       : null),

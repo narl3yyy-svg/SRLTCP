@@ -1,5 +1,34 @@
 # SRLTCP Release Notes
 
+## v0.14.2 (2026-10-20)
+
+### Chat during a call
+- **Go back to the chat while a call goes on.** Tap **Chat** in the
+  top-left corner of the call, or use Android's back gesture. The call
+  shrinks to a small window at the top right, and the chat with that
+  contact opens, so you can send messages, photos and files, or open other
+  chats.
+  - A video call keeps showing their video in the window; a voice call
+    becomes a small pill with the call timer.
+  - Drag the window anywhere. Tap it to bring the call back to full
+    screen, or hang up with its red button.
+  - A ringing call is always shown full screen, and back never hangs up.
+
+### Fixed
+- **The front/rear camera button was sometimes missing on the phone that
+  answers a video call** (for example, a laptop calling a phone). The app
+  counted the cameras before it had opened one, and until then the
+  browser shows only one camera, for privacy. It now counts them once the
+  camera is open, and again if a camera is plugged in or removed during
+  the call.
+
+### Tested
+- Full end-to-end simulation with two real nodes and browsers. The
+  answering side, made to behave like a phone with two cameras, shows the
+  switch button. The call shrinks to the small window with the video still
+  playing, a message sent from the chat meanwhile arrives, and the window
+  can be dragged and tapped back to full screen.
+
 ## v0.14.1 (2026-10-20)
 
 ### Copy and select message text
