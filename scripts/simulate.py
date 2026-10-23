@@ -729,6 +729,8 @@ async def group_flow() -> None:
             await carol.click("#btn-menu")
         await carol.click(".peer-tab[data-tab=groups]")
         await carol.wait_for_selector("#contacts [data-group] .unread-badge", timeout=15000)
+        toasts = await carol.inner_text("#toasts")
+        assert "Hi all, Bob here" not in toasts, ("message popped up over the app", toasts)
         await carol.tap("#contacts [data-group]")
         await carol.wait_for_selector(".bubble.in >> text=Hi all, Bob here", timeout=15000)
         sender = await carol.text_content(".bubble.in .bubble-sender")

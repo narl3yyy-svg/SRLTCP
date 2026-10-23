@@ -1,5 +1,13 @@
 # SRLTCP Release Notes
 
+## v0.14.5 (2026-10-23)
+
+- **No more message pop-ups over the app.** A message from a chat you don't
+  have open no longer shows up as a box at the bottom of the screen. It
+  shows as the unread count on that contact or group, and, when the app
+  isn't on screen, as the usual phone or system notification. Other notices
+  (a folder shared with you, being added to a group) still pop up.
+
 ## v0.14.4 (2026-10-23)
 
 ### Copying messages

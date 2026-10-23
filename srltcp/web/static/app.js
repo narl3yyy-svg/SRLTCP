@@ -408,8 +408,11 @@
     setTimeout(() => el.remove(), type === "error" ? 5200 : 3600);
   }
 
-  function notifyUser(title, body, { tag, silent = false } = {}) {
-    if (!silent) toast(body, "info");
+  // inApp: false for messages (no pop-up over the app: the unread count on
+  // the contact shows them; the phone/system notification still comes when
+  // the app isn't on screen).
+  function notifyUser(title, body, { tag, silent = false, inApp = true } = {}) {
+    if (!silent && inApp) toast(body, "info");
     const hidden = document.hidden;
     const androidBridge = window.SRLTCPAndroid;
     const androidBg = typeof androidBridge?.isInBackground === "function"
@@ -4645,7 +4648,7 @@
       const text = m.msg_type === "text" || m.msg_type === "group_text"
         ? (m.text || "").slice(0, 120) : `Sent a ${m.msg_type}`;
       notifyUser(title, gid ? `${memberName(gid, m.sender_hash)}: ${text}` : text,
-        { tag: gid ? `group-${gid}` : `msg-${m.sender_hash}`, silent: !document.hidden && !isAndroidApp() });
+        { tag: gid ? `group-${gid}` : `msg-${m.sender_hash}`, silent: !document.hidden && !isAndroidApp(), inApp: false });
       if (isAndroidApp() && state.androidView !== "chat") bumpUnread(gid || m.sender_hash);
     }
     if (!messageForSelectedPeer(m)) {
@@ -4655,7 +4658,7 @@
           bumpUnread(gid);
           const g = groupById(gid);
           notifyUser(g?.name || "Group", `${memberName(gid, m.sender_hash)}: ${(m.text || "").slice(0, 120)}`,
-            { tag: `group-${gid}` });
+            { tag: `group-${gid}`, inApp: false });
         }
         return;
       }
@@ -4665,7 +4668,7 @@
         notifyUser(
           sender?.name || "New message",
           m.msg_type === "text" ? (m.text || "").slice(0, 120) : `Sent a ${m.msg_type}`,
-          { tag: `msg-${m.sender_hash}` }
+          { tag: `msg-${m.sender_hash}`, inApp: false }
         );
       }
       return;
