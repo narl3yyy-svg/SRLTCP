@@ -170,6 +170,11 @@ class SRLTCPService : Service() {
             }
         }
 
+        /** The call's microphone/camera mode again (e.g. entering the floating window). */
+        fun reapplyCall() {
+            instance?.let { if (call.active) it.applyCall() }
+        }
+
         /** True while the service is up in the foreground; lets MainActivity retry a failed start. */
         @Volatile
         var running = false

@@ -153,6 +153,12 @@ async def desktop_flow() -> None:
         await bob.click("text=Hey Bob, got it loud and clear", button="right")
         labels = await bob.locator("#msg-sheet-menu .msg-sheet-item span").all_inner_texts()
         assert "Copy" in labels and "Select text" not in labels, labels
+        # A long-press held on the raised message highlights nothing.
+        await bob.evaluate("""(() => { const t = document.querySelector('.msg-sheet-lift');
+            const r = document.createRange(); r.selectNodeContents(t);
+            const s = getSelection(); s.removeAllRanges(); s.addRange(r); })()""")
+        await asyncio.sleep(0.2)
+        assert await bob.evaluate("getSelection().isCollapsed"), "raised message got highlighted"
         await bob.click("#msg-sheet", position={"x": 5, "y": 5})
         await bob.wait_for_selector("#msg-sheet", state="hidden", timeout=3000)
         print("message menu: Copy (no Select text)")
@@ -263,6 +269,26 @@ async def desktop_flow() -> None:
         await alice.evaluate("window.srltcpOnPip(false)")
         assert await alice.is_visible("#call-hangup")
         print("call: floating-window layout shows only the picture, and comes back")
+        # Phone at the ear (Android tells the page): black, videos hidden; back after.
+        await alice.evaluate("window.srltcpOnNear(true)")
+        assert not await alice.is_visible("#call-remote-video") and not await alice.is_visible("#call-hangup")
+        await alice.evaluate("window.srltcpOnNear(false)")
+        assert await alice.is_visible("#call-remote-video") and await alice.is_visible("#call-hangup")
+        t0 = await alice.evaluate("document.querySelector('#call-remote-video').currentTime")
+        await alice.wait_for_function(
+            f"document.querySelector('#call-remote-video').currentTime > {t0} + 0.5", timeout=5000)
+        print("call: at the ear the screen is black (videos hidden), video goes on after")
+        # Watchdog: paused playback resumes; a camera Android cut off comes back.
+        await alice.evaluate("document.querySelector('#call-remote-audio').pause()")
+        await alice.evaluate("document.querySelector('#call-local-video').srcObject.getVideoTracks()[0].stop()")
+        await alice.wait_for_function(
+            "!document.querySelector('#call-remote-audio').paused"
+            " && document.querySelector('#call-local-video').srcObject.getVideoTracks()"
+            ".some((t) => t.readyState === 'live')", timeout=8000)
+        t0 = await bob.evaluate("document.querySelector('#call-remote-video').currentTime")
+        await bob.wait_for_function(
+            f"document.querySelector('#call-remote-video').currentTime > {t0} + 0.5", timeout=8000)
+        print("call: paused sound resumed and a lost camera came back by themselves")
         # Network switch mid-call: Bob's node goes silent for longer than
         # WebRTC waits (~30 s). The call must hold on and resume by itself.
         import signal as _signal

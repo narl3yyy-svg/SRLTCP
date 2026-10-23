@@ -203,6 +203,11 @@ class MainActivity : AppCompatActivity() {
             // Remote call audio/video starts from code, not from a tap on the
             // <video>; without this the WebView shows a play button and stays silent.
             wv.settings.mediaPlaybackRequiresUserGesture = false
+            // The page (and a call in it) keeps full priority when it isn't on
+            // screen: the floating window, another app in front.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                wv.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+            }
             // The app scales to the screen; only the image viewer zooms (in JS).
             wv.settings.setSupportZoom(false)
             wv.settings.builtInZoomControls = false
@@ -718,6 +723,7 @@ class MainActivity : AppCompatActivity() {
         val controller = androidx.core.view.WindowCompat.getInsetsController(window, decor)
         if (near) {
             if (proximityCover != null) return
+            deliverToWeb("srltcpOnNear", "true")  // (the page hides its videos too)
             val cover = android.view.View(this).apply {
                 setBackgroundColor(0xFF000000.toInt())
                 isClickable = true
@@ -736,12 +742,15 @@ class MainActivity : AppCompatActivity() {
             controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
         } else {
             val cover = proximityCover ?: return
+            deliverToWeb("srltcpOnNear", "false")
             decor.removeView(cover)
             proximityCover = null
             window.attributes = window.attributes.apply {
                 screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
             }
             controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            // Some phones reset the call's audio route while the screen was off.
+            if (callAudioActive) handler.postDelayed(reapplyCallRoute, 300)
         }
     }
 
@@ -803,6 +812,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPictureInPictureModeChanged(isInPip: Boolean, newConfig: android.content.res.Configuration) {
         super.onPictureInPictureModeChanged(isInPip, newConfig)
+        if (isInPip) {
+            // The call keeps playing in the window (nothing paused), and Android
+            // is reminded the microphone/camera stay in use (the window is visible).
+            webView?.onResume()
+            webView?.resumeTimers()
+            if (callInfoActive) SRLTCPService.reapplyCall()
+        }
         deliverToWeb("srltcpOnPip", if (isInPip) "true" else "false")
         updateProximityGuard()
     }

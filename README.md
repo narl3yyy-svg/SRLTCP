@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.14.3 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.14.4 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -238,7 +238,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.14.3.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.14.4.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -246,7 +246,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.14.3.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.14.3.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.14.4.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -356,9 +356,9 @@ Voice and video calls use WebRTC. Offer/answer are sent inside the encrypted SRL
 
 **Earpiece / speaker (Android).** Calls start on the earpiece (voice) or the loudspeaker (video). A wired or Bluetooth headset takes over when connected. The speaker button switches between them. The app applies the route again when the other side's audio starts and when a headset is plugged in or removed, because the WebView's audio engine can reset it on some phones. On Android 12+ it uses `setCommunicationDevice` and falls back to the speakerphone switch if the phone refuses. Speaker volume during a call is the phone's *call* volume: press the volume keys while in the call.
 
-**At your ear (Android).** During a call (voice or video), while the call screen is in front, covering the proximity sensor (your ear, a hand) turns the screen off like the phone app: an ear or cheek can't end the call, go home or open the notifications; it comes back when you move the phone away. Phones differ, so the app uses both the system's proximity screen-off and its own reading of the sensor (a black, untouchable screen with the status and navigation bars hidden). As a backup, touches with a large contact area or several points at once press nothing on the call screen.
+**At your ear (Android).** During a call (voice or video), while the call screen is in front, covering the proximity sensor (your ear, a hand) turns the screen off like the phone app: an ear or cheek can't end the call, go home or open the notifications; it comes back when you move the phone away. Phones differ, so the app uses both the system's proximity screen-off and its own reading of the sensor (a black, untouchable screen with the status and navigation bars hidden; in a video call the videos are hidden too, since a phone may draw video above everything else). When the screen comes back, the app restarts the call's sound and applies the earpiece/speaker route again. The speaker button is blue while the loudspeaker is on. As a backup, touches with a large contact area or several points at once press nothing on the call screen.
 
-**Leaving the app during a call (Android).** Swipe home or switch apps and the call goes on: a **video call** shrinks into a small floating window over your other apps (picture-in-picture, like Maps while navigating; tap it to return, or use its hang-up button), and every call shows a **Call in progress** notification with the timer, *tap to return* and **Hang up**. The microphone (and camera, for video) stay on meanwhile; the app tells Android so (a foreground service for the microphone/camera, during calls only).
+**Leaving the app during a call (Android).** Swipe home or switch apps and the call goes on: a **video call** shrinks into a small floating window over your other apps (picture-in-picture, like Maps while navigating; tap it to return, or use its hang-up button), and every call shows a **Call in progress** notification with the timer, *tap to return* and **Hang up**. The microphone (and camera, for video) stay on meanwhile; the app tells Android so (a foreground service for the microphone/camera, during calls only). During every call a watchdog checks every 2 s that the sound and picture are still playing and that the microphone and camera still deliver, and restarts whatever stopped (e.g. a camera Android took away while the app was in the background).
 
 **PC camera (Windows).** The browser needs the camera twice: allowed for the SRLTCP page (icon at the left of the address bar) and allowed by Windows in *Settings → Privacy & security → Camera* (and *Microphone*), including **Let desktop apps access your camera**, since browsers count as desktop apps. Only one app can use a webcam at a time on Windows: close Teams, Zoom, Skype, the Camera app or another tab using it. Some laptops also have a camera privacy switch or key. If the camera still can't be opened, the call continues with voice and the app shows the reason.
 

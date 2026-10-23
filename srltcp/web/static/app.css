@@ -1721,7 +1721,7 @@ label.field > span {
 .call-actions { position: relative; z-index: 2; display: flex; justify-content: center; gap: min(1.5rem, 3vw); max-width: 100%; }
 .call-actions.hidden { display: none; }
 .call-btn { width: min(64px, 15vw); height: min(64px, 15vw); min-width: 44px; min-height: 44px; flex: 0 0 auto; border-radius: 50%; border: none; font-size: 1.5rem; background: rgba(255,255,255,0.14); color: #fff; cursor: pointer; }
-.call-btn.active { background: #fff; color: #111; }
+.call-btn.active { background: var(--accent, #5b8def); color: #fff; }  /* (speaker on: blue) */
 .call-btn.accept { background: #3ecf8e; }
 .call-btn.decline { background: #f0546a; }
 .call-btn.hidden { display: none; }
@@ -1874,6 +1874,12 @@ html, body { touch-action: pan-x pan-y; }
 @media (hover: none), (pointer: coarse) {
   .messages, .messages * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 }
+/* The long-press menu and the raised copy of the message never highlight. */
+.msg-sheet, .msg-sheet * { -webkit-user-select: none !important; user-select: none !important; -webkit-touch-callout: none !important; }
+/* Phone at your ear (proximity sensor covered): black, the videos hidden too
+   (a phone may draw video above everything else on the screen). */
+.call-overlay.near { background: #000 !important; }
+.call-overlay.near > * { visibility: hidden !important; }
 .msg-sheet {
   position: fixed;
   inset: 0;

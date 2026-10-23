@@ -3579,6 +3579,7 @@
     const m = messageById(id);
     if (!m) return;
     blurComposer();
+    window.getSelection?.()?.removeAllRanges();  // (no phone highlight: the menu's Copy instead)
     const file = isFileMessage(m);
     const live = file ? mergeTransferMeta(m.metadata?.transfer_id || "", m.metadata || {}) : null;
     const items = [
@@ -3772,6 +3773,8 @@
     }, true);
   })();
 
+  // (The finger still down on the raised message: no phone menu or highlight.)
+  $("#msg-sheet")?.addEventListener("contextmenu", (ev) => ev.preventDefault());
   $("#msg-sheet")?.addEventListener("click", (ev) => {
     const item = ev.target.closest("[data-sheet-action]");
     if (item) {
@@ -3982,6 +3985,13 @@
   }
 
   document.addEventListener("selectionchange", () => {
+    // A long-press held on, while the menu is open: the phone would start
+    // highlighting the raised message. Never: Copy is in the menu.
+    if (!$("#msg-sheet")?.classList.contains("hidden")) {
+      const sel = window.getSelection?.();
+      if (sel && !sel.isCollapsed) sel.removeAllRanges();
+      return;
+    }
     const el = $("#messages");
     if (!el || textSelectedIn(el)) return;
     if (state.renderDeferred) renderMessages(state.messageCache, state.renderDeferred);

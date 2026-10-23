@@ -1,5 +1,33 @@
 # SRLTCP Release Notes
 
+## v0.14.4 (2026-10-23)
+
+### Copying messages
+- **No more phone highlight when you long-press a message.** Holding on
+  could still highlight the raised copy of the message above the menu
+  (with the phone's *Copy / Select all / Share* bar). Now only the app's
+  own menu appears; its **Copy** copies the whole message.
+
+### Calls
+- **At your ear in a video call.** The screen now goes black in video
+  calls too. The covered sensor already blacked out voice calls, but in a
+  video call the phone draws the video above everything else, so it showed
+  through. The app now hides the videos as well while the sensor is
+  covered.
+- **Sound coming back after the screen was off at your ear.** Sometimes one
+  side couldn't hear the other afterwards. When the screen comes back, the
+  app now restarts the call's sound and applies the earpiece/speaker route
+  again.
+- **A call keeps itself going.** During every call a watchdog checks every
+  2 seconds that sound and picture are still playing and that your
+  microphone and camera still deliver. It restarts whatever stopped, for
+  example a camera Android took away while the app was in the background.
+- **The floating window (picture-in-picture)** no longer freezes on the
+  first frame. Entering the window keeps the call running at full
+  priority, restarts playback, and reminds Android that the microphone and
+  camera are still in use.
+- **The speaker button is blue** while the loudspeaker is on.
+
 ## v0.14.3 (2026-10-23)
 
 ### Calls when you leave the app (Android)

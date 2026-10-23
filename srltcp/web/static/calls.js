@@ -89,7 +89,57 @@
       ov.classList.remove("pip");
       if (miniBeforePip) minimize();
     }
+    keepMediaGoing();
   };
+  // Android: the proximity sensor is covered (phone at your ear) or free again.
+  window.srltcpOnNear = (near) => {
+    $("#call-overlay")?.classList.toggle("near", !!near);
+    if (!near && call.state !== "idle") {
+      keepMediaGoing();
+      if (inCall()) routeAudio(true);  // (some phones reset the audio route meanwhile)
+    }
+  };
+
+  /* Keeping a call's sound and picture going: playback the WebView paused
+     (screen off, floating window), or a microphone/camera Android took away
+     while the app was in the background, comes back by itself. */
+  function keepMediaGoing() {
+    if (call.state === "idle") return;
+    for (const sel of ["#call-remote-audio", "#call-remote-video"]) {
+      const el = $(sel);
+      if (el?.srcObject && el.paused) el.play?.().catch(() => {});
+    }
+    if (call.local?.getTracks().some((t) => t.readyState === "ended")) recoverLocal();
+  }
+
+  async function recoverLocal() {
+    if (!call.pc || !call.local || call.recovering || call.switching) return;
+    call.recovering = true;
+    try {
+      for (const old of call.local.getTracks().filter((t) => t.readyState === "ended")) {
+        let track = null;
+        try {
+          const stream = old.kind === "audio"
+            ? await navigator.mediaDevices.getUserMedia({ audio: AUDIO })
+            : await openCamera(call.facing);
+          track = old.kind === "audio" ? stream.getAudioTracks()[0] : stream.getVideoTracks()[0];
+        } catch (_) { continue; }  // (still not allowed: the next check tries again)
+        if (!track || !call.local) continue;
+        track.enabled = old.kind === "audio" ? !call.muted : !call.cameraOff;
+        const sender = call.pc.getSenders().find((x) => x.track === old)
+          || call.pc.getSenders().find((x) => x.track?.kind === old.kind);
+        call.local.removeTrack(old);
+        call.local.addTrack(track);
+        try { await sender?.replaceTrack(track); } catch (_) { /* keeps the old sender state */ }
+        if (old.kind === "video") {
+          const lv = $("#call-local-video");
+          if (lv) { lv.srcObject = null; lv.srcObject = call.local; lv.play?.().catch(() => {}); }
+        }
+      }
+    } finally {
+      call.recovering = false;
+    }
+  }
   // Android app: while a call rings or runs it may show over the lock screen;
   // the phone itself rings (notification with the phone's ringtone).
   function callScreen(on) {
@@ -353,6 +403,8 @@
 
   function startClock() {
     if (!call.startedAt) call.startedAt = Date.now();
+    clearInterval(call.healthTimer);
+    call.healthTimer = setInterval(keepMediaGoing, 2000);
     clearInterval(call.clockTimer);
     call.clockTimer = setInterval(() => {
       const s = Math.floor((Date.now() - call.startedAt) / 1000);
@@ -365,6 +417,7 @@
     clearTimeout(call.connectTimer);
     clearInterval(call.clockTimer);
     clearInterval(call.recoverTimer);
+    clearInterval(call.healthTimer);
     try { call.pc?.close(); } catch (_) { /* ignore */ }
     call.local?.getTracks().forEach((t) => t.stop());
     Object.assign(call, {
@@ -372,12 +425,12 @@
       remote: null, role: null, state: "idle", pendingOffer: null, pendingIce: [],
       ringTimer: null, muted: false, cameraOff: false, speaker: false,
       startedAt: 0, lostAt: 0, recoverTimer: null, restarting: false, facing: "user", switching: false,
-      narrow: false, connectTimer: null,
+      narrow: false, connectTimer: null, healthTimer: null, recovering: false,
     });
     $("#call-overlay")?.classList.remove("rear-camera");
     routeAudio(false);  // (also ends the Android call notification)
     callScreen(false);
-    $("#call-overlay")?.classList.remove("pip");
+    $("#call-overlay")?.classList.remove("pip", "near");
     updateButtons();
     hideOverlay();
   }
