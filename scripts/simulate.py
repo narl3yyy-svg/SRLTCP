@@ -150,6 +150,12 @@ async def desktop_flow() -> None:
         await alice.press("#msg-input", "Enter")
         await bob.wait_for_selector("text=Hey Bob, got it loud and clear", timeout=10000)
         print("bob received reply")
+        await bob.click("text=Hey Bob, got it loud and clear", button="right")
+        labels = await bob.locator("#msg-sheet-menu .msg-sheet-item span").all_inner_texts()
+        assert "Copy" in labels and "Select text" not in labels, labels
+        await bob.click("#msg-sheet", position={"x": 5, "y": 5})
+        await bob.wait_for_selector("#msg-sheet", state="hidden", timeout=3000)
+        print("message menu: Copy (no Select text)")
         await shot(bob, "02-bob-chat")
 
         # --- File transfer ---
@@ -248,6 +254,15 @@ async def desktop_flow() -> None:
             "!document.querySelector('#call-overlay').classList.contains('mini')", timeout=5000)
         print("call: back to chat in a small window (video kept playing, message sent, "
               "window dragged), tap brings the call back")
+        # Android's floating window (picture-in-picture): only their picture.
+        await alice.evaluate("window.srltcpOnPip(true)")
+        assert await alice.evaluate("document.querySelector('#call-overlay').classList.contains('pip')")
+        assert not await alice.is_visible("#call-hangup") and not await alice.is_visible("#call-minimize")
+        assert await alice.is_visible("#call-remote-video")
+        await shot(alice, "05c-alice-pip")
+        await alice.evaluate("window.srltcpOnPip(false)")
+        assert await alice.is_visible("#call-hangup")
+        print("call: floating-window layout shows only the picture, and comes back")
         # Network switch mid-call: Bob's node goes silent for longer than
         # WebRTC waits (~30 s). The call must hold on and resume by itself.
         import signal as _signal

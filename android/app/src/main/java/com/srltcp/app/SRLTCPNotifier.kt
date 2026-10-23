@@ -17,6 +17,7 @@ object SRLTCPNotifier {
     const val CHANNEL_NODE = "srltcp_node"
     const val CHANNEL_ALERTS = "srltcp_alerts"
     const val CHANNEL_CALLS = "srltcp_calls"
+    const val CHANNEL_ONGOING = "srltcp_ongoing_call"
     const val NOTIFICATION_NODE = 7825
     const val NOTIFICATION_CALL = 9500
     const val EXTRA_INCOMING_CALL = "com.srltcp.app.INCOMING_CALL"
@@ -62,6 +63,19 @@ object SRLTCPNotifier {
             vibrationPattern = RING_VIBRATION
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         }
+        // A call under way (while you're in another app): silent, in the
+        // notifications, with the call timer and Hang up.
+        val ongoing = NotificationChannel(
+            CHANNEL_ONGOING,
+            "Call in progress",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Shows a call that's going on, to return to it or hang up"
+            setShowBadge(false)
+            setSound(null, null)
+            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+        }
+        mgr.createNotificationChannel(ongoing)
         mgr.createNotificationChannel(node)
         mgr.createNotificationChannel(alerts)
         mgr.createNotificationChannel(calls)
@@ -129,6 +143,43 @@ object SRLTCPNotifier {
         } catch (e: SecurityException) {
             // Notifications turned off for the app: the in-app screen still shows the call.
         }
+    }
+
+    /** The call under way: name, voice/video, timer; tap returns, Hang up ends it. */
+    fun buildOngoingCall(context: Context, name: String, video: Boolean, startedAt: Long): Notification {
+        ensureChannels(context)
+        val open = PendingIntent.getActivity(
+            context,
+            NOTIFICATION_CALL + 3,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val hangUp = PendingIntent.getService(
+            context,
+            NOTIFICATION_CALL + 4,
+            Intent(context, SRLTCPService::class.java).setAction(SRLTCPService.ACTION_HANGUP_CALL),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val kind = if (video) "Video call" else "Voice call"
+        val private = PrivacyPrefs.privateNotifications(context)
+        return NotificationCompat.Builder(context, CHANNEL_ONGOING)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(if (private) "SRLTCP" else name.ifBlank { "SRLTCP" })
+            .setContentText("$kind · tap to return")
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setUsesChronometer(true)
+            .setWhen(startedAt)
+            .setShowWhen(true)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setContentIntent(open)
+            .addAction(0, "Hang up", hangUp)
+            .build()
     }
 
     fun stopRinging(context: Context) {

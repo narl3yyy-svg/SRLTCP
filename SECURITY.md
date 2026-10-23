@@ -113,7 +113,7 @@ Each contact has a **safety number**: 60 digits computed from both phones' ident
 ### Android
 
 - Build APKs locally from a trusted source checkout; verify `scripts/sync-android-python.sh` ran before Gradle build.
-- Grant **USB permissions** only to the serial adapters you use: Android asks once per adapter, and SRLTCP only ever opens USB serial devices (the bridge's driver list never claims keyboards, storage or headsets).
+- During a call only, the Android app runs its background service as a microphone (and, for video, camera) foreground service so a call keeps working when you switch apps; Android shows it as the *Call in progress* notification and the green/orange in-use dots, and it goes back to a plain background service when the call ends. Grant **USB permissions** only to the serial adapters you use: Android asks once per adapter, and SRLTCP only ever opens USB serial devices (the bridge's driver list never claims keyboards, storage or headsets).
 - Grant **notification permission** on Android 13+ so the foreground service can keep the node alive.
 - The embedded WebView trusts only `127.0.0.1` / `localhost` self-signed TLS.
 - App data (identities, contacts, chats, settings) lives in the app files directory, encrypted with a key wrapped by the Android Keystore; uninstall clears it. Android cloud backup is off for the app (`allowBackup=false`): use *Settings → Privacy → Backup* instead.

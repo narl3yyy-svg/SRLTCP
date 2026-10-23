@@ -120,7 +120,6 @@
     if (!ok) throw new Error("copy refused");
   }
 
-  const ICON_TEXT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg>`;
   const ICON_SELECT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>`;
   const ICON_INFO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>`;
   const ICON_TRASH = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>`;
@@ -3584,7 +3583,6 @@
     const live = file ? mergeTransferMeta(m.metadata?.transfer_id || "", m.metadata || {}) : null;
     const items = [
       !file && { action: "copy", label: "Copy", icon: ICON_COPY },
-      !file && m.text && { action: "select-text", label: "Select text", icon: ICON_TEXT },
       file && live?.state === "complete" && { action: "save", label: "Save", icon: ICON_SAVE },
       { action: "select", label: "Select", icon: ICON_SELECT },
       { action: "info", label: "Info", icon: ICON_INFO },
@@ -3632,8 +3630,6 @@
       const tid = m.metadata?.transfer_id || "";
       const url = `/api/transfers/${encodeURIComponent(tid)}/file?download=1`;
       saveTransferFile(tid, url, m.metadata?.filename || m.text || "file");
-    } else if (action === "select-text") {
-      selectMessageText(id);
     } else if (action === "select") {
       startSelecting(id);
     } else if (action === "info") {
@@ -3735,7 +3731,7 @@
       if (ev.button > 0) return;
       const row = target(ev);
       fired = false;
-      if (!row || state.selected || row.classList.contains("text-selecting")) return;
+      if (!row || state.selected) return;
       start = { x: ev.clientX, y: ev.clientY };
       cancel();
       timer = setTimeout(() => {
@@ -3753,8 +3749,7 @@
     el.addEventListener("contextmenu", (ev) => {  // (right-click on a PC; Android's own long-press)
       const row = target(ev);
       if (!row) return;
-      // (Selecting its text: the phone's own menu, with Copy.)
-      if (row.classList.contains("text-selecting") || textSelectedIn(el)) return;
+      if (textSelectedIn(el)) return;  // (right-click on text you selected with the mouse)
       ev.preventDefault();
       if (state.selected || fired) return;
       cancel();
@@ -3977,8 +3972,8 @@
     return (address || "").includes(".onion") || address === "tor";
   }
 
-  /* Selecting a message's text: with a mouse just drag over it; on a phone,
-     long-press → "Select text", then the phone's own handles and Copy. */
+  /* Selecting part of a message with a mouse (on a PC); on a phone,
+     long-press → Copy copies the whole message. */
   function textSelectedIn(el) {
     const sel = window.getSelection?.();
     if (!sel || sel.isCollapsed || !sel.rangeCount || !el.contains(sel.anchorNode)) return false;
@@ -3986,23 +3981,9 @@
     return !!node?.closest?.(".bubble-text");  // (message text, not anything else)
   }
 
-  function selectMessageText(id) {
-    const row = document.querySelector(`#messages [data-msg-id="${CSS.escape(id)}"]`);
-    const text = row?.querySelector(".bubble-text");
-    if (!text) return;
-    document.querySelectorAll("#messages .text-selecting").forEach((r) => r.classList.remove("text-selecting"));
-    row.classList.add("text-selecting");
-    const range = document.createRange();
-    range.selectNodeContents(text);
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-  }
-
   document.addEventListener("selectionchange", () => {
     const el = $("#messages");
     if (!el || textSelectedIn(el)) return;
-    el.querySelectorAll(".text-selecting").forEach((r) => r.classList.remove("text-selecting"));
     if (state.renderDeferred) renderMessages(state.messageCache, state.renderDeferred);
   });
 

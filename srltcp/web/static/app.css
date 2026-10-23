@@ -1696,6 +1696,16 @@ label.field > span {
 .call-overlay.mini:not(.video) .call-mini-hangup, .call-overlay.mini:not(.remote-playing) .call-mini-hangup { top: 14px; }
 .call-overlay.mini .call-mini-hangup svg { width: 20px; height: 20px; }
 @media (min-width: 900px) { .call-overlay.mini { top: 84px; right: 24px; width: 240px; height: 180px; } }
+/* Android's floating window (picture-in-picture): just their picture (or
+   their initial and the timer), no buttons. */
+.call-overlay.pip { padding: 0; justify-content: center; }
+.call-overlay.pip .call-actions, .call-overlay.pip .call-local-video, .call-overlay.pip .call-kind,
+.call-overlay.pip .call-minimize, .call-overlay.pip .call-mini-hangup { display: none !important; }
+.call-overlay.pip .call-info { margin: 0; }
+.call-overlay.pip .call-avatar { width: 56px; height: 56px; font-size: 1.5rem; margin-bottom: 0.4rem; }
+.call-overlay.pip .call-peer-name { font-size: 1rem; }
+.call-overlay.pip .call-status { font-size: 0.75rem; }
+.call-overlay.pip.video.remote-playing .call-info { display: none; }
 /* Nothing on the call screen highlights or pops a menu (an ear on the glass). */
 .call-overlay { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
 .call-remote-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; background: #000; }
@@ -1856,12 +1866,14 @@ html, body { touch-action: pan-x pan-y; }
 /* Long-press a message: the action sheet next to it (like Signal) */
 .bubble, .album-tile { -webkit-touch-callout: none; }
 .messages .bubble { -webkit-user-select: none; user-select: none; }
-/* Message text can be selected: with a mouse by dragging, on a phone after
-   long-press → Select text (then the phone's own handles and Copy). */
+/* With a mouse (a PC), part of a message can be selected by dragging. On a
+   phone nothing in the chat highlights: long-press → Copy instead. */
 @media (hover: hover) and (pointer: fine) {
   .messages .bubble-text { -webkit-user-select: text; user-select: text; cursor: text; }
 }
-.messages .text-selecting .bubble-text { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+@media (hover: none), (pointer: coarse) {
+  .messages, .messages * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
 .msg-sheet {
   position: fixed;
   inset: 0;

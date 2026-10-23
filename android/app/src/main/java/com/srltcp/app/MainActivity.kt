@@ -34,6 +34,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import android.app.PendingIntent
 import androidx.webkit.WebViewClientCompat
 import com.chaquo.python.Python
 import java.security.MessageDigest
@@ -659,18 +660,25 @@ class MainActivity : AppCompatActivity() {
     private var callDeviceCallback: android.media.AudioDeviceCallback? = null
 
     /**
-     * At your ear (call audio on the earpiece), the proximity sensor turns the
-     * screen off like the phone app does: an ear or cheek can't end the call,
-     * go home or pull down the notifications. Not on speaker or a headset.
+     * During a call, while the call screen is in front: something close to the
+     * proximity sensor (your ear, a hand) turns the screen off like the phone
+     * app does, so an ear or cheek can't end the call, go home or open the
+     * notifications. Two ways, as phones differ: the system's proximity
+     * screen-off lock, and our own reading of the sensor (a black, untouchable
+     * screen with the system bars hidden) for phones whose lock doesn't work.
      */
     private var proximityLock: android.os.PowerManager.WakeLock? = null
+    private var proximityListener: android.hardware.SensorEventListener? = null
+    private var proximityCover: android.view.View? = null
+    private var appVisible = false
 
-    private fun setProximityGuard(on: Boolean) {
+    private fun updateProximityGuard() {
+        val inPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode
+        val on = callAudioActive && appVisible && !inPip
         try {
             val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
             val level = android.os.PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK
-            if (on) {
-                if (!pm.isWakeLockLevelSupported(level)) return  // (no proximity sensor)
+            if (on && pm.isWakeLockLevelSupported(level)) {
                 val lock = proximityLock ?: pm.newWakeLock(level, "SRLTCP:call-proximity").also {
                     it.setReferenceCounted(false)
                     proximityLock = it
@@ -685,6 +693,118 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.w(TAG, "Proximity screen lock failed", e)
         }
+        val sm = getSystemService(SENSOR_SERVICE) as android.hardware.SensorManager
+        if (on && proximityListener == null) {
+            val sensor = sm.getDefaultSensor(android.hardware.Sensor.TYPE_PROXIMITY) ?: return
+            val listener = object : android.hardware.SensorEventListener {
+                override fun onSensorChanged(event: android.hardware.SensorEvent) {
+                    // "Near": below the sensor's range (many report only 0 or max), at most 5 cm.
+                    val d = event.values.firstOrNull() ?: return
+                    showProximityCover(d < minOf(sensor.maximumRange, 5f))
+                }
+                override fun onAccuracyChanged(s: android.hardware.Sensor?, accuracy: Int) {}
+            }
+            sm.registerListener(listener, sensor, android.hardware.SensorManager.SENSOR_DELAY_NORMAL)
+            proximityListener = listener
+        } else if (!on) {
+            proximityListener?.let { sm.unregisterListener(it) }
+            proximityListener = null
+            showProximityCover(false)
+        }
+    }
+
+    private fun showProximityCover(near: Boolean) {
+        val decor = window.decorView as? android.view.ViewGroup ?: return
+        val controller = androidx.core.view.WindowCompat.getInsetsController(window, decor)
+        if (near) {
+            if (proximityCover != null) return
+            val cover = android.view.View(this).apply {
+                setBackgroundColor(0xFF000000.toInt())
+                isClickable = true
+                setOnTouchListener { _, _ -> true }  // (an ear presses nothing)
+            }
+            decor.addView(cover, android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            ))
+            proximityCover = cover
+            window.attributes = window.attributes.apply { screenBrightness = 0f }
+            // Status and navigation bars hidden: a swipe only shows them for a
+            // moment instead of opening the notifications or going home.
+            controller.systemBarsBehavior =
+                androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        } else {
+            val cover = proximityCover ?: return
+            decor.removeView(cover)
+            proximityCover = null
+            window.attributes = window.attributes.apply {
+                screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            }
+            controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    // ── Calls when you leave the app: the call notification, and a video
+    // call in a small floating window (picture-in-picture), like Maps does ──
+
+    private var callInfoActive = false
+    private var callInfoVideo = false
+
+    fun setCallInfo(active: Boolean, video: Boolean, name: String) {
+        callInfoActive = active
+        callInfoVideo = active && video
+        SRLTCPService.setCall(this, active, video, name)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                setPictureInPictureParams(pipParams())
+            } catch (e: Exception) {
+                Log.w(TAG, "Picture-in-picture not available", e)
+            }
+            if (!active && isInPictureInPictureMode) moveTaskToBack(true)  // (call over)
+        }
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.O)
+    private fun pipParams(): android.app.PictureInPictureParams {
+        val hangUp = PendingIntent.getService(
+            this, 9505,
+            Intent(this, SRLTCPService::class.java).setAction(SRLTCPService.ACTION_HANGUP_CALL),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val action = android.app.RemoteAction(
+            android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_notification),
+            "Hang up", "Hang up", hangUp
+        )
+        val b = android.app.PictureInPictureParams.Builder()
+            .setAspectRatio(android.util.Rational(9, 16))
+            .setActions(listOf(action))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Swiping home during a video call shrinks it into the window by itself.
+            b.setAutoEnterEnabled(callInfoVideo)
+            b.setSeamlessResizeEnabled(false)
+        }
+        return b.build()
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // (Android 8-11; 12+ enters it by itself, see setAutoEnterEnabled.)
+        if (callInfoVideo && Build.VERSION.SDK_INT in Build.VERSION_CODES.O until Build.VERSION_CODES.S &&
+            !isInPictureInPictureMode
+        ) {
+            try {
+                enterPictureInPictureMode(pipParams())
+            } catch (e: Exception) {
+                Log.w(TAG, "Picture-in-picture not entered", e)
+            }
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(isInPip: Boolean, newConfig: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(isInPip, newConfig)
+        deliverToWeb("srltcpOnPip", if (isInPip) "true" else "false")
+        updateProximityGuard()
     }
     private val reapplyCallRoute = Runnable {
         if (callAudioActive) applyCallRoute(getSystemService(AUDIO_SERVICE) as android.media.AudioManager)
@@ -736,9 +856,9 @@ class MainActivity : AppCompatActivity() {
         val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
         try {
             if (!active) {
-                setProximityGuard(false)
                 if (!callAudioActive) return
                 callAudioActive = false
+                updateProximityGuard()
                 handler.removeCallbacks(reapplyCallRoute)
                 callDeviceCallback?.let { am.unregisterAudioDeviceCallback(it) }
                 callDeviceCallback = null
@@ -754,6 +874,7 @@ class MainActivity : AppCompatActivity() {
             }
             callAudioActive = true
             callSpeakerWanted = speaker
+            updateProximityGuard()
             volumeControlStream = android.media.AudioManager.STREAM_VOICE_CALL
             window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             applyCallRoute(am)
@@ -809,12 +930,9 @@ class MainActivity : AppCompatActivity() {
                     @Suppress("DEPRECATION")
                     am.isSpeakerphoneOn = speaker
                 }
-                setProximityGuard(!speaker && headset == null)
             } else {
                 @Suppress("DEPRECATION")
                 am.isSpeakerphoneOn = speaker
-                @Suppress("DEPRECATION")
-                setProximityGuard(!speaker && !am.isWiredHeadsetOn && !am.isBluetoothScoOn)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Call audio routing failed", e)
@@ -1022,7 +1140,9 @@ class MainActivity : AppCompatActivity() {
         NfcPairing.active = false
         pauseNfcReader()
         super.onPause()
-        webView?.onPause()
+        // During a call the page keeps running (in the floating window, or
+        // behind another app with the call notification): no pause.
+        if (!callInfoActive) webView?.onPause()
         if (isFinishing) {
             prepareForClose()
         }
@@ -1030,10 +1150,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        appVisible = true
+        updateProximityGuard()
         appLock?.onStart()
     }
 
     override fun onStop() {
+        appVisible = false
+        updateProximityGuard()
         appLock?.onStop()
         if (isFinishing) {
             prepareForClose()
@@ -1098,6 +1222,7 @@ class MainActivity : AppCompatActivity() {
         NetworkWatch.unwatch(this, networkCallback)
         networkCallback = null
         setCallAudio(false, false)
+        SRLTCPService.setCall(this, false, false, "")  // (the call lived in this screen)
         NfcPairing.listener = null
         NfcPairing.card = null
         NfcPairing.active = false

@@ -65,6 +65,13 @@ class SRLTCPBridge(private val activity: MainActivity) {
         activity.runOnUiThread { activity.setCallScreen(on) }
     }
 
+    /** A call under way (or over): call notification, floating window for video, mic/camera kept on. */
+    @JavascriptInterface
+    fun setCallInfo(active: Boolean, video: Boolean, name: String) {
+        if (!activity.isTrustedPage) return
+        activity.runOnUiThread { activity.setCallInfo(active, video, name.take(64)) }
+    }
+
     /** Stop the ringtone (call answered or declined in the app). */
     @JavascriptInterface
     fun stopRinging() {

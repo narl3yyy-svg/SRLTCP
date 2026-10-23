@@ -65,7 +65,31 @@
   const inCall = () => call.state === "connecting" || call.state === "active";
   function routeAudio(active) {
     try { nativeAudio()?.setCallAudio(!!active, !!call.speaker); } catch (_) { /* ignore */ }
+    nativeCall();
   }
+  // Android app: a call is under way (calling, connecting or connected):
+  // the ongoing-call notification, the small floating window for a video
+  // call when you leave the app, and the microphone/camera kept on meanwhile.
+  function nativeCall() {
+    const b = window.SRLTCPAndroid;
+    if (typeof b?.setCallInfo !== "function") return;
+    const on = call.state === "outgoing" || inCall();
+    try { b.setCallInfo(on, on && !!call.video, on ? (call.peerName || "Contact") : ""); } catch (_) { /* ignore */ }
+  }
+  // Android: the app shrank to its floating window (or came back from it).
+  let miniBeforePip = false;
+  window.srltcpOnPip = (on) => {
+    const ov = $("#call-overlay");
+    if (!ov) return;
+    if (on) {
+      miniBeforePip = ov.classList.contains("mini");
+      expand();
+      ov.classList.add("pip");
+    } else {
+      ov.classList.remove("pip");
+      if (miniBeforePip) minimize();
+    }
+  };
   // Android app: while a call rings or runs it may show over the lock screen;
   // the phone itself rings (notification with the phone's ringtone).
   function callScreen(on) {
@@ -208,6 +232,7 @@
     if (mode === "incoming") expand();  // (a ringing call is always full screen)
     if (call.video && mode !== "incoming") showSwitchIfTwoCameras();
     updateButtons();
+    nativeCall();
   }
 
   async function showSwitchIfTwoCameras() {
@@ -350,8 +375,9 @@
       narrow: false, connectTimer: null,
     });
     $("#call-overlay")?.classList.remove("rear-camera");
-    routeAudio(false);
+    routeAudio(false);  // (also ends the Android call notification)
     callScreen(false);
+    $("#call-overlay")?.classList.remove("pip");
     updateButtons();
     hideOverlay();
   }
@@ -672,6 +698,11 @@
       accept(call.video);
     }
   }
+
+  // Android: "Hang up" on the call notification or the floating window.
+  window.onAndroidHangUp = () => {
+    if (call.state !== "idle") hangup();
+  };
 
   // Android: "Answer" on the ringing notification.
   window.onAndroidAnswerCall = () => {

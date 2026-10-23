@@ -1,5 +1,34 @@
 # SRLTCP Release Notes
 
+## v0.14.3 (2026-10-23)
+
+### Calls when you leave the app (Android)
+- **A video call keeps going in a small floating window.** Swipe home or
+  switch apps during a video call and it shrinks into a small window over
+  your other apps, the way Maps does while navigating. Tap the window to
+  go back to the call, or use its hang-up button.
+- **A call-in-progress notification.** During any call, voice or video,
+  the notifications show the contact, a running timer, *tap to return* and
+  **Hang up**.
+- **Your microphone (and camera) stay on.** Before, leaving the app during
+  a call could silence your microphone. The app now tells Android it's
+  using them, during calls only.
+
+### At your ear
+- **Works on more phones.** Some phones don't turn the
+  screen off from the system's proximity setting alone. The app now also
+  reads the proximity sensor itself. When it's covered, the screen goes
+  black and can't be pressed, and the status and navigation bars are
+  hidden, so a swipe from your ear doesn't open the notifications or go
+  home. It comes back when you move the phone away.
+- **Voice and video calls alike**, while the call screen is in front (not
+  while the call is in its floating window or you're in another app).
+
+### Copying messages
+- **"Select text" and the phone's highlight handles are gone from the
+  chat.** Long-press a message → **Copy** copies the whole message. On a
+  computer you can still drag over part of a message with the mouse.
+
 ## v0.14.2 (2026-10-20)
 
 ### Chat during a call
