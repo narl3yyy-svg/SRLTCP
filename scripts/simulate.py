@@ -428,6 +428,41 @@ async def features_flow() -> None:
             await bob.wait_for_selector(f".file-bubble:has-text('{f.name}')", timeout=20000)
         print("multi-file: two files picked together, both arrived")
 
+        # Several photos at once (an album): Save all saves every original, in one folder
+        photos = [OUT / f"album-{i}.png" for i in range(3)]
+        for i, f in enumerate(photos):
+            await alice.set_viewport_size({"width": 900 + 40 * i, "height": 700})
+            await alice.screenshot(path=str(f))
+        await alice.set_viewport_size({"width": 1280, "height": 800})
+        await alice.set_input_files("#file-input", [str(f) for f in photos])
+        await bob.wait_for_function(
+            "document.querySelectorAll('.album-tile img').length >= 3", timeout=30000)
+        await bob.click(".album-tile >> nth=-1", button="right")
+        labels = await bob.locator("#msg-sheet-menu .msg-sheet-item span").all_inner_texts()
+        assert "Save" in labels and "Save all (3)" in labels, labels
+        await bob.evaluate("""() => {
+          window.__dir = [];
+          const files = {};
+          window.showDirectoryPicker = async () => ({
+            name: "Pictures",
+            getFileHandle: async (name, opts) => {
+              if (!(opts && opts.create) && !(name in files)) throw new DOMException("x", "NotFoundError");
+              files[name] = true;
+              return { createWritable: async () => { const parts = [];
+                return new WritableStream({ write: (c) => { parts.push(c); },
+                  close: () => { window.__dir.push({ name,
+                    size: parts.reduce((n, c) => n + c.byteLength, 0) }); } }); } };
+            },
+          });
+        }""")
+        await bob.click("[data-sheet-action='save-all']")
+        await bob.wait_for_function("window.__dir.length === 3", timeout=15000)
+        saved = await bob.evaluate("window.__dir")
+        want = sorted((f.name, f.stat().st_size) for f in photos)
+        got = sorted((d["name"], d["size"]) for d in saved)
+        assert got == want, (got, want)
+        print("album: Save all saved all 3 photos at their original size into one folder")
+
         # Folder sync: Alice starts it from the contact menu, Bob accepts.
         sync_src = NODES["alice"].data / "syncme"
         (sync_src / "sub").mkdir(parents=True, exist_ok=True)

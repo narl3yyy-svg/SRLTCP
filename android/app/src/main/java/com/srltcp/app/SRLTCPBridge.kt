@@ -84,6 +84,11 @@ class SRLTCPBridge(private val activity: MainActivity) {
         if (activity.isTrustedPage) activity.saveTransferFile(transferId) else ""
 
     /** "Save as" for the encrypted backup just made (Settings → Backup). */
+    /** Save several received files (an album) into a folder the user picks once. */
+    @JavascriptInterface
+    fun saveTransferFiles(idsJson: String): String =
+        if (activity.isTrustedPage) activity.saveTransferFiles(idsJson) else ""
+
     @JavascriptInterface
     fun saveBackup(filename: String): String =
         if (activity.isTrustedPage) activity.saveBackupFile(filename) else ""

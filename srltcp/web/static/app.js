@@ -3474,6 +3474,32 @@
     return (t === "image" || t === "video") && !!m.metadata?.transfer_id;
   }
 
+  /** The photos/videos shown together with this one (its album), the same
+   * grouping the chat draws; just this message when it isn't in one. */
+  function albumOf(id) {
+    const msgs = state.messageCache || [];
+    for (let i = 0; i < msgs.length;) {
+      let end = i;
+      if (albumable(msgs[i])) {
+        while (end + 1 < msgs.length && sameAlbum(msgs[end], msgs[end + 1])) end++;
+      }
+      const group = msgs.slice(i, end + 1);
+      if (group.some((m) => m.id === id)) return group;
+      i = end + 1;
+    }
+    return [];
+  }
+
+  /** The album's files that have fully arrived: what "Save all" saves. */
+  function albumSaveable(id) {
+    return albumOf(id).map((m) => {
+      const tid = m.metadata?.transfer_id || "";
+      const live = tid ? mergeTransferMeta(tid, m.metadata || {}) : null;
+      return live?.state === "complete"
+        ? { tid, filename: live.filename || m.metadata?.filename || m.text || "file" } : null;
+    }).filter(Boolean);
+  }
+
   function sameAlbum(a, b) {
     return albumable(b) && a.sender_hash === b.sender_hash
       && (a.metadata?.group_id || "") === (b.metadata?.group_id || "")
@@ -3588,6 +3614,8 @@
     const items = [
       !file && { action: "copy", label: "Copy", icon: ICON_COPY },
       file && live?.state === "complete" && { action: "save", label: "Save", icon: ICON_SAVE },
+      file && albumSaveable(id).length > 1
+        && { action: "save-all", label: `Save all (${albumSaveable(id).length})`, icon: ICON_SAVE },
       { action: "select", label: "Select", icon: ICON_SELECT },
       { action: "info", label: "Info", icon: ICON_INFO },
       { action: "delete", label: "Delete", icon: ICON_TRASH, danger: true },
@@ -3634,6 +3662,8 @@
       const tid = m.metadata?.transfer_id || "";
       const url = `/api/transfers/${encodeURIComponent(tid)}/file?download=1`;
       saveTransferFile(tid, url, m.metadata?.filename || m.text || "file");
+    } else if (action === "save-all") {
+      saveAllTransfers(albumSaveable(id));
     } else if (action === "select") {
       startSelecting(id);
     } else if (action === "info") {
@@ -4213,6 +4243,70 @@
     await saveDownload(url, filename);
   }
 
+  /** Every photo/video of an album, the original files (never shrunk):
+   * Android asks for a folder once; Chrome/Edge too; other browsers download
+   * each one to the downloads folder. */
+  async function saveAllTransfers(items) {
+    if (!items.length) return;
+    const bridge = window.SRLTCPAndroid;
+    if (bridge && typeof bridge.saveTransferFiles === "function") {
+      const err = bridge.saveTransferFiles(JSON.stringify(items.map((it) => it.tid)));
+      if (err) toast(err, "error");
+      return;
+    }
+    const url = (tid) => `/api/transfers/${encodeURIComponent(tid)}/file?download=1`;
+    if (typeof window.showDirectoryPicker === "function") {
+      let dir = null;
+      try {
+        dir = await window.showDirectoryPicker({ mode: "readwrite" });
+      } catch (e) {
+        if (e?.name === "AbortError") return;
+      }
+      if (dir) {
+        let saved = 0;
+        for (const it of items) {
+          try {
+            const name = await freeName(dir, it.filename);
+            const res = await fetch(url(it.tid), { credentials: "same-origin" });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const handle = await dir.getFileHandle(name, { create: true });
+            await res.body.pipeTo(await handle.createWritable());
+            saved++;
+          } catch (_) { /* counted below */ }
+        }
+        toast(saved === items.length ? `Saved ${saved} files to “${dir.name}”`
+          : `Saved ${saved} of ${items.length} files to “${dir.name}”`, saved ? "info" : "error");
+        return;
+      }
+    }
+    for (const it of items) {
+      const a = document.createElement("a");
+      a.href = url(it.tid);
+      a.download = it.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      await new Promise((r) => setTimeout(r, 400));  // (browsers drop downloads started all at once)
+    }
+    toast(`Downloading ${items.length} files`);
+  }
+
+  /** "photo.jpg", or "photo (2).jpg" when the folder already has one. */
+  async function freeName(dir, filename) {
+    const dot = filename.lastIndexOf(".");
+    const stem = dot > 0 ? filename.slice(0, dot) : filename;
+    const ext = dot > 0 ? filename.slice(dot) : "";
+    for (let n = 1; n < 1000; n++) {
+      const name = n === 1 ? filename : `${stem} (${n})${ext}`;
+      try {
+        await dir.getFileHandle(name);
+      } catch (_) {
+        return name;  // (not there yet)
+      }
+    }
+    return `${stem} (${Date.now()})${ext}`;
+  }
+
   /** Desktop: save a download through the file picker when there is one. */
   async function saveDownload(url, filename) {
     if (typeof window.showSaveFilePicker === "function") {
@@ -4510,6 +4604,10 @@
 
   window.onAndroidFileSaved = (ok) => {
     toast(ok ? "File saved" : "Could not save the file", ok ? "info" : "error");
+  };
+  window.onAndroidFilesSaved = (saved, total) => {
+    toast(saved === total ? `Saved ${saved} files` : `Saved ${saved} of ${total} files`,
+      saved ? "info" : "error");
   };
 
   // Phones have no hover: tapping a message's tick explains it.

@@ -1,5 +1,17 @@
 # SRLTCP Release Notes
 
+## v0.14.6 (2026-10-23)
+
+- **Save all photos of a group.** When a contact sends several photos or
+  videos at once, long-press one (right-click on a PC) and the menu now has
+  **Save all (N)** next to **Save**. You pick a folder once and every one
+  of them is saved there as the original file: full size, nothing
+  compressed (the same bytes that arrived). A name already in the folder
+  gets " (2)". **Save** still saves just the one you pressed.
+  - On Android the phone's folder picker opens once.
+  - On a PC, Chrome and Edge ask for a folder once; other browsers download
+    each file to your downloads folder.
+
 ## v0.14.5 (2026-10-23)
 
 - **No more message pop-ups over the app.** A message from a chat you don't

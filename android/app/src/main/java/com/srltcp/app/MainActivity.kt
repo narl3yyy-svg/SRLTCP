@@ -119,6 +119,44 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    /** "Save all" for an album: the user picks a folder once, every original file is copied in. */
+    private var pendingSaveAll: List<JSONObject>? = null
+    private val saveAllLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { tree ->
+        val files = pendingSaveAll
+        pendingSaveAll = null
+        if (tree == null || files == null) return@registerForActivityResult
+        Thread {
+            var saved = 0
+            try {
+                val parent = DocumentsContract.buildDocumentUriUsingTree(
+                    tree, DocumentsContract.getTreeDocumentId(tree)
+                )
+                for (f in files) {
+                    try {
+                        // (A name already there gets " (1)" etc. from the folder's provider.)
+                        val doc = DocumentsContract.createDocument(
+                            contentResolver, parent,
+                            f.optString("mime", "application/octet-stream"),
+                            f.optString("filename", "file"),
+                        ) ?: continue
+                        val ok = contentResolver.openOutputStream(doc)?.use { out ->
+                            java.io.File(f.getString("path")).inputStream().use { it.copyTo(out) }
+                            true
+                        } ?: false
+                        if (ok) saved++
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Saving ${f.optString("filename")} failed", e)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Save all failed", e)
+            }
+            deliverToWeb("onAndroidFilesSaved", "$saved, ${files.size}")
+        }.start()
+    }
+
     private var pendingWebPermission: PermissionRequest? = null
 
     private val requestMediaPermissions = registerForActivityResult(
@@ -615,6 +653,37 @@ class MainActivity : AppCompatActivity() {
     /** Ask where to save a transfer's file, then copy it there. Returns "" or an error. */
     fun saveTransferFile(transferId: String): String =
         saveWithPicker("android_transfer_file", transferId)
+
+    /** Several received files (an album): look each up, then ask for a folder once. */
+    fun saveTransferFiles(idsJson: String): String {
+        val ids = try {
+            org.json.JSONArray(idsJson)
+        } catch (e: Exception) {
+            return "Could not save the files"
+        }
+        val files = mutableListOf<JSONObject>()
+        val py = Python.getInstance().getModule("srltcp.app")
+        for (i in 0 until minOf(ids.length(), 200)) {
+            try {
+                val info = JSONObject(py.callAttr("android_transfer_file", ids.getString(i)).toString())
+                if (!info.has("error")) files.add(info)
+            } catch (e: Exception) {
+                Log.w(TAG, "File lookup failed", e)
+            }
+        }
+        if (files.isEmpty()) return "Those files aren't ready yet"
+        runOnUiThread {
+            pendingSaveAll = files
+            try {
+                saveAllLauncher.launch(null)
+            } catch (e: Exception) {
+                pendingSaveAll = null
+                Log.e(TAG, "No folder picker", e)
+                deliverToWeb("onAndroidFilesSaved", "0, ${files.size}")
+            }
+        }
+        return ""
+    }
 
     /** Ask where to save the encrypted backup, then copy it there. */
     fun saveBackupFile(filename: String): String =
