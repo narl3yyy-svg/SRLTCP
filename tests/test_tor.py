@@ -141,3 +141,30 @@ async def test_new_tor_address_replaces_the_old_one(tmp_path) -> None:  # type: 
     assert sent[0].startswith("ADD_ONION NEW:ED25519-V3")  # a fresh key, not the saved one
     assert sent[-1] == "DEL_ONION " + "a" * 56  # the old one goes, after contacts were told
     node.addresses_changed.assert_awaited()
+
+
+def test_tor_is_found_where_windows_users_put_it(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import shutil
+    import sys
+    from pathlib import Path
+
+    from srltcp.core.messaging import tor
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    for var in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA", "APPDATA"):
+        monkeypatch.setenv(var, str(tmp_path / var))
+    assert tor._tor_binary("") is None
+    # The Tor Expert Bundle extracted in Downloads
+    exe = home / "Downloads" / "tor-expert-bundle-windows-x86_64-14.5" / "tor" / "tor.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"MZ")
+    assert tor._tor_binary("") == str(exe)
+    # The setting: the file (pasted with quotes) or the folder it is in
+    other = tmp_path / "Tools" / "Tor" / "tor.exe"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(b"MZ")
+    assert tor._tor_binary(f'"{other}"') == str(other)
+    assert tor._tor_binary(str(other.parent)) == str(other)  # (the folder holding tor.exe)

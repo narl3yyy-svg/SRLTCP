@@ -1,5 +1,17 @@
 # SRLTCP Release Notes
 
+## v0.14.7 (2026-11-01)
+
+- **Tor is found on more Windows PCs.** SRLTCP now also looks for the **Tor
+  Expert Bundle** where people usually extract it (Downloads, the Desktop,
+  the SRLTCP folder), for Tor Browser in Program Files (x86) and AppData,
+  and for a Chocolatey install.
+- **Settings → Network → Tor path** takes the path of `tor.exe` or of the
+  folder it's in, with or without quotes (as Windows' *Copy as path* gives
+  it).
+- **Clearer message** when Tor isn't found, saying what to do. If the path
+  in Settings is wrong, it now says so.
+
 ## v0.14.6 (2026-10-23)
 
 - **Save all photos of a group.** When a contact sends several photos or

@@ -165,11 +165,26 @@ class TorControl:
         return ""
 
 
+def _tor_in(folder: Path) -> Path | None:
+    """tor / tor.exe in a folder, or where Tor Browser / the Expert Bundle keep it inside."""
+    for rel in ("tor.exe", "tor", "tor/tor.exe", "tor/tor",
+                "Browser/TorBrowser/Tor/tor.exe", "Contents/MacOS/Tor/tor"):
+        c = folder / rel
+        if c.is_file():
+            return c
+    return None
+
+
 def _tor_binary(configured: str = "") -> str | None:
-    """Find a tor executable: the setting, PATH, then where Tor Browser / the
-    Tor Expert Bundle usually live on Windows and macOS."""
-    if configured and Path(configured).is_file():
-        return configured
+    """Find a tor executable: the setting (the file, or a folder holding it),
+    PATH, then where Tor Browser / the Tor Expert Bundle usually end up."""
+    configured = configured.strip().strip('"').strip("'")
+    if configured:
+        path = Path(os.path.expandvars(configured)).expanduser()
+        if path.is_file():
+            return str(path)
+        if path.is_dir() and (inside := _tor_in(path)):
+            return str(inside)
     found = shutil.which("tor")
     if found:
         return found
@@ -177,15 +192,26 @@ def _tor_binary(configured: str = "") -> str | None:
     candidates: list[Path] = []
     if sys.platform == "win32":
         app_dir = Path(__file__).resolve().parents[3]
-        for base in (
-            home / "Desktop" / "Tor Browser",
-            home / "OneDrive" / "Desktop" / "Tor Browser",
-            Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Tor Browser",
-            Path(os.environ.get("LOCALAPPDATA", str(home))) / "Tor Browser",
-        ):
-            candidates.append(base / "Browser" / "TorBrowser" / "Tor" / "tor.exe")
+        env = os.environ.get
+        places = [
+            home / "Desktop", home / "OneDrive" / "Desktop", home / "Downloads",
+            home / "OneDrive" / "Downloads", app_dir,
+            Path(env("PROGRAMFILES", r"C:\Program Files")),
+            Path(env("PROGRAMFILES(X86)", r"C:\Program Files (x86)")),
+            Path(env("LOCALAPPDATA", str(home))), Path(env("APPDATA", str(home))),
+            Path("C:/"),
+        ]
+        for base in places:
+            candidates.append(base / "Tor Browser" / "Browser" / "TorBrowser" / "Tor" / "tor.exe")
+            # The Tor Expert Bundle: a zip extracted to "tor-expert-bundle…\tor\tor.exe".
+            try:
+                for bundle in sorted(base.glob("tor-expert-bundle*"), reverse=True):
+                    candidates += [bundle / "tor" / "tor.exe", bundle / "tor.exe"]
+            except OSError:
+                pass
         candidates += [app_dir / "tor" / "tor.exe", app_dir / "tor" / "tor" / "tor.exe",
-                       Path(r"C:\Tor\tor\tor.exe"), Path(r"C:\Tor\tor.exe")]
+                       Path(r"C:\Tor\tor\tor.exe"), Path(r"C:\Tor\tor.exe"),
+                       Path(r"C:\ProgramData\chocolatey\bin\tor.exe")]
     elif sys.platform == "darwin":
         candidates += [Path("/Applications/Tor Browser.app/Contents/MacOS/Tor/tor"),
                        Path("/opt/homebrew/bin/tor"), Path("/usr/local/bin/tor")]
@@ -445,12 +471,22 @@ class TorMixin:
     async def _tor_start_process(
         self: MessagingBackend, tor_dir: Path, port_file: Path, cookie: Path
     ) -> None:
-        binary = _tor_binary(str(getattr(self.config, "tor_path", "") or ""))
+        configured = str(getattr(self.config, "tor_path", "") or "").strip()
+        binary = _tor_binary(configured)
         if not binary:
+            if configured:
+                raise _TorUnavailable(
+                    f"No Tor program at the Tor path set in Settings → Network ({configured}). "
+                    "Put the full path of tor.exe there (or the folder it is in)."
+                )
             raise _TorUnavailable(
-                "Tor isn't installed on this computer. Install Tor Browser (or the Tor "
-                "Expert Bundle) and restart SRLTCP, or set its tor.exe in Settings."
+                "Tor wasn't found on this computer. Install Tor Browser, or extract the Tor "
+                "Expert Bundle into the SRLTCP folder (so there is tor\\tor.exe) or Downloads, "
+                "then restart SRLTCP — or put the path of tor.exe (or its folder) in "
+                "Settings → Network → Tor path."
             )
+        if configured and binary != configured.strip('"').strip("'"):
+            log.info("Tor found at %s", binary)
         data = tor_dir / "data"
         data.mkdir(exist_ok=True)
         with contextlib.suppress(OSError):

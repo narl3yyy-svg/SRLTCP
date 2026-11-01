@@ -62,7 +62,12 @@ shares and sync **never go over Tor**.
 - **Android:** Tor is built into the app.
 - **PC:** install [Tor Browser](https://www.torproject.org/download/) on
   Windows or macOS, or the `tor` package on Linux (`sudo apt install tor`).
-  SRLTCP finds it and starts its own copy in the background.
+  SRLTCP finds it and starts its own copy in the background. On Windows it
+  looks in Tor Browser's usual places (Desktop, Program Files, AppData), for
+  the **Tor Expert Bundle** extracted in Downloads, on the Desktop or in the
+  SRLTCP folder (`SRLTCP\tor\tor.exe`), and on PATH. Anywhere else, put the
+  path of `tor.exe` (or the folder it's in) in *Settings → Network → Tor
+  path*. Restart SRLTCP after installing.
 - **First connection:** the two devices swap onion addresses inside their
   encrypted connection, so normally they meet once first (the same Wi-Fi/VPN,
   or a pairing code). **Never met?** Each copies its Tor address from under its
