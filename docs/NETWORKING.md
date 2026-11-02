@@ -59,7 +59,11 @@ shares and sync **never go over Tor**.
 
 - **Turn it on:** *Settings → Network → Find contacts on other networks
   (Tor)*, on both devices. It's on by default.
-- **Android:** Tor is built into the app.
+- **Android:** Tor is built into the app. It runs in its own small process;
+  if it stops or fails to start, the app ends that process and starts a
+  fresh Tor by itself. While it connects, *Settings → Network* shows Tor's
+  own progress and any problem it reports (e.g. "Connection refused" on a
+  network that blocks Tor).
 - **PC:** install [Tor Browser](https://www.torproject.org/download/) on
   Windows or macOS, or the `tor` package on Linux (`sudo apt install tor`).
   SRLTCP finds it and starts its own copy in the background. On Windows it

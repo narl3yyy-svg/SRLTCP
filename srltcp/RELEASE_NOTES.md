@@ -1,5 +1,18 @@
 # SRLTCP Release Notes
 
+## v0.14.8 (2026-11-02)
+
+- **Fixed: Tor stuck at "0%" on the phone.** The built-in Tor can start
+  only once in the app's process, and the app keeps that process running so
+  messages keep arriving. Once Tor had stopped or failed to start, every
+  later try waited at 0% until the app was fully closed. Tor now runs in a
+  small process of its own: after a failure the app ends it and starts a
+  fresh Tor by itself. Quitting SRLTCP from its notification ends Tor too.
+- **Tor's own progress in Settings → Network.** While Tor connects, the
+  status now shows the step it's on (e.g. "Connecting to a relay", "Loading
+  relay descriptors") and any problem it reports (e.g. "Connection
+  refused" when the network blocks Tor), instead of only a percentage.
+
 ## v0.14.7 (2026-11-01)
 
 - **Tor is found on more Windows PCs.** SRLTCP now also looks for the **Tor

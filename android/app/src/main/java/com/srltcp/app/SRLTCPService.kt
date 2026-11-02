@@ -48,6 +48,7 @@ class SRLTCPService : Service() {
             // Quit button, or the notification swiped away (Android 14+).
             Log.i(TAG, "Quit requested from notification")
             SRLTCPApplication.instance?.releaseNetworkLocks()
+            TorProcess.reset(this)  // (Tor's own process ends too)
             running = false
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()

@@ -10,6 +10,7 @@ import com.chaquo.python.android.AndroidPlatform
 class SRLTCPApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        if (TorProcess.isTorProcess(this)) return  // (only the built-in Tor runs there)
         instance = this
         UsbSerialBridge.init(this)
         // Log crashes, then let the default handler end the process as usual.

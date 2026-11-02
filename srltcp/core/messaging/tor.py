@@ -36,6 +36,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -232,6 +233,7 @@ class TorMixin:
         self._tor_state = "off"  # off | unavailable | starting | ready | error
         self._tor_detail = ""
         self._tor_progress = 0
+        self._tor_failures = 0  # failed starts / losses in a row (Android: fresh Tor next)
         self._tor_task: asyncio.Task[None] | None = None
 
     # ── Settings / status ──
@@ -336,6 +338,7 @@ class TorMixin:
                 self._tor_state, self._tor_detail, self._tor_progress = "starting", "", 0
                 await self._tor_start_once()
                 backoff = 10.0
+                self._tor_failures = 0
                 # Watch: control connection alive = Tor alive.
                 while self._tor_control and self._tor_control.connected:
                     await asyncio.sleep(5)
@@ -344,6 +347,7 @@ class TorMixin:
                     except (TorControlError, OSError, TimeoutError):
                         break
                 log.info("Tor connection lost — restarting it")
+                self._tor_failures += 1
             except asyncio.CancelledError:
                 raise
             except _TorUnavailable as exc:
@@ -352,6 +356,7 @@ class TorMixin:
                 return
             except Exception as exc:  # noqa: BLE001 - keep trying
                 self._tor_state, self._tor_detail = "error", str(exc)[:200]
+                self._tor_failures += 1
                 log.warning("Tor: %s", exc)
             await self._tor_shutdown()
             await asyncio.sleep(backoff)
@@ -369,6 +374,11 @@ class TorMixin:
             # in this app's private storage (no TCP control port at all —
             # TorService turns cookie auth off, so a TCP port would be open to
             # every app on the phone).
+            if self._tor_failures:
+                # Tor runs once per process: after a failure or a loss, end
+                # the built-in Tor's process; this start is a fresh Tor.
+                self._tor_detail = "restarting the built-in Tor"
+                await asyncio.to_thread(self._tor_reset_android)
             self._tor_detail = "starting the built-in Tor"
             socket_path = await asyncio.to_thread(self._tor_start_android)
             for _ in range(300):
@@ -411,6 +421,12 @@ class TorMixin:
             phase = await control.getinfo("status/bootstrap-phase")
             m = re.search(r"PROGRESS=(\d+)", phase)
             self._tor_progress = int(m.group(1)) if m else 0
+            # Tor's own words for the step it's on, and what goes wrong (e.g.
+            # "Connecting to a relay" — "Connection refused": the network blocks Tor).
+            summary = re.search(r'SUMMARY="([^"]*)"', phase)
+            warning = re.search(r'WARNING="([^"]*)"', phase)
+            step = summary.group(1) if summary else "connecting to the Tor network"
+            self._tor_detail = step + (f" — {warning.group(1)}" if warning else "")
             if self._tor_progress >= 100:
                 break
             if asyncio.get_running_loop().time() > deadline:
@@ -541,6 +557,19 @@ class TorMixin:
         intent.setAction("org.torproject.android.intent.action.START")
         ctx.startService(intent)
         return str(base / "data" / "ControlSocket")
+
+    def _tor_reset_android(self: MessagingBackend) -> None:
+        """End the built-in Tor's process (it can't start twice in one) and
+        drop its stale control socket."""
+        with contextlib.suppress(Exception):
+            from java import jclass
+
+            ctx = jclass("com.chaquo.python.Python").getPlatform().getApplication()
+            jclass("com.srltcp.app.TorProcess").reset(ctx)
+            base = Path(str(ctx.getDir("TorService", 0).getAbsolutePath()))
+            time.sleep(1.0)  # (the process ends)
+            with contextlib.suppress(OSError):
+                (base / "data" / "ControlSocket").unlink()
 
     def _tor_stop_android(self: MessagingBackend) -> None:
         with contextlib.suppress(Exception):

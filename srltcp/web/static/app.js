@@ -944,7 +944,10 @@
     else if (tor.state === "ready") {
       ok = true;
       text = "Tor: connected. Your contacts can reach you from any network.";
-    } else if (tor.state === "starting") text = `Tor: connecting to the Tor network… ${tor.progress || 0}%`;
+    } else if (tor.state === "starting") {
+      // (Tor's own words for the step it's on, and any warning: e.g. a network blocking Tor.)
+      text = `Tor: connecting to the Tor network… ${tor.progress || 0}%${tor.detail ? ` — ${tor.detail}` : ""}`;
+    }
     else if (tor.state === "unavailable") text = `Tor: ${tor.detail || "not available"}`;
     else if (tor.state === "error") text = `Tor: problem — ${tor.detail || "retrying"}`;
     else text = "Tor: starting…";
