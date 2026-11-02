@@ -17,8 +17,52 @@ object TorProcess {
     private const val TAG = "SRLTCP"
     const val SUFFIX = ":tor"
 
+    private var bound: android.content.ServiceConnection? = null
+
+    /**
+     * Start the built-in Tor by binding to it: Android always allows that
+     * (a plain startService can be refused while the app counts as being in
+     * the background), and the bound Tor keeps this app's priority.
+     * Returns "" or why it couldn't be started.
+     */
+    @JvmStatic
+    @Synchronized
+    fun start(ctx: Context): String {
+        if (bound != null) return ""
+        val conn = object : android.content.ServiceConnection {
+            override fun onServiceConnected(name: android.content.ComponentName?, service: android.os.IBinder?) {}
+            override fun onServiceDisconnected(name: android.content.ComponentName?) {
+                Log.w(TAG, "The built-in Tor's process ended")
+            }
+        }
+        val intent = Intent().setClassName(ctx.packageName, "org.torproject.jni.TorService")
+        return try {
+            if (ctx.bindService(intent, conn, Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT)) {
+                bound = conn
+                ""
+            } else {
+                "Android didn't allow the built-in Tor to start"
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Starting the built-in Tor failed", e)
+            "the built-in Tor couldn't start: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    @JvmStatic
+    @Synchronized
+    private fun unbind(ctx: Context) {
+        bound?.let {
+            try {
+                ctx.unbindService(it)
+            } catch (_: Exception) { /* already gone */ }
+        }
+        bound = null
+    }
+
     @JvmStatic
     fun reset(ctx: Context) {
+        unbind(ctx)
         try {
             ctx.stopService(Intent().setClassName(ctx.packageName, "org.torproject.jni.TorService"))
         } catch (e: Exception) {

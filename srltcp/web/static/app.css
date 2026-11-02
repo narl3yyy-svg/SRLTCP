@@ -1958,3 +1958,8 @@ html, body { touch-action: pan-x pan-y; }
 .msg-info { display: grid; grid-template-columns: auto 1fr; gap: 0.45rem 1rem; margin: 0.75rem 0; }
 .msg-info dt { color: var(--text-muted); font-size: 0.85rem; }
 .msg-info dd { margin: 0; word-break: break-word; }
+
+/* Settings that only apply to a PC, or only to the Android app */
+.android-only { display: none; }
+.android-app .android-only { display: inline; }
+.android-app .pc-only { display: none !important; }

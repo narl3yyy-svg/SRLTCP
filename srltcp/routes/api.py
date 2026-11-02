@@ -236,6 +236,9 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         )
         return web.json_response({"deleted": removed})
 
+    async def tor_status(_request: web.Request) -> web.Response:
+        return web.json_response(node.backend.tor_status())
+
     async def tor_new_address(_request: web.Request) -> web.Response:
         try:
             onion = await node.backend.new_tor_address()
@@ -1325,6 +1328,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_post("/api/trusted/{hash_id}/clear-chat", trusted_clear_chat)
     app.router.add_delete("/api/trusted/{hash_id}", trusted_remove)
     app.router.add_post("/api/trusted/{hash_id}/diagnose", trusted_diagnose)
+    app.router.add_get("/api/tor/status", tor_status)
     app.router.add_post("/api/tor/new-address", tor_new_address)
     app.router.add_get("/api/messages", messages)
     app.router.add_post("/api/chats/delete", delete_chat)

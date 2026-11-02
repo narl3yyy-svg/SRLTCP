@@ -386,7 +386,8 @@ class TorMixin:
                     break
                 await asyncio.sleep(0.2)
             else:
-                raise RuntimeError("the built-in Tor did not start (no control socket)")
+                why = await asyncio.to_thread(self._tor_android_problem)
+                raise RuntimeError("the built-in Tor did not start" + (f": {why}" if why else ""))
             last: Exception | None = None
             for _ in range(25):  # the socket file appears just before Tor listens
                 try:
@@ -430,7 +431,11 @@ class TorMixin:
             if self._tor_progress >= 100:
                 break
             if asyncio.get_running_loop().time() > deadline:
-                raise RuntimeError(f"Tor couldn't connect to the network ({self._tor_progress}%)")
+                why = ""
+                if self._tor_on_android():
+                    why = await asyncio.to_thread(self._tor_android_problem)
+                raise RuntimeError(f"Tor couldn't connect to the network ({self._tor_progress}%)"
+                                   + (f": {why}" if why else ""))
             await asyncio.sleep(1)
         socks = await control.getinfo("net/listeners/socks")
         m = re.search(r"127\.0\.0\.1:(\d+)", socks)
@@ -539,8 +544,8 @@ class TorMixin:
         )
 
     def _tor_start_android(self: MessagingBackend) -> str:
-        """Bundled Tor (tor-android): write its torrc, start TorService, return
-        the path of its private control socket."""
+        """Bundled Tor (tor-android): write its torrc, start TorService (bound,
+        in its own process), return the path of its private control socket."""
         try:
             from java import jclass
 
@@ -550,13 +555,33 @@ class TorMixin:
             raise _TorUnavailable(f"built-in Tor not found ({exc})") from exc
         torrc = Path(str(tor_service.getTorrc(ctx).getAbsolutePath()))
         torrc.parent.mkdir(parents=True, exist_ok=True)
-        torrc.write_text("SocksPort 127.0.0.1:auto\nClientOnly 1\nAvoidDiskWrites 1\n")
+        # Tor's own log in a file this app can read: when Tor can't start or
+        # connect, its reason is shown in Settings (see _tor_android_problem).
+        log_file = torrc.parent / "tor.log"
+        with contextlib.suppress(OSError):
+            log_file.unlink()
+        torrc.write_text(
+            "SocksPort 127.0.0.1:auto\nClientOnly 1\n"
+            f"Log notice file {log_file}\n"
+        )
         base = Path(str(ctx.getDir("TorService", 0).getAbsolutePath()))
-        intent = jclass("android.content.Intent")()
-        intent.setClassName(ctx.getPackageName(), "org.torproject.jni.TorService")
-        intent.setAction("org.torproject.android.intent.action.START")
-        ctx.startService(intent)
+        problem = str(jclass("com.srltcp.app.TorProcess").start(ctx) or "")
+        if problem:
+            raise RuntimeError(problem)
         return str(base / "data" / "ControlSocket")
+
+    def _tor_android_problem(self: MessagingBackend) -> str:
+        """The last warning or error in the built-in Tor's log ("" if none)."""
+        with contextlib.suppress(Exception):
+            from java import jclass
+
+            ctx = jclass("com.chaquo.python.Python").getPlatform().getApplication()
+            log_file = Path(str(ctx.getDir("TorService", 0).getAbsolutePath())) / "tor.log"
+            lines = log_file.read_text(errors="replace").splitlines()[-200:]
+            for line in reversed(lines):
+                if "[warn]" in line or "[err]" in line:
+                    return line.split("]", 1)[-1].strip()[:200]
+        return ""
 
     def _tor_reset_android(self: MessagingBackend) -> None:
         """End the built-in Tor's process (it can't start twice in one) and
@@ -576,9 +601,7 @@ class TorMixin:
             from java import jclass
 
             ctx = jclass("com.chaquo.python.Python").getPlatform().getApplication()
-            intent = jclass("android.content.Intent")()
-            intent.setClassName(ctx.getPackageName(), "org.torproject.jni.TorService")
-            ctx.stopService(intent)
+            jclass("com.srltcp.app.TorProcess").reset(ctx)
 
     # ── Dialing ──
 

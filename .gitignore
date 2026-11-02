@@ -61,3 +61,8 @@ htmlcov/
 .coverage
 .aider*
 release/
+
+# Tor downloaded by run.bat (Windows)
+/tor-expert-bundle/
+/.tor-download-declined
+/tor/

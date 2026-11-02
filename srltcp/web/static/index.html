@@ -279,7 +279,7 @@
 <input type="checkbox" id="set-tor-enabled" />
 <span>Find contacts on other networks (Tor)</span>
 </label>
-<small class="field-hint">How two phones on different networks find each other with no server of anyone's: only to swap addresses and set up the direct connection. Messages, files and calls never go over Tor; they wait for the direct connection (the header shows CONNECTING meanwhile). Your contacts get your Tor address inside the encrypted connection; you can also copy it from under your hash ID to give to someone you add by hand (anyone who has it can tell when you're online, so share it like a phone number). Only your contacts can connect through it. Both of you need it on. Built into the Android app; on a PC install Tor Browser.</small>
+<small class="field-hint">How two phones on different networks find each other with no server of anyone's: only to swap addresses and set up the direct connection. Messages, files and calls never go over Tor; they wait for the direct connection (the header shows CONNECTING meanwhile). Your contacts get your Tor address inside the encrypted connection; you can also copy it from under your hash ID to give to someone you add by hand (anyone who has it can tell when you're online, so share it like a phone number). Only your contacts can connect through it. Both of you need it on. <span class="pc-only">On a PC, <code>run.bat</code> offers to download Tor the first time (or install Tor Browser).</span><span class="android-only">Built into this app.</span></small>
 <div class="net-status" id="tor-status" aria-live="polite"></div>
 <button type="button" class="action-btn small hidden" id="tor-new-address">New Tor address</button>
 <small class="field-hint hidden" id="tor-new-address-hint">If your Tor address got around more than you wanted: contacts you're connected to get the new one at once; anyone else needs it again.</small>
@@ -318,7 +318,7 @@
 <input type="checkbox" id="set-strict-ports" checked />
 <span>Use exact ports (fail if busy instead of trying the next free one)</span>
 </label>
-<label class="field">
+<label class="field pc-only">
 <span>Tor program (PC only, optional)</span>
 <input type="text" id="set-tor-path" placeholder="Found automatically (Tor Browser, Tor Expert Bundle, tor on PATH) — or paste the path of tor.exe or its folder" spellcheck="false" />
 <small>Full path to tor.exe if it's somewhere unusual, e.g. <code>C:\Tor\tor\tor.exe</code>.</small>

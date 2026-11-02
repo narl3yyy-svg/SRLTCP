@@ -59,13 +59,21 @@ shares and sync **never go over Tor**.
 
 - **Turn it on:** *Settings → Network → Find contacts on other networks
   (Tor)*, on both devices. It's on by default.
-- **Android:** Tor is built into the app. It runs in its own small process;
-  if it stops or fails to start, the app ends that process and starts a
-  fresh Tor by itself. While it connects, *Settings → Network* shows Tor's
+- **Android:** Tor is built into the app. It runs in its own small process,
+  bound to the app (Android always allows that, and a slow first start
+  survives); if it stops or fails to start, the app ends that process and
+  starts a fresh Tor by itself. If Tor can't start or connect, Settings
+  shows Tor's own reason (from its log). While it connects, *Settings → Network* shows Tor's
   own progress and any problem it reports (e.g. "Connection refused" on a
   network that blocks Tor).
-- **PC:** install [Tor Browser](https://www.torproject.org/download/) on
-  Windows or macOS, or the `tor` package on Linux (`sudo apt install tor`).
+- **Windows:** the first time you start SRLTCP with `run.bat web` and no
+  Tor is found, it asks whether to download the **Tor Expert Bundle** (the
+  Tor program only, ~23 MB) from torproject.org. Say yes: the newest stable
+  version is downloaded over HTTPS, checked against the SHA-256 checksum the
+  Tor Project publishes, and unpacked into `SRLTCP\tor-expert-bundle`. Say no
+  and you're not asked again (`run.bat tor-setup` downloads it later).
+- **PC (any):** or install [Tor Browser](https://www.torproject.org/download/)
+  on Windows or macOS, or the `tor` package on Linux (`sudo apt install tor`).
   SRLTCP finds it and starts its own copy in the background. On Windows it
   looks in Tor Browser's usual places (Desktop, Program Files, AppData), for
   the **Tor Expert Bundle** extracted in Downloads, on the Desktop or in the

@@ -1,5 +1,31 @@
 # SRLTCP Release Notes
 
+## v0.14.9 (2026-11-02)
+
+### Windows: Tor in one step
+- **`run.bat web` offers to download Tor.** If Tor isn't installed, it asks
+  once whether to download the Tor Expert Bundle (~23 MB) from
+  torproject.org. The newest stable version is downloaded over HTTPS,
+  checked against the Tor Project's published SHA-256 checksum (a mismatch
+  is never used), and unpacked into `SRLTCP\tor-expert-bundle`, where
+  SRLTCP finds it. Say **n** and you aren't asked again; `run.bat tor-setup`
+  downloads it later.
+
+### Android: the built-in Tor
+- **Starts reliably.** The app now *binds* to the built-in Tor instead of
+  starting it as a background service. Android always allows binding,
+  while a plain start can be refused when Android thinks the app is in the
+  background. The Tor library also stops its own service when Tor takes
+  more than 10 s to set up (likely on a phone's first start), which used
+  to kill Tor; a bound Tor survives that.
+- **Says why when it can't.** Tor now writes its own log, and if it can't
+  start or connect, Settings → Network shows Tor's last warning or error
+  instead of a bare "0%".
+- **Live progress.** While Tor connects, its status in Settings updates
+  every 2 seconds with a small request just for Tor.
+- **Phone-only settings.** The PC's "Tor program" path field is hidden on
+  the phone, and the hint says Tor is built in.
+
 ## v0.14.8 (2026-11-02)
 
 - **Fixed: Tor stuck at "0%" on the phone.** The built-in Tor can start

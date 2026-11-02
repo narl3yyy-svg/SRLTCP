@@ -5680,6 +5680,13 @@
   connectWs();
   pollSystemStats();
   startInterval(pollSystemStats, 10000);
+  // Settings → Network open while Tor connects: its progress, live (small request).
+  startInterval(async () => {
+    const el = $("#tor-status");
+    if (!el || !el.offsetParent || el.classList.contains("ok")) return;
+    const { ok, data } = await safeFetch("/api/tor/status", {}, { silent: true, fallback: null });
+    if (ok && data) renderTorStatus(data);
+  }, 2000);
   startInterval(async () => {
     if (state.settings.show_clock === false) return;
     const { ok, data } = await safeFetch("/api/system", {}, { silent: true, fallback: {} });
