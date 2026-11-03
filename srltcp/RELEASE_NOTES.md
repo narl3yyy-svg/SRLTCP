@@ -1,5 +1,27 @@
 # SRLTCP Release Notes
 
+## v0.15.1 (2026-11-03)
+
+### Video calls: the whole picture, not zoomed in
+- **The other person's video is no longer cropped.** It used to fill your
+  screen, which zoomed in a lot when the two screens have different shapes
+  (a wide monitor and a phone, two different monitors). Now the whole
+  picture is shown, with black bars where the shapes differ.
+- **Your choice.** The new frame button next to the camera button switches
+  between *Whole picture* and *Fill the screen* (zoomed in) during a call,
+  and so does double-tapping the video. It's remembered on each device, and
+  *Settings → General → Video calls* sets it as well. (The small floating
+  call window still fills its tile.)
+
+### macOS and Linux: Tor on the first start
+- **`./run.sh web` offers to download Tor**, like `run.bat web` on Windows:
+  the Tor Expert Bundle for your computer (the Apple-silicon arm64 build on
+  an M-series Mac; x86_64 or arm64 on Linux), checksum-verified, into
+  `SRLTCP/tor-expert-bundle`. `./run.sh tor-setup` downloads it any time.
+  Tor installed with Homebrew, apt or Tor Browser is found and used instead.
+- **Native on Apple silicon.** `run.sh` picks a Python 3.12+ that runs as
+  arm64 and rebuilds a virtual environment an Intel (Rosetta) Python made.
+
 ## v0.15.0 (2026-11-03)
 
 ### About those antivirus alerts

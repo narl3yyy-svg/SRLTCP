@@ -189,6 +189,14 @@
 </label>
 <small class="field-hint">JPEG, WebP and HEIC photos go out as JPEG with the longest side at most 2560 px, so they send faster over mobile data, without the location and camera details stored in the photo. Screenshots (PNG), GIFs and photos this device can't open are sent as they are. Off = the original file, untouched.</small>
 <label class="field">
+<span>Video calls: the other person's picture</span>
+<select id="set-call-fit">
+<option value="fit">Whole picture (not zoomed in)</option>
+<option value="fill">Fill the screen (zoomed in, edges cut off)</option>
+</select>
+<small>When the other screen or camera has a different shape than yours, <em>Whole picture</em> shows all of it with black bars; <em>Fill the screen</em> zooms in. Switch during a call with the frame button, or by double-tapping the video. Saved on this device.</small>
+</label>
+<label class="field">
 <span>Download automatically up to</span>
 <select id="set-auto-download">
 <option value="0">Ask for every file</option>
@@ -865,6 +873,7 @@
 <button type="button" class="call-btn hidden" id="call-speaker" aria-label="Speaker" title="Speaker" aria-pressed="false"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.47 4.47 0 0 0 2.5-4zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06a9 9 0 0 0 0-17.54z"/></svg></button>
 <button type="button" class="call-btn" id="call-toggle-camera" aria-label="Turn camera off" title="Camera on/off" aria-pressed="false"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" class="icon-on"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" class="icon-off"><path d="M21 6.5l-4 4V7a1 1 0 0 0-1-1H9.82L21 17.18zM3.27 2 2 3.27 4.73 6H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12c.2 0 .39-.08.54-.18L19.73 21 21 19.73z"/></svg></button>
 <button type="button" class="call-btn hidden" id="call-switch-camera" aria-label="Switch to the rear camera" title="Front / rear camera"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20 5h-3.17L15 3H9L7.17 5H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm-5 11.5V14H9v2.5L5.5 13 9 9.5V12h6V9.5l3.5 3.5z"/></svg></button>
+<button type="button" class="call-btn" id="call-fit" aria-label="Fill the screen (zoom in)" title="Whole picture / fill the screen" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="icon-on"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="icon-off"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg></button>
 <button type="button" class="call-btn decline" id="call-hangup" aria-label="Hang up" title="Hang up"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" class="hangup-icon"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1a1 1 0 0 1-.56.9 11.5 11.5 0 0 0-2.66 1.85 1 1 0 0 1-1.41 0L.29 13.08a1 1 0 0 1 0-1.41A16.9 16.9 0 0 1 12 7c4.57 0 8.71 1.8 11.71 4.67a1 1 0 0 1 0 1.41l-2.48 2.49a1 1 0 0 1-1.41 0 11.3 11.3 0 0 0-2.67-1.85 1 1 0 0 1-.56-.9v-3.1A15 15 0 0 0 12 9z"/></svg></button>
 </div>
 </div>

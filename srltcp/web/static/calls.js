@@ -285,6 +285,32 @@
     nativeCall();
   }
 
+  /* The other person's picture: whole (fit, the default) or filling the screen
+   * (zoomed in, edges cut off). Remembered on this device. */
+  const FIT_KEY = "srltcp.callVideoFit";
+  function callFit() {
+    try { return localStorage.getItem(FIT_KEY) === "fill" ? "fill" : "fit"; } catch (_) { return "fit"; }
+  }
+  function applyCallFit(mode) {
+    const fill = mode === "fill";
+    $("#call-overlay")?.classList.toggle("fill", fill);
+    const btn = $("#call-fit");
+    if (btn) {
+      btn.classList.toggle("filling", fill);
+      btn.setAttribute("aria-pressed", String(fill));
+      btn.setAttribute("aria-label", fill ? "Show the whole picture" : "Fill the screen (zoom in)");
+    }
+    const sel = $("#set-call-fit");
+    if (sel) sel.value = fill ? "fill" : "fit";
+  }
+  function setCallFit(mode) {
+    try { localStorage.setItem(FIT_KEY, mode); } catch (_) { /* this call only */ }
+    applyCallFit(mode);
+  }
+  function toggleCallFit() {
+    setCallFit(callFit() === "fill" ? "fit" : "fill");
+  }
+
   async function showSwitchIfTwoCameras() {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
@@ -907,6 +933,23 @@
     $("#call-toggle-camera")?.addEventListener("click", toggleCamera);
     $("#call-speaker")?.addEventListener("click", toggleSpeaker);
     $("#call-switch-camera")?.addEventListener("click", switchCamera);
+    $("#call-fit")?.addEventListener("click", toggleCallFit);
+    $("#set-call-fit")?.addEventListener("change", (e) => setCallFit(e.target.value));
+    applyCallFit(callFit());
+    // Double-tap (or double-click) the picture: whole <-> fill.
+    let lastTap = 0;
+    $("#call-remote-video")?.addEventListener("pointerup", (e) => {
+      const o = $("#call-overlay");
+      if (!o || o.classList.contains("mini") || o.classList.contains("pip")) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      if (!e.isPrimary || Date.now() < earUntil) return;  // (an ear or cheek, not a tap)
+      if (e.timeStamp - lastTap < 350) {
+        lastTap = 0;
+        toggleCallFit();
+      } else {
+        lastTap = e.timeStamp;
+      }
+    });
     // Phone at your ear (earpiece, not speaker): an ear or cheek touches with a
     // big contact area or several points at once; such touches press nothing.
     // (The Android app also turns the screen off by the proximity sensor.)

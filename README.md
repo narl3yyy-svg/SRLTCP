@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.15.0 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.15.1 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -258,7 +258,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.15.0.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.15.1.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -266,7 +266,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.15.0.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.15.0.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.15.1.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -375,6 +375,8 @@ Tap the contact's name at the top of a chat, the **⋮** next to a contact, or l
 Voice and video calls use WebRTC. Offer/answer are sent inside the encrypted SRLTCP session, so DTLS fingerprints are authenticated by the contact's identity key. The media itself also goes through the session: each device runs a tiny media forwarder on localhost (127.0.0.1) for its own browser/WebView, which passes the (already DTLS-SRTP encrypted) packets to the other phone as encrypted `CALL_MEDIA` messages. So **calls work wherever chat works** — same Wi-Fi, WireGuard/VPN or direct UDP/IPv6 — with no STUN/TURN server. Calls never go over Tor: if a contact is only reachable there, the call starts once the direct connection is up (usually a few seconds). **Back to chat during a call:** tap **Chat** in the top-left corner of the call (or use Android's back gesture) and the call shrinks to a small window at the top right (their video, or a pill with the timer for a voice call) while you text, send files or open other chats; drag it anywhere, tap it to bring the call back, or hang up from it. During a video call the camera button switches between the **front and rear camera** (on whichever side answered or called); on Android, **Answer** on the ringing notification answers straight away. **Switching networks mid-call** (Wi-Fi ↔ mobile data) doesn't end the call: it shows *Reconnecting…* and resumes once the session is back (it waits up to 90 s), restarting the WebRTC connection over the new path.
 
 **Earpiece / speaker (Android).** Calls start on the earpiece (voice) or the loudspeaker (video). A wired or Bluetooth headset takes over when connected. The speaker button switches between them. The app applies the route again when the other side's audio starts and when a headset is plugged in or removed, because the WebView's audio engine can reset it on some phones. On Android 12+ it uses `setCommunicationDevice` and falls back to the speakerphone switch if the phone refuses. Speaker volume during a call is the phone's *call* volume: press the volume keys while in the call.
+
+**The other person's picture.** By default a video call shows the contact's whole picture, with black bars when their screen or camera has a different shape than yours (a wide monitor on a phone, a phone on a monitor), so nothing is zoomed in or cut off. The frame button next to the camera button switches to **Fill the screen** (zoomed in, edges cut off) and back; double-tapping the video does the same. The choice is remembered on that device, and *Settings → General → Video calls* sets it too.
 
 **At your ear (Android).** During a call (voice or video), while the call screen is in front, covering the proximity sensor (your ear, a hand) turns the screen off like the phone app: an ear or cheek can't end the call, go home or open the notifications; it comes back when you move the phone away. Phones differ, so the app uses both the system's proximity screen-off and its own reading of the sensor (a black, untouchable screen with the status and navigation bars hidden; in a video call the videos are hidden too, since a phone may draw video above everything else). When the screen comes back, the app restarts the call's sound and applies the earpiece/speaker route again. The speaker button is blue while the loudspeaker is on. As a backup, touches with a large contact area or several points at once press nothing on the call screen.
 
