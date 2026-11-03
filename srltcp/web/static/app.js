@@ -941,6 +941,7 @@
     let text = "";
     let ok = false;
     if (!tor.enabled) text = "Off.";
+    else if (tor.quiet) text = "Tor: paused — you're on a network you marked quiet.";
     else if (tor.state === "ready") {
       ok = true;
       text = "Tor: connected. Your contacts can reach you from any network.";
@@ -2855,9 +2856,9 @@
     setSelectValue("set-retention", settings.message_retention_preset || "1w");
     setInputValue("set-incoming", settings.incoming_files_dir || "");
     setInputValue("set-shared", settings.shared_folder || "");
-    setCheckbox("set-auto-announce", !!settings.auto_announce);
     setCheckbox("set-direct-internet", settings.direct_internet !== false);
-    setCheckbox("set-router-port-mapping", settings.router_port_mapping !== false);
+    setCheckbox("set-router-port-mapping", !!settings.router_port_mapping);
+    setInputValue("set-quiet-networks", settings.quiet_networks || "");
     setInputValue("set-stun-servers", settings.stun_servers || "");
     setCheckbox("set-tor-enabled", settings.tor_enabled !== false);
     setCheckbox("set-shrink-photos", !!settings.shrink_photos);
@@ -2920,7 +2921,6 @@
     setInputValue("setup-name", settings.display_name || "");
     setInputValue("setup-web-port", String(settings.web_port || 9876));
     setSelectValue("setup-retention", settings.message_retention_preset || "1w");
-    setCheckbox("setup-auto-announce", !!settings.auto_announce);
     loadInterfaces($("#setup-lan-ip"), settings.lan_ip || "");
   }
 
@@ -5312,9 +5312,9 @@
       incoming_files_dir: $(`#${prefix}-incoming`)?.value.trim() || "",
       shared_folder: $(`#${prefix}-shared`)?.value.trim() || "",
       lan_ip: $(`#${prefix}-lan-ip`)?.value || "",
-      auto_announce: $(`#${prefix}-auto-announce`)?.checked || false,
       direct_internet: $("#set-direct-internet")?.checked ?? true,
-      router_port_mapping: $("#set-router-port-mapping")?.checked ?? true,
+      router_port_mapping: $("#set-router-port-mapping")?.checked || false,
+      quiet_networks: ($("#set-quiet-networks")?.value || "").trim(),
       stun_servers: ($("#set-stun-servers")?.value || "").trim(),
       tor_enabled: $("#set-tor-enabled")?.checked ?? true,
       shrink_photos: $("#set-shrink-photos")?.checked || false,
@@ -5663,6 +5663,21 @@
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); copyMyOnion(); }
   });
   $("#tor-new-address")?.addEventListener("click", newTorAddress);
+  // Settings → Network: add the network(s) this device is on to the quiet list.
+  $("#btn-quiet-here")?.addEventListener("click", async () => {
+    const { ok, data } = await apiGet("/api/network/current", { fallback: {} });
+    const nets = (ok && data?.networks) || [];
+    if (!nets.length) {
+      toast("Not on a local network right now");
+      return;
+    }
+    const input = $("#set-quiet-networks");
+    if (!input) return;
+    const have = input.value.split(",").map((x) => x.trim()).filter(Boolean);
+    for (const n of nets) if (!have.includes(n)) have.push(n);
+    input.value = have.join(", ");
+    toast(`Added ${nets.join(", ")} — press Save`);
+  });
   $("#me-hash")?.addEventListener("click", async () => {
     const hash = $("#me-hash")?.dataset.fullHash || $("#me-hash")?.textContent || "";
     if (!hash) return;

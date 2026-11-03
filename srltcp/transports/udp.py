@@ -109,12 +109,6 @@ IDLE_TIMEOUT = 30.0
 KEEPALIVE = 10.0  # carrier NATs forget UDP mappings after ~30 s
 MIGRATE_AFTER = 1.0  # path silent this long: follow the peer to a new address
 PROBE_EVERY = 0.2
-# Birthday punch against a strict NAT: that side opens SPRAY_SOCKETS ports
-# towards us; we probe SPRAY_PORTS_PER_ROUND random ports of its address per
-# probe round. With 192 ports there and ~1000 probes here, one meets the other
-# ~95 % of the time (Tailscale-style "hard NAT" traversal).
-SPRAY_SOCKETS = 192
-SPRAY_PORTS_PER_ROUND = 40
 # Priming: a packet that opens our own NAT towards the contact but expires
 # (hop limit) before reaching theirs. If a probe reached their router before
 # they sent anything, many routers (Linux-based ones, many carriers) would
@@ -418,9 +412,6 @@ class UdpConnection:
         # Birthday punch (one side behind a strict NAT that picks a new port
         # for every destination): that side probes from many extra sockets,
         # the other probes many random ports of its address.
-        self.spray: list[asyncio.DatagramTransport] = []
-        self.spray_hosts: list[str] = []
-        self._adopted: asyncio.DatagramTransport | None = None  # (ours to close)
         self.opened = asyncio.Event()
         self._closed = False
         self._on_frame: Callable[[TransportPeer, bytes], Awaitable[None]] | None = None
@@ -600,18 +591,8 @@ class UdpConnection:
             handler, self._on_close = self._on_close, None
             await handler(self.peer)
 
-    def _close_spray(self, keep: asyncio.DatagramTransport | None = None) -> None:
-        for transport in self.spray:
-            if transport is not keep:
-                transport.close()
-        self.spray = []
-        self.spray_hosts = []
 
     def _shutdown(self) -> None:
-        self._close_spray()
-        if self._adopted is not None:
-            self._adopted.close()
-            self._adopted = None
         self._closed = True
         if self._timer:
             self._timer.cancel()
@@ -664,13 +645,6 @@ class UdpConnection:
         self.stats["received"] += 1
         if self.remote is None:
             self.remote = addr  # the punch: first authenticated packet fixes the path
-            if via is not None and via in self.spray:
-                # One of the extra sockets got through a strict NAT (the
-                # birthday punch): the connection lives on that one now.
-                self.socks = {**self.socks, socket.AF_INET: via}
-                self._adopted = via
-                _set_hops(via, socket.AF_INET, DEFAULT_HOPS)
-            self._close_spray(keep=self.socks.get(socket.AF_INET))
         if addr == self.remote:
             self._remote_rx = now
         elif now - self._remote_rx > MIGRATE_AFTER:
@@ -1232,26 +1206,6 @@ class UdpConnection:
         header = HEADER.pack(MAGIC, VERSION, self.peer_conn_id, pn)
         return header + self._seal.encrypt(_nonce(pn), bytes([F_PING]), header)
 
-    def _spray_round(self, punch: _PunchState, rounds: int) -> None:
-        """Birthday punch, one round. Behind the strict NAT: every extra
-        socket sends to their address (each gets its own NAT port; every
-        other round, to keep those mappings open). The other side: probes to
-        a fresh batch of random ports of the strict side's address (each
-        opens its own router for an answer from that port)."""
-        packet = self._probe_packet()
-        if self.spray and rounds % 2 == 0:
-            v4 = [c for c in punch.candidates if ":" not in c[0]]
-            for transport in self.spray:
-                for addr in v4:
-                    with contextlib.suppress(OSError):
-                        transport.sendto(packet, addr)
-        sock = self.socks.get(socket.AF_INET)
-        if self.spray_hosts and sock is not None:
-            for host in self.spray_hosts:
-                for _ in range(SPRAY_PORTS_PER_ROUND):
-                    with contextlib.suppress(OSError):
-                        sock.sendto(packet, (host, 1024 + secrets.randbelow(64512)))
-
     def start_probing(self, candidates: list[tuple[str, int]], deadline: float) -> _PunchState:
         self.punch = _PunchState(candidates, deadline)
         self._spawn(self._probe_loop())
@@ -1263,8 +1217,6 @@ class UdpConnection:
         rounds = 0
         while not self._closed and not self.opened.is_set() and time.monotonic() < punch.deadline:
             self._send_packet(bytes([F_PING]), eliciting=False, with_ack=False)
-            if self.spray or self.spray_hosts:
-                self._spray_round(punch, rounds)
             rounds += 1
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.opened.wait(), PROBE_EVERY)
@@ -1287,17 +1239,6 @@ class _Protocol(asyncio.DatagramProtocol):
 
     def error_received(self, exc: Exception) -> None:
         log.debug("UDP socket error: %r", exc)
-
-
-def _set_hops(transport: asyncio.DatagramTransport, family: int, limit: int) -> None:
-    sock = transport.get_extra_info("socket")
-    level, opt = (
-        (socket.IPPROTO_IPV6, socket.IPV6_UNICAST_HOPS)
-        if family == socket.AF_INET6
-        else (socket.IPPROTO_IP, socket.IP_TTL)
-    )
-    with contextlib.suppress(OSError, AttributeError):
-        sock.setsockopt(level, opt, limit)
 
 
 def _port_of(transport: asyncio.DatagramTransport) -> int:
@@ -1454,20 +1395,6 @@ class UdpEndpoint:
         self._conns[my_id] = conn
         return conn
 
-    async def open_spray(self, count: int) -> list[asyncio.DatagramTransport]:
-        """``count`` extra IPv4 sockets (any port) for a birthday punch."""
-        loop = asyncio.get_running_loop()
-        out: list[asyncio.DatagramTransport] = []
-        for _ in range(count):
-            try:
-                transport, _ = await loop.create_datagram_endpoint(
-                    lambda: _Protocol(self), local_addr=("0.0.0.0", 0)
-                )
-            except OSError:
-                break  # (out of sockets: as many as we got)
-            out.append(transport)
-        return out
-
     def prime(
         self,
         candidates: list[tuple[str, int]],
@@ -1504,24 +1431,12 @@ class UdpEndpoint:
         *,
         delay: float = 0.0,
         hops: tuple[int, ...] = PRIME_HOPS,
-        spray_sockets: int = 0,
-        spray_hosts: list[str] | None = None,
     ) -> bool:
         """Probe every candidate until one answers (authenticated) or the
         window closes. ``delay``: the answering side waits that long after
-        priming, so its probes never reach the other NAT first.
-        ``spray_sockets``: we're behind a strict NAT, probe from that many
-        extra sockets too; ``spray_hosts``: they are, probe random ports of
-        these addresses too (the birthday punch)."""
-        if spray_sockets:
-            conn.spray = await self.open_spray(spray_sockets)
-            # Their probes are to find our extra sockets' NAT ports; ours must
-            # not reach their router (a Linux-based router that saw a packet
-            # from that port first gives its phone's probe to it another
-            # port, and it misses). Low hop limits, spread like priming.
-            for i, transport in enumerate(conn.spray):
-                _set_hops(transport, socket.AF_INET, hops[i % len(hops)] if hops else DEFAULT_HOPS)
-        conn.spray_hosts = list(spray_hosts or [])
+        priming, so its probes never reach the other NAT first. Only the
+        contact's own addresses are probed, a few packets a second (never
+        random ports: nothing that looks like a scan)."""
         usable = [
             c
             for c in candidates

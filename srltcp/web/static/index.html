@@ -257,7 +257,7 @@
 </fieldset>
 </div>
 <div class="settings-panel" data-panel="network">
-<p class="hint">Most people never need to change anything here. SRLTCP connects phones straight to each other — no relays, no servers in between: same Wi-Fi or VPN first, otherwise directly across the internet (IPv4 through carrier NAT, and IPv6). Tor only helps two phones on different networks find each other and swap addresses; nothing you send goes over it.</p>
+<p class="hint">Most people never need to change anything here. SRLTCP connects phones straight to each other — no relays, no servers in between: same Wi-Fi or VPN first, otherwise directly across the internet (IPv4 through carrier NAT, and IPv6). Tor only helps two phones on different networks find each other and swap addresses; nothing you send goes over it. SRLTCP only ever contacts your contacts: if one doesn't answer for 2 minutes it stops trying until you open their chat, send them something, change networks or restart the app — and they can still reach you (messages and calls come through).</p>
 <fieldset class="net-settings">
 <legend>Over the internet</legend>
 <label class="field checkbox-field">
@@ -269,7 +269,7 @@
 <input type="checkbox" id="set-router-port-mapping" />
 <span>Open a port on my home router (UPnP / NAT-PMP)</span>
 </label>
-<small class="field-hint">On Wi-Fi, asks your router to pass direct connections to this device's UDP port, as video-call and game apps do. Needed by many home routers for a contact on mobile data to connect directly. Only your own router is asked; the port only answers your contacts' encrypted packets, and the mapping is removed when the app stops.</small>
+<small class="field-hint">Off by default. On Wi-Fi, asks your router (UPnP / NAT-PMP, as game consoles and video-call apps do) to forward this device's UDP port from the internet. Turn it on only if a contact on mobile data can't connect to you directly at home. Only your own router is asked; packets from the internet can then reach that port, which answers only your contacts' encrypted packets, and the mapping is removed when the app stops. Security software may report the UPnP traffic.</small>
 <label class="field">
 <span>STUN servers</span>
 <input type="text" id="set-stun-servers" placeholder="Default: Google and Cloudflare" autocomplete="off" spellcheck="false" />
@@ -281,6 +281,12 @@
 </label>
 <small class="field-hint">How two phones on different networks find each other with no server of anyone's: only to swap addresses and set up the direct connection. Messages, files and calls never go over Tor; they wait for the direct connection (the header shows CONNECTING meanwhile). Your contacts get your Tor address inside the encrypted connection; you can also copy it from under your hash ID to give to someone you add by hand (anyone who has it can tell when you're online, so share it like a phone number). Only your contacts can connect through it. Both of you need it on. <span class="pc-only">On a PC, <code>run.bat</code> offers to download Tor the first time (or install Tor Browser).</span><span class="android-only">Built into this app.</span></small>
 <div class="net-status" id="tor-status" aria-live="polite"></div>
+<label class="field">
+<span>Quiet networks (work, school…)</span>
+<input type="text" id="set-quiet-networks" placeholder="None — e.g. 10.20.0.0/16" autocomplete="off" spellcheck="false" />
+<small>While you're on one of these networks SRLTCP uses none of its internet features: no Tor, no STUN, no direct connections across networks, no router port mapping — nothing a company firewall or antivirus would flag. Contacts on the same Wi-Fi or VPN, and the radio, still work. Networks as <code>address/size</code> separated by commas.</small>
+<button type="button" class="action-btn small" id="btn-quiet-here">Make the network I'm on quiet</button>
+</label>
 <button type="button" class="action-btn small hidden" id="tor-new-address">New Tor address</button>
 <small class="field-hint hidden" id="tor-new-address-hint">If your Tor address got around more than you wanted: contacts you're connected to get the new one at once; anyone else needs it again.</small>
 </fieldset>
@@ -291,10 +297,7 @@
 <select id="set-lan-ip"></select>
 <small>Which of your addresses to advertise. "Auto" is right unless you have several networks.</small>
 </label>
-<label class="field checkbox-field">
-<input type="checkbox" id="set-auto-announce" />
-<span>Announce myself at startup</span>
-</label>
+<small class="field-hint">Devices are only found by hand: press Announce (or Find by IP) and, for the next 10 minutes, devices on your Wi-Fi or VPN that also pressed Announce can see your name and ID. SRLTCP never scans or announces by itself.</small>
 </fieldset>
 <button type="button" class="action-btn" id="btn-network-viz">Network map</button>
 <details class="edit-advanced">
@@ -327,6 +330,7 @@
 <input type="checkbox" id="set-wan-expose" />
 <span>I port-forward TCP 7825 on my router (optional; direct connections work without it)</span>
 </label>
+<small class="field-hint">Off: the TCP port only accepts connections from your own network (and VPN) and from your contacts' known addresses — strangers on the internet are turned away before anything is read.</small>
 </details>
 </div>
 <div class="settings-panel" data-panel="serial">
@@ -453,10 +457,6 @@
 <label class="field">
 <span>Network interface / IP</span>
 <select id="setup-lan-ip"></select>
-</label>
-<label class="field checkbox-field">
-<input type="checkbox" id="setup-auto-announce" checked />
-<span>Let nearby devices find me (LAN and VPN). Shares your name and ID with your network.</span>
 </label>
 <button type="submit" class="action-btn save-btn">Get started</button>
 </form>

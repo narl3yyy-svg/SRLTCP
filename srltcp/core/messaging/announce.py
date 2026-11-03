@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from srltcp.core.messaging.constants import DISCOVERY_PORT
 from srltcp.core.protocol.signed import sign_payload
 from srltcp.utils.logging import get_logger
-from srltcp.utils.network import in_vpn_subnet, on_our_network, primary_ipv4, sweep_targets
+from srltcp.utils.network import on_our_network, primary_ipv4
 
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
@@ -19,9 +19,11 @@ log = get_logger(__name__)
 
 ANNOUNCE_BURSTS = 3
 ANNOUNCE_BURST_DELAY = 0.12
-SWEEP_EVERY_N_LOOPS = 6  # auto-announce: VPN sweep every ~30 s (~250 tiny packets)
 REPLY_INTERVAL = 20.0  # answer a given address at most this often
-DISCOVERABLE_AFTER_MANUAL = 600.0  # reply to announces for 10 min after pressing Announce
+# Devices are only ever found by hand: pressing Announce (or Find by IP) makes
+# this device visible, and it answers other devices' announces, for 10 minutes.
+# Nothing is announced on a timer, at startup or when the network changes.
+DISCOVERABLE_AFTER_MANUAL = 600.0
 
 
 class AnnounceError(Exception):
@@ -69,10 +71,11 @@ class AnnounceMixin:
         self._announce_replies: dict[str, float] = {}
 
     def is_discoverable(self: MessagingBackend) -> bool:
-        """Answer other devices' announces only while we are announcing ourselves."""
-        if self.config.announce:
-            return True
-        return time.monotonic() - self._last_manual_announce < DISCOVERABLE_AFTER_MANUAL
+        """Answer other devices' announces only shortly after you pressed Announce."""
+        return (
+            self._last_manual_announce > 0
+            and time.monotonic() - self._last_manual_announce < DISCOVERABLE_AFTER_MANUAL
+        )
 
     def build_announce_payload(
         self: MessagingBackend, transport: str, *, reply: bool = False
@@ -109,18 +112,6 @@ class AnnounceMixin:
         from srltcp.utils.network import list_interfaces
 
         return {str(i.get("ip", "")) for i in list_interfaces()}
-
-    async def sweep_vpn(self: MessagingBackend) -> int:
-        """Unicast our announce across VPN subnets (WireGuard carries no broadcast)."""
-        if not self.tcp_transport:
-            return 0
-        hosts = await asyncio.to_thread(sweep_targets, self._own_ips())
-        if not hosts:
-            return 0
-        payload = self.build_announce_payload("tcp")
-        sent = await self.tcp_transport.unicast_discovery(payload, hosts)
-        log.info("VPN discovery sweep: announced to %d addresses", len(hosts))
-        return sent
 
     async def announce_to(self: MessagingBackend, host: str) -> None:
         """Announce directly to one address (Find by IP)."""
@@ -181,9 +172,7 @@ class AnnounceMixin:
         payload = self.build_announce_payload("tcp", reply=True)
         await self.tcp_transport.unicast_discovery(payload, [ip], ports)
 
-    async def _send_announce(
-        self: MessagingBackend, transport_name: str, *, sweep: bool = False
-    ) -> None:
+    async def _send_announce(self: MessagingBackend, transport_name: str) -> None:
         transport_name = transport_name.lower()
         if transport_name not in ("tcp", "serial"):
             raise AnnounceError(transport_name, f"Unknown transport: {transport_name}")
@@ -198,8 +187,6 @@ class AnnounceMixin:
                         transport_name,
                         "UDP discovery socket is not available — restart the node",
                     )
-                if sweep:
-                    await self.sweep_vpn()
         elif transport_name == "serial":
             if not self.serial_transport and self.config.enable_serial:
                 result = await self.ensure_serial_transport()
@@ -238,54 +225,20 @@ class AnnounceMixin:
             self._last_manual_announce = time.monotonic()
         announced: list[str] = []
         for t in transports:
-            for i in range(ANNOUNCE_BURSTS):
-                # Manual announces also sweep VPN subnets once.
-                await self._send_announce(t, sweep=manual and i == 0)
+            for _ in range(ANNOUNCE_BURSTS):
+                await self._send_announce(t)
                 await asyncio.sleep(ANNOUNCE_BURST_DELAY)
             announced.append(t)
         return announced
 
-    async def start_announce_loop(self: MessagingBackend) -> None:
-        await self.stop_announce_loop()
-        from srltcp.core.messaging.constants import ANNOUNCE_INTERVAL
-
-        async def _loop() -> None:
-            n = 0
-            last_ips: set[str] = set()
-            while self._running and self.config.announce:
-                try:
-                    # Our address changed (Wi-Fi <-> mobile data, VPN reconnect):
-                    # tell contacts right away instead of waiting for the next sweep.
-                    ips = self._own_ips()
-                    moved = bool(last_ips) and ips != last_ips
-                    last_ips = ips
-                    if moved:
-                        log.info("Network address changed — announcing now")
-                    # (The radio gets private beacons instead: radio.py.)
-                    if self.tcp_transport:
-                        sweep = moved or n % SWEEP_EVERY_N_LOOPS == 0
-                        await self._send_announce("tcp", sweep=sweep)
-                except Exception as exc:  # noqa: BLE001 - keep announcing after transient errors
-                    log.debug("Auto-announce failed: %s", exc)
-                n += 1
-                await asyncio.sleep(ANNOUNCE_INTERVAL)
-
-        self._announce_tasks.append(asyncio.create_task(_loop()))
-
     async def stop_announce_loop(self: MessagingBackend) -> None:
+        """(No announce loop any more: devices are found by hand only.)"""
         tasks = list(self._announce_tasks)
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._announce_tasks.clear()
-
-    async def set_auto_announce(self: MessagingBackend, enabled: bool) -> None:
-        self.config.announce = enabled
-        if enabled:
-            await self.start_announce_loop()
-        else:
-            await self.stop_announce_loop()
 
     async def _handle_discovered(
         self: MessagingBackend, address: str, transport: str, payload: bytes
@@ -344,13 +297,9 @@ class AnnounceMixin:
             link = self.get_link(peer.hash_id)
             if link and link.up and link.transport == "serial" and newer:
                 self.check_paths_now(peer.hash_id)  # on our Wi-Fi: it beats the radio
-        # Answer so the sender discovers us too (one press on one phone is enough).
-        src_ip = address.rsplit(":", 1)[0] if ":" in address else ""
-        if (
-            peer.transport == "tcp"
-            and not peer.metadata.get("reply")
-            and (self.is_discoverable() or (src_ip and in_vpn_subnet(src_ip)))
-        ):
+        # Answer (so the sender finds us too) only if we pressed Announce
+        # ourselves in the last few minutes: never automatically.
+        if peer.transport == "tcp" and not peer.metadata.get("reply") and self.is_discoverable():
             try:
                 await self._reply_to_announce(address, peer.metadata.get("discovery_port"))
             except OSError as exc:

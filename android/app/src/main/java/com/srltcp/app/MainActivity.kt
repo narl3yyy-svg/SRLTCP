@@ -197,7 +197,9 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         current = java.lang.ref.WeakReference(this)
         SRLTCPNotifier.ensureChannels(this)
-        if (intent?.getBooleanExtra(SRLTCPNotifier.EXTRA_INCOMING_CALL, false) == true) {
+        if (SRLTCPNotifier.isOurCallIntent(intent) &&
+            intent?.getBooleanExtra(SRLTCPNotifier.EXTRA_INCOMING_CALL, false) == true
+        ) {
             setCallScreen(true)
         }
         takeAnswerRequest(intent)
@@ -898,7 +900,9 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getBooleanExtra(SRLTCPNotifier.EXTRA_INCOMING_CALL, false)) setCallScreen(true)
+        if (SRLTCPNotifier.isOurCallIntent(intent) &&
+            intent.getBooleanExtra(SRLTCPNotifier.EXTRA_INCOMING_CALL, false)
+        ) setCallScreen(true)
         takeAnswerRequest(intent)
     }
 
@@ -907,6 +911,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun takeAnswerRequest(intent: Intent?) {
         if (intent?.getBooleanExtra(SRLTCPNotifier.EXTRA_ANSWER_CALL, false) != true) return
+        if (!SRLTCPNotifier.isOurCallIntent(intent)) return  // (another app can't answer for you)
         intent.removeExtra(SRLTCPNotifier.EXTRA_ANSWER_CALL)  // not again after a rotation
         SRLTCPNotifier.stopRinging(this)
         answerPending = true
@@ -1026,7 +1031,15 @@ class MainActivity : AppCompatActivity() {
 
     fun copyText(text: String): Boolean = try {
         val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        cm.setPrimaryClip(android.content.ClipData.newPlainText("SRLTCP", text))
+        val clip = android.content.ClipData.newPlainText("SRLTCP", text)
+        // Messages are private: keep them out of the keyboard's clipboard
+        // preview and history (Android 13+).
+        if (Build.VERSION.SDK_INT >= 33) {
+            clip.description.extras = android.os.PersistableBundle().apply {
+                putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+            }
+        }
+        cm.setPrimaryClip(clip)
         true
     } catch (e: Exception) {
         Log.w(TAG, "Copy to clipboard failed", e)

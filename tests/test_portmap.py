@@ -261,7 +261,7 @@ async def test_forwarded_address_is_offered_first(tmp_path: Any, router: Router)
 
     from tests.test_e2e_nodes import make_node
 
-    node = make_node(tmp_path, "home", tcp_port=0)
+    node = make_node(tmp_path, "home", tcp_port=0, router_port_mapping=True)
     await node.start()
     try:
         assert node.udp is not None

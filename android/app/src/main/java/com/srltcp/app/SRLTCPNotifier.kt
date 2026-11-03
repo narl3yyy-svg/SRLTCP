@@ -22,6 +22,14 @@ object SRLTCPNotifier {
     const val NOTIFICATION_CALL = 9500
     const val EXTRA_INCOMING_CALL = "com.srltcp.app.INCOMING_CALL"
     const val EXTRA_ANSWER_CALL = "com.srltcp.app.ANSWER_CALL"
+    private const val EXTRA_CALL_TOKEN = "com.srltcp.app.CALL_TOKEN"
+    // MainActivity can be opened by any app: the call extras count only with
+    // this secret, which only our own notification's intents carry.
+    private val callToken: String = java.util.UUID.randomUUID().toString()
+
+    /** The intent came from our own call notification (not another app). */
+    fun isOurCallIntent(intent: Intent?): Boolean =
+        intent?.getStringExtra(EXTRA_CALL_TOKEN) == callToken
     private const val ALERT_ID_BASE = 9000
     private const val RING_MS = 45_000L  // same as the web UI's ring timeout
     private val RING_VIBRATION = longArrayOf(0, 1000, 1000)
@@ -91,6 +99,7 @@ object SRLTCPNotifier {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or
                     Intent.FLAG_ACTIVITY_CLEAR_TOP
                 putExtra(EXTRA_INCOMING_CALL, true)
+                putExtra(EXTRA_CALL_TOKEN, callToken)
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
@@ -104,6 +113,7 @@ object SRLTCPNotifier {
                     Intent.FLAG_ACTIVITY_CLEAR_TOP
                 putExtra(EXTRA_INCOMING_CALL, true)
                 putExtra(EXTRA_ANSWER_CALL, true)
+                putExtra(EXTRA_CALL_TOKEN, callToken)
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )

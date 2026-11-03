@@ -65,11 +65,36 @@ def clean_rel(raw: object) -> str | None:
     if "\\" in raw or "\x00" in raw or ":" in raw or raw.startswith("/"):
         return None
     parts = PurePosixPath(raw).parts
-    if not parts or any(p in ("", ".", "..") for p in parts) or parts[0] == META_DIR:
+    if not parts or any(p in ("", ".", "..") for p in parts):
+        return None
+    if parts[0].casefold() == META_DIR.casefold():  # (case-insensitive disks too)
         return None
     if any(p != p.strip() for p in parts):
         return None
     return "/".join(parts)
+
+
+def inside_root(root: Path, rel: str) -> Path | None:
+    """``root / rel`` if writing or moving it stays inside ``root``: no folder
+    on the way (nor the file itself) may be a symlink or junction, so a link
+    inside the synced folder can't send a contact's file anywhere else."""
+    target = root / rel
+    probe = root
+    for part in PurePosixPath(rel).parts:
+        probe = probe / part
+        if probe.is_symlink() or (os.name == "nt" and _is_junction(probe)):
+            return None
+    try:
+        if not target.resolve().is_relative_to(root.resolve()):
+            return None
+    except (OSError, RuntimeError):
+        return None
+    return target
+
+
+def _is_junction(path: Path) -> bool:
+    is_junction = getattr(os.path, "isjunction", None)
+    return bool(is_junction and is_junction(path))
 
 
 def _sha256_file(path: Path) -> str:
@@ -238,6 +263,18 @@ class SyncMixin:
         if not sync or sync.state != "offered":
             raise ValueError("no such invitation")
         root = root.expanduser().resolve()
+        for other in self._syncs.values():
+            if other.id == sid or not other.root:
+                continue
+            if other.state in ("invited", "offered", "stopped"):
+                continue
+            theirs = Path(other.root).resolve()
+            if root == theirs or root.is_relative_to(theirs) or theirs.is_relative_to(root):
+                # (Another contact's synced folder, or one inside/around it:
+                # this contact would get two-way access to it.)
+                raise ValueError(
+                    "That folder is already synced with another contact — pick another folder"
+                )
         root.mkdir(parents=True, exist_ok=True)
         sync.root, sync.state = str(root), "active"
         self._save_syncs()
@@ -546,8 +583,8 @@ class SyncMixin:
 
     def _conflict_copy(self: MessagingBackend, sync: SyncFolder, rel: str) -> str | None:
         """Rename our version of ``rel`` to a conflict copy (picked up as a new file)."""
-        src = Path(sync.root) / rel
-        if not src.is_file():
+        src = inside_root(Path(sync.root), rel)
+        if src is None or not src.is_file():
             return None
         p = PurePosixPath(rel)
         stamp = time.strftime("%Y-%m-%d %H%M")
@@ -564,8 +601,8 @@ class SyncMixin:
         return None
 
     def _move_to_trash(self: MessagingBackend, sync: SyncFolder, rel: str) -> None:
-        src = Path(sync.root) / rel
-        if not src.is_file():
+        src = inside_root(Path(sync.root), rel)
+        if src is None or not src.is_file():
             return
         dst = Path(sync.root) / META_DIR / "trash" / time.strftime("%Y-%m-%d") / rel
         with contextlib.suppress(OSError):
@@ -670,7 +707,12 @@ class SyncMixin:
         self: MessagingBackend, sync: SyncFolder, rel: str, part: Path, entry: dict[str, Any]
     ) -> bool:
         index = self._index(sync.id)
-        target = Path(sync.root) / rel
+        target = inside_root(Path(sync.root), rel)
+        if target is None:
+            log.warning("Sync refused %s: it leads outside the synced folder", rel)
+            with contextlib.suppress(OSError):
+                part.unlink(missing_ok=True)
+            return False
         ours = index.get(rel)
         # Changed here while it downloaded? Then that's a conflict: keep ours too.
         if target.exists() and ours and not ours["del"]:

@@ -10,7 +10,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from srltcp.core.protocol.framing import FrameReader, FrameWriter
+from srltcp.core.protocol.framing import (
+    MAX_FRAME_SIZE,
+    PREAUTH_MAX_FRAME,
+    FrameReader,
+    FrameWriter,
+)
 
 # Stream tuning. Reads take what the socket has, up to READ_SIZE, so a 1 MiB
 # file chunk arrives in a few reads instead of sixteen. The write buffer may
@@ -100,6 +105,7 @@ class Connection:
         self.reader = reader
         self.writer = writer
         self._frame_reader = FrameReader()
+        self.authenticated = True  # (False for connections someone opened to us: limit())
         self._read_task: asyncio.Task[None] | None = None
         self._on_frame: FrameHandler | None = None
         self._on_close: Callable[[TransportPeer], Awaitable[None]] | None = None
@@ -124,6 +130,16 @@ class Connection:
         except OSError:
             pass
 
+    def limit(self) -> None:
+        """A connection someone opened to us: small frames only until it has
+        passed the handshake (see FrameReader.frames)."""
+        self.authenticated = False
+        self._frame_reader.max_frame = PREAUTH_MAX_FRAME
+
+    def mark_authenticated(self) -> None:
+        self.authenticated = True
+        self._frame_reader.max_frame = MAX_FRAME_SIZE
+
     def set_frame_handler(self, handler: FrameHandler) -> None:
         self._on_frame = handler
 
@@ -141,7 +157,7 @@ class Connection:
                 data = await self.reader.read(READ_SIZE)
                 if not data:
                     break
-                for frame in self._frame_reader.feed(data):
+                for frame in self._frame_reader.frames(data):
                     if self._on_frame:
                         await self._on_frame(self.peer, frame)
         except asyncio.CancelledError:

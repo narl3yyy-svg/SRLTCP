@@ -120,3 +120,23 @@ async def test_received_disappearing_file_is_deleted_after_a_restart(tmp_path: P
         assert tid not in again._transfers
     finally:
         await again.stop()
+
+
+async def test_a_message_id_cant_take_another_chats_message_with_it(tmp_path: Path) -> None:
+    """Ids of received messages are chosen by their sender: one reusing the id
+    of a message in another chat mustn't delete that one when it expires."""
+    from srltcp.core.messaging.models import ChatMessage
+
+    node = make_node(tmp_path, "alice")
+    me = "a" * 32
+    keep = ChatMessage.create(sender_hash="b" * 32, recipient_hash=me, text="keep",
+                              transport="tcp")
+    sneaky = ChatMessage.create(sender_hash="c" * 32, recipient_hash=me, text="gone",
+                                transport="tcp")
+    sneaky.id = keep.id
+    sneaky.metadata["expires_at"] = time.time() - 1
+    node._messages = [keep, sneaky]
+    assert await node.expire_messages(notify=False) == 1
+    assert [m.text for m in node._messages] == ["keep"]
+    assert await node.delete_messages([keep.id], peer="c" * 32) == 0
+    assert [m.text for m in node._messages] == ["keep"]

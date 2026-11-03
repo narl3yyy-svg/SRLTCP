@@ -149,3 +149,32 @@ async def test_stop_on_one_side_stops_the_other(synced) -> None:  # type: ignore
     assert await a.remove_sync(sid)
     assert await wait_for(lambda: b._syncs[sid].state == "stopped")
     assert files_in(root_b) and files_in(root_a)  # files stay
+
+
+def test_a_link_inside_the_synced_folder_leads_nowhere(tmp_path: Path) -> None:
+    from srltcp.core.messaging.sync import inside_root
+
+    root = tmp_path / "Sync"
+    (root / "photos").mkdir(parents=True)
+    outside = tmp_path / "home"
+    outside.mkdir()
+    (root / "docs").symlink_to(outside, target_is_directory=True)
+    assert inside_root(root, "photos/a.jpg") == root / "photos" / "a.jpg"
+    assert inside_root(root, "docs/.bashrc") is None  # (through the link: refused)
+    assert inside_root(root, "docs") is None
+    assert clean_rel(META_DIR.upper() + "/x") is None  # (case-insensitive disks)
+
+
+async def test_an_invite_cant_take_over_another_contacts_folder(tmp_path: Path) -> None:
+    from srltcp.core.messaging.sync import SyncFolder
+
+    node = make_node(tmp_path, "alice")
+    family = tmp_path / "Sync" / "Family Photos"
+    family.mkdir(parents=True)
+    node._syncs["a" * 16] = SyncFolder(id="a" * 16, peer="b" * 32, name="Family Photos",
+                                       root=str(family), state="active")
+    node._syncs["c" * 16] = SyncFolder(id="c" * 16, peer="d" * 32, name="Family Photos",
+                                       root="", state="offered")
+    for path in (family, family / "inside", family.parent):
+        with pytest.raises(ValueError, match="already synced"):
+            await node.accept_sync("c" * 16, path)

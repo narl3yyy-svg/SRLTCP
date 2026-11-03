@@ -65,7 +65,8 @@ class DisappearMixin:
         if not gone:
             return 0
         ids = {m.id for m in gone}
-        self._messages = [m for m in self._messages if m.id not in ids]
+        drop = {id(m) for m in gone}  # (not by id: a sender picks the ids of its messages)
+        self._messages = [m for m in self._messages if id(m) not in drop]
         for msg in gone:
             tid = str(msg.metadata.get("transfer_id") or "")
             if tid:

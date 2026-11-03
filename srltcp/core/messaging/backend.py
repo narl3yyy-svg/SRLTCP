@@ -67,7 +67,13 @@ DOORBELL_REFUSED = frozenset({
 EventCallback = Callable[..., Awaitable[None]]
 
 MAX_TEXT_BYTES = 65536
-HANDSHAKE_DEADLINE = 30.0  # seconds a TCP connection may stay unauthenticated
+HANDSHAKE_DEADLINE = 15.0  # seconds a TCP connection may stay unauthenticated
+# A contact SRLTCP can't reach for this long isn't dialed again until you open
+# their chat, send them something or call them, the network changes or the app
+# restarts. They can still reach you: your listeners and Tor address stay up,
+# so their calls ring and their messages arrive.
+REACH_GIVE_UP = 120.0
+UNTRUSTED_SESSION_MAX = 300.0  # a non-contact's session lasts at most this long
 MAX_CONTACT_REQUESTS = 50  # pending requests from strangers kept at once
 
 
@@ -79,7 +85,9 @@ class NodeConfig:
     discovery_port: int = DISCOVERY_PORT
     strict_ports: bool = True
     direct_internet: bool = True  # hole punching; shares public IP with contacts
-    router_port_mapping: bool = True  # UPnP / NAT-PMP on the home router (portmap.py)
+    router_port_mapping: bool = False  # UPnP / NAT-PMP on the home router (portmap.py)
+    quiet_networks: str = ""  # networks with no internet features ("10.20.0.0/16, ...")
+    accept_internet: bool = False  # any internet address may connect (you port-forward 7825)
     stun_servers: str = ""  # for direct UDP ("host:port, ..."; empty = defaults)
     tor_enabled: bool = False  # reach contacts over Tor (onion service)
     tor_path: str = ""  # tor executable on a PC (empty: find it)
@@ -144,6 +152,8 @@ class MessagingBackend(
         self._on_link_down: EventCallback | None = None
         self._on_event: EventCallback | None = None
         self._reconnect_tasks: dict[str, asyncio.Task[None]] = {}
+        self._reach_started: dict[str, float] = {}  # first automatic try, per contact
+        self._reach_paused: set[str] = set()  # given up on (until you touch them)
 
         self._init_links()
         self._init_connect()
@@ -197,6 +207,7 @@ class MessagingBackend(
             )
             self._wire_transport(self.tcp_transport)
             self.tcp_transport.on_datagram(self._on_transport_datagram)
+            self.tcp_transport.accept_filter = self._inbound_allowed
 
         if self.config.enable_serial:
             # (Serial uses the main identity: a contact is the same contact
@@ -220,8 +231,7 @@ class MessagingBackend(
                 self._record_serial_failure(self.serial_transport.port, exc)
                 self.serial_transport = None
 
-        if self.config.announce:
-            await self.start_announce_loop()
+        # (Nothing is announced automatically: devices are found by hand only.)
         await self.start_ping_loop()
         self._ping_tasks.append(asyncio.create_task(self.radio_loop()))
         self.start_progress_ticker()
@@ -360,8 +370,79 @@ class MessagingBackend(
 
         return {"serial": "running" if self.serial_transport else "failed"}
 
+    def _inbound_allowed(self, ip: str) -> bool:
+        """May this address open a TCP connection to us? Our own networks
+        (LAN, VPN, carrier-internal), or an internet address one of our
+        contacts gave us (their IPv6 /64). Everyone else on the internet is
+        refused before a byte is read; contacts elsewhere reach us over Tor."""
+        import ipaddress
+
+        try:
+            addr = ipaddress.ip_address(ip.split("%", 1)[0])
+        except ValueError:
+            return False
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
+        if addr.is_loopback or addr.is_private or addr.is_link_local:
+            return True
+        if addr.version == 4 and addr in ipaddress.ip_network("100.64.0.0/10"):
+            return True  # carrier-grade NAT / Tailscale space (not the internet)
+        if getattr(self.config, "accept_internet", False):
+            return True  # "I port-forward TCP 7825" (Settings): anyone may connect
+        known: list[str] = []
+        for peer in self.trusted.list_peers():
+            if peer.blocked:
+                continue
+            known += [peer.tcp_host, getattr(peer, "wan_host", ""), *peer.alt_hosts]
+        for hosts in self._peer_udp.values():
+            known += [h for h, _p in hosts]
+        for host in known:
+            try:
+                other = ipaddress.ip_address(str(host or "").strip("[]").split("%", 1)[0])
+            except ValueError:
+                continue
+            if other.version != addr.version:
+                continue
+            if addr.version == 4 and other == addr:
+                return True
+            if addr.version == 6 and addr in ipaddress.ip_network(f"{other}/64", strict=False):
+                return True
+        return False
+
+    def _reach_allowed(self, hash_id: str) -> bool:
+        """May SRLTCP dial this contact by itself now? Not after REACH_GIVE_UP
+        of trying without success (see resume_reaching)."""
+        if hash_id in self._reach_paused:
+            return False
+        now = time.monotonic()
+        started = self._reach_started.setdefault(hash_id, now)
+        if now - started > REACH_GIVE_UP:
+            self._reach_paused.add(hash_id)
+            log.info("Can't reach %s — not trying again until you open their chat, "
+                     "the network changes or the app restarts (they can still reach you)",
+                     hash_id[:8])
+            return False
+        return True
+
+    def resume_reaching(self, hash_id: str | None = None) -> None:
+        """You opened a chat, sent something or called (one contact), or the
+        network changed (everyone): dial again."""
+        if hash_id is None:
+            self._reach_started.clear()
+            self._reach_paused.clear()
+        else:
+            self._reach_started.pop(hash_id, None)
+            self._reach_paused.discard(hash_id)
+
+    def reached(self, hash_id: str) -> None:
+        """A session with the contact is up: the give-up clock starts over."""
+        self._reach_started.pop(hash_id, None)
+        self._reach_paused.discard(hash_id)
+
     def _schedule_reconnect(self, hash_id: str) -> None:
         if not self._running:
+            return
+        if not self._reach_allowed(hash_id):
             return
         if not self.trusted.is_trusted(hash_id):
             return
@@ -387,6 +468,8 @@ class MessagingBackend(
                         return
                     if self.radio_contact_near(hash_id):
                         return  # the radio reconnects it (radio.py)
+                    if not self._reach_allowed(hash_id):
+                        return
                     trusted = self.trusted.get(hash_id)
                     transport = trusted.transport if trusted else "tcp"
                     log.info(
@@ -664,14 +747,6 @@ class MessagingBackend(
         peer = self.trusted.get(hash_id)
         return bool(peer and not peer.blocked)
 
-    def delete_message(self, message_id: str) -> bool:
-        before = len(self._messages)
-        self._messages = [m for m in self._messages if m.id != message_id]
-        removed = len(self._messages) < before
-        if removed:
-            self._persist_messages()
-        return removed
-
     def clear_messages_for_peer(self, hash_id: str) -> int:
         """Delete the chat with a contact (not their messages in groups)."""
         before = len(self._messages)
@@ -719,8 +794,11 @@ class MessagingBackend(
     async def _remove_messages(self, gone: list[ChatMessage], *, delete_files: bool) -> int:
         if not gone:
             return 0
+        # (By the message itself, not its id: ids of received messages are
+        # chosen by their sender, so one could match a message of another chat.)
         ids = {m.id for m in gone}
-        self._messages = [m for m in self._messages if m.id not in ids]
+        drop = {id(m) for m in gone}
+        self._messages = [m for m in self._messages if id(m) not in drop]
         for msg in gone:
             tid = str(msg.metadata.get("transfer_id") or "")
             transfer = self._transfers.get(tid) if tid else None
@@ -843,6 +921,7 @@ class MessagingBackend(
         *,
         transport: str = "tcp",
     ) -> ChatMessage | None:
+        self.resume_reaching(recipient_hash)  # (you wrote to them: try again)
         """Queue a message and try to deliver it now.
 
         Returns immediately with status ``sent`` (written to an open session)
@@ -910,6 +989,8 @@ class MessagingBackend(
         existing = self._dial_tasks.get(hash_id)
         if existing and not existing.done():
             return
+        if not (link and link.handshake_complete) and not self._reach_allowed(hash_id):
+            return  # (tried for a while: waits for you, a network change or a restart)
 
         async def _dial() -> None:
             try:
@@ -960,6 +1041,17 @@ class MessagingBackend(
         now = time.monotonic()
         dead: list[str] = []
         for hash_id, link in list(self._links.items()):
+            if (
+                link.handshake_complete
+                and not self.is_trusted(hash_id)
+                and now - link.established > UNTRUSTED_SESSION_MAX
+            ):
+                # Someone who isn't a contact (a contact request, a device found
+                # with Announce): their session ends after a few minutes. Once you
+                # accept them, they're a contact and connect again.
+                log.info("Closing the session with non-contact %s", hash_id[:8])
+                await self._teardown_link(hash_id)
+                continue
             if not link.handshake_complete or self.has_active_transfer_for(hash_id):
                 continue
             if link.transport == "serial" and self.radio_alive():
@@ -1011,6 +1103,7 @@ class MessagingBackend(
     # -- Call signalling (WebRTC offer/answer/ICE relayed inside the E2EE session) --
 
     async def send_call_signal(self, recipient_hash: str, signal: dict[str, Any]) -> bool:
+        self.resume_reaching(recipient_hash)
         if not self.is_trusted(recipient_hash):
             return False
         link = self.data_link(recipient_hash)
@@ -1389,6 +1482,7 @@ class MessagingBackend(
         transport: str = "tcp",
         filename: str | None = None,
     ) -> dict[str, Any] | None:
+        self.resume_reaching(recipient_hash)
         if not self.trusted.is_trusted(recipient_hash):
             log.warning("Recipient %s not trusted for file send", recipient_hash[:8])
             return None

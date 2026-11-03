@@ -200,8 +200,10 @@ def _tor_binary(configured: str = "") -> str | None:
             Path(env("PROGRAMFILES", r"C:\Program Files")),
             Path(env("PROGRAMFILES(X86)", r"C:\Program Files (x86)")),
             Path(env("LOCALAPPDATA", str(home))), Path(env("APPDATA", str(home))),
-            Path("C:/"),
         ]
+        # (Only your own folders, the SRLTCP folder and Program Files: never
+        # C:\ itself, C:\Tor or ProgramData, where any user on the PC could
+        # put a tor.exe that SRLTCP would then run as you.)
         for base in places:
             candidates.append(base / "Tor Browser" / "Browser" / "TorBrowser" / "Tor" / "tor.exe")
             # The Tor Expert Bundle: a zip extracted to "tor-expert-bundle…\tor\tor.exe".
@@ -210,9 +212,7 @@ def _tor_binary(configured: str = "") -> str | None:
                     candidates += [bundle / "tor" / "tor.exe", bundle / "tor.exe"]
             except OSError:
                 pass
-        candidates += [app_dir / "tor" / "tor.exe", app_dir / "tor" / "tor" / "tor.exe",
-                       Path(r"C:\Tor\tor\tor.exe"), Path(r"C:\Tor\tor.exe"),
-                       Path(r"C:\ProgramData\chocolatey\bin\tor.exe")]
+        candidates += [app_dir / "tor" / "tor.exe", app_dir / "tor" / "tor" / "tor.exe"]
     elif sys.platform == "darwin":
         candidates += [Path("/Applications/Tor Browser.app/Contents/MacOS/Tor/tor"),
                        Path("/opt/homebrew/bin/tor"), Path("/usr/local/bin/tor")]
@@ -239,7 +239,11 @@ class TorMixin:
     # ── Settings / status ──
 
     def tor_enabled(self: MessagingBackend) -> bool:
-        return bool(getattr(self.config, "tor_enabled", False)) and self.tcp_transport is not None
+        return (
+            bool(getattr(self.config, "tor_enabled", False))
+            and self.tcp_transport is not None
+            and not self.on_quiet_network()
+        )
 
     def tor_ready(self: MessagingBackend) -> bool:
         return self._tor_state == "ready" and bool(self._tor_socks_port)
@@ -252,12 +256,16 @@ class TorMixin:
             "detail": self._tor_detail,
             # Shown only to you; contacts get it inside the encrypted session.
             "onion": self._tor_onion,
+            # On a network you marked quiet: Tor is paused there.
+            "quiet": bool(getattr(self.config, "tor_enabled", False)) and self.on_quiet_network(),
         }
 
     def tor_problem(self: MessagingBackend, hash_id: str) -> str:
         """Why Tor can't carry this contact right now, in plain words ('' = it can)."""
         if not getattr(self.config, "tor_enabled", False):
             return "it's turned off on this device (Settings → Network)"
+        if self.on_quiet_network():
+            return "it's paused here: this device is on a network you marked quiet"
         if self._tor_state in ("starting", "off"):
             return f"still connecting to the Tor network on this device ({self._tor_progress}%)"
         if self._tor_state in ("unavailable", "error"):

@@ -10,8 +10,10 @@ from srltcp.core.settings import RETENTION_HOURS, AppSettings, SettingsStore
 def test_settings_defaults(tmp_path: Path) -> None:
     store = SettingsStore(path=tmp_path / "settings.json")
     settings = store.load()
-    assert settings.auto_announce is True
-    assert settings.version == "0.14.9"
+    assert settings.auto_announce is False  # (devices are found by hand only)
+    assert settings.router_port_mapping is False  # (only if you switch it on)
+    assert settings.tor_enabled is True
+    assert settings.version == "0.15.0"
     assert settings.tcp_port == 7825
     assert settings.discovery_port == 7826
     assert settings.strict_ports is True
@@ -70,7 +72,7 @@ def test_wan_expose_port_persist(tmp_path: Path) -> None:
     assert loaded.wan_expose_port is True
 
 
-def test_android_upgrade_migration_unpins_ip_and_enables_discovery() -> None:
+def test_upgrade_migration_unpins_ip_and_turns_off_announce_and_port_mapping() -> None:
     from srltcp.app import migrate_settings
     from srltcp.core.settings import AppSettings
 
@@ -79,7 +81,15 @@ def test_android_upgrade_migration_unpins_ip_and_enables_discovery() -> None:
 
     old = make("0.2.0", "192.168.1.20")
     assert migrate_settings(old, android=True)
-    assert old.lan_ip == "" and old.auto_announce is True
+    assert old.lan_ip == "" and old.auto_announce is False
+
+    upgrade = AppSettings(setup_complete=True, version="0.14.9", auto_announce=True,
+                          router_port_mapping=True)
+    assert migrate_settings(upgrade, android=False)
+    assert upgrade.auto_announce is False and upgrade.router_port_mapping is False
+    fresh = AppSettings(setup_complete=True, version="0.15.0", router_port_mapping=True)
+    assert not migrate_settings(fresh, android=False)  # (switched on again later: kept)
+    assert fresh.router_port_mapping is True
 
     desktop = make("0.2.0", "192.168.1.20")
     assert not migrate_settings(desktop, android=False)

@@ -1,5 +1,63 @@
 # SRLTCP Release Notes
 
+## v0.15.0 (2026-11-03)
+
+### About those antivirus alerts
+Nobody was getting into your computer. The alerts were SRLTCP's **own
+outgoing traffic**, which security software flags on work networks:
+"Tor address blocked" was SRLTCP connecting to the Tor network (its
+doorbell for finding contacts on other networks), and the "unknown IP
+address" pop-ups were SRLTCP trying to reach contacts and STUN servers, at
+times with thousands of probes in a few seconds (the "birthday punch"),
+which looks just like a port scan. This release removes or tames every one
+of those, and closes the real weaknesses a full security review found.
+
+### Nothing scan-like, nothing automatic
+- **Birthday punch removed.** SRLTCP only sends to addresses a contact gave
+  it, a few packets at a time.
+- **No automatic discovery.** Devices are found only when you press
+  **Announce** (or *Find by IP*), and for 10 minutes after that you answer
+  others who announce. No more broadcasts every 5 s, no VPN-subnet sweeps.
+  The "Announce myself at startup" option is gone (switched off on update).
+- **Router port mapping (UPnP / NAT-PMP) is off by default** (switched off on
+  update). Turn it on under Settings → Network if a contact on mobile data
+  can't reach you at home; the setting explains what it does.
+- **Contacts that don't answer are left alone.** After 2 minutes without
+  reaching a contact, SRLTCP stops dialing them until you open their chat,
+  send them a message, file or call, your network changes, or the app
+  restarts. **They can still reach you**: your listener and Tor doorbell stay
+  up, so their messages come through and calls still ring.
+
+### Quiet networks (work, school…)
+- **Settings → Network → Quiet networks**: on these networks SRLTCP uses no
+  Tor, no STUN, no direct connections across networks and no router port
+  mapping. *Make the network I'm on quiet* fills in the network you're on.
+  Contacts on the same Wi-Fi or VPN, and the radio, still work. Tor stays on
+  by default everywhere else.
+
+### Security fixes
+- **Strangers on the internet are turned away.** TCP 7825 accepts
+  connections only from your own networks (LAN, VPN) and from your
+  contacts' known addresses, unless you say you port-forward it.
+- **No memory exhaustion before the handshake.** Until a connection proves
+  who it is it may send at most 64 KiB per frame (was 4 MiB), each address
+  may hold 4 such connections and all together 64, the handshake must finish
+  in 15 s (was 30), strangers get 20 handshakes a minute in total, and a
+  session with someone who isn't a contact ends after 5 minutes.
+- **Keep-alives** are no longer echoed in the clear.
+- **Disappearing and deleted messages** only ever remove themselves: a
+  message id reused by another contact can't delete a message in another
+  chat.
+- **Received file names** are cleaned of device names (CON, COM1…), trailing
+  dots, and right-to-left/invisible characters that could disguise a
+  program as a photo.
+- **Folder sync** never writes through a symbolic link or junction inside the
+  folder, and a folder can't be synced with two contacts at once.
+- **Android:** another app can no longer open the call screen or answer a
+  call for you; copied message text is marked sensitive (Android 13+).
+- **Windows:** Tor is no longer looked for in folders any user can write to
+  (`C:\`, `C:\Tor`, Chocolatey), so a planted tor.exe can't be started.
+
 ## v0.14.9 (2026-11-02)
 
 ### Windows: Tor in one step

@@ -133,22 +133,16 @@ the first authenticated one fixes the path, and the home phone answers it.
 Only routers on your own Wi-Fi are asked; the mapping points only at the
 phone's UDP socket (which drops anything that isn't an authenticated packet
 from a contact it's connecting to), expires by itself and is removed when the
-app stops. Routers with UPnP and NAT-PMP turned off still work for
-everything else. *Settings → Network → Open a port on my home router*
-(on by default).
+app stops. **Off by default since 0.15** (it lets packets from the internet
+reach the port, and security software reports the UPnP traffic): turn on
+*Settings → Network → Open a port on my home router* if a contact on mobile
+data can't reach you at home.
 
-**Strict NAT on one side (birthday punch).** When the router doesn't map a
-port (UPnP off, or both phones on different carriers where one is "hard"),
-the phones still meet: each asks two STUN servers for its address, and a
-phone that sees two different public ports is behind a strict NAT and says
-so inside the session. For that round it opens 192 extra UDP sockets that
-send towards the other phone with a low hop limit (they open its own NAT but
-expire before reaching the other router), while the other phone probes 40
-random ports of its address every 0.2 s for 10 s. One probe nearly always
-meets one of the strict side's open ports (the "birthday" effect, like
-Tailscale's hard-NAT traversal); the socket that got through carries the
-connection and the rest are closed. Probes are encrypted like every UDP
-packet, go only to the contact's public address, and stop when one answers.
+**No scanning.** SRLTCP only ever sends to addresses a contact gave it, a few
+packets at a time. (0.13.9–0.14.9 had a "birthday punch" for a strict NAT on
+one side that probed thousands of random ports of the contact's address;
+security software rightly reads that as a port scan, so it was removed in
+0.15.)
 
 A round that fails is retried after 4 s from a fresh UDP port (routers can
 hold stale state for the old pair of ports for ~30 s), then after 15, 30, 60
@@ -192,9 +186,8 @@ works:
   the phones on Wi-Fi (most home and public Wi-Fi routers are "easy"), or IPv6
   on both (most US and EU carriers offer it on mobile data; on Android check
   *Settings → Network → SIM → Access Point Names → APN protocol: IPv4/IPv6*).
-- **Only one STUN server reachable.** A strict NAT can't be recognised with
-  a single server, so the birthday punch isn't tried; the default list has
-  several (*Settings → Network → STUN servers*).
+- **A strict NAT on one side** without router port mapping: turn on *Open a
+  port on my home router* on the phone at home, or use IPv6.
 - **A Wi-Fi that keeps devices apart** (plane, hotel, guest Wi-Fi) for two
   phones on that same Wi-Fi, or both behind one public address (Starlink).
 - **Networks that block UDP** (some corporate and guest networks).
@@ -220,16 +213,17 @@ routers and a VPN phone with a home-Wi-Fi phone.
 | Setting | What it does | Default |
 |---|---|---|
 | **Direct internet connections** | Phone-to-phone UDP across networks, described above. Shares your public IP address **only with your contacts** (and a STUN server), inside the encrypted session. Off: only the same Wi-Fi or VPN; contacts never see your IP. | On |
-| **Open a port on my home router** | On Wi-Fi, asks your router (UPnP / NAT-PMP) to forward the direct-connection UDP port to this phone, so a contact on mobile data gets through. Only your own router is asked; removed when the app stops. | On |
+| **Open a port on my home router** | On Wi-Fi, asks your router (UPnP / NAT-PMP) to forward the direct-connection UDP port to this phone, so a contact on mobile data gets through. Only your own router is asked; removed when the app stops. | Off |
 | **STUN servers** | Who tells this phone its public IPv4 address. Leave it empty: the defaults (`stun.l.google.com:19302`, `stun.cloudflare.com:3478`) work everywhere. To use others: `host:port`, separated by commas (at most 4), e.g. `stun.nextcloud.com:443`. DNS servers such as 8.8.8.8 are not STUN servers and are refused. | Google, Cloudflare |
 | **Find contacts on other networks (Tor)** | The doorbell, described above: only to find each other and set up the direct connection. | On |
+| **Quiet networks** | Networks (`10.20.0.0/16, …`) where SRLTCP uses **none** of the above: no Tor, no STUN, no direct connections across networks, no router port mapping. For work or school networks whose firewall or antivirus would flag them. *Make the network I'm on quiet* fills it in. Same-Wi-Fi/VPN contacts and the radio still work there. | None |
 
 ### Same Wi-Fi / VPN
 
 | Setting | What it does | Default |
 |---|---|---|
 | **Network interface / IP** | Which of your addresses to advertise on the local network. Leave on *Auto* unless the wrong one is chosen. | Auto |
-| **Announce myself at startup** | Sends a signed "I'm here" message to the LAN/VPN at startup. It shares your name and ID with that network. | Off |
+| **Announce** (button) | The only way devices are found: sends one signed "I'm here" to the Wi-Fi/LAN and VPN, and for 10 minutes answers devices that announce too. SRLTCP never announces or scans by itself. | — |
 | **Network map** | Picture of your devices, contacts and the path to each. | — |
 
 ### More network options
@@ -241,14 +235,14 @@ routers and a VPN phone with a home-Wi-Fi phone.
 | **UDP discovery port** | Used to find devices on the LAN/VPN. Same on all your devices. | 7826 |
 | **Use exact ports** | If a port is busy, fail instead of quietly using the next one. | On |
 | **Tor program** | PC only: full path to `tor.exe` if SRLTCP can't find Tor Browser's. | Empty (auto) |
-| **I port-forward TCP 7825** | Optional manual setup; direct connections work without it. | Off |
+| **I port-forward TCP 7825** | Optional manual setup; direct connections work without it. Off: TCP 7825 accepts connections only from your own networks (private and VPN ranges) and your contacts' known addresses. | Off |
 
 ## Ports at a glance
 
 | Port | Protocol | Where | Needs opening? |
 |---|---|---|---|
 | 7825 | TCP | Each device (peer connections) | Only inside your LAN/VPN firewall, never on the router |
-| 7826 | UDP | Each device (LAN/VPN discovery) | Same as above |
+| 7826 | UDP | Each device (LAN/VPN discovery, only when you press Announce) | Same as above |
 | 7828 | UDP | Each device (direct connections between networks) | No (on Wi-Fi the app asks the router itself, UPnP / NAT-PMP). It only answers authenticated packets from contacts it's connecting to |
 | — | Tor | Each device (onion service) | No. Tor only dials out, and the onion listener is bound to 127.0.0.1 |
 | 9876 | TCP | Each device (local web UI, 127.0.0.1 only) | No |
@@ -260,10 +254,41 @@ routers and a VPN phone with a home-Wi-Fi phone.
   you're connected directly. Strangers can't learn it from the app: addresses
   travel only inside encrypted sessions with trusted contacts.
 - Over Tor (the doorbell), your contact doesn't see your IP address.
-- On the LAN/VPN, discovery announcements (your name and ID) are visible to
-  devices on that network. They're signed, so they can't be faked.
+- Discovery is manual: only when you press **Announce** (or *Find by IP*) is
+  your name and ID sent to the Wi-Fi/LAN and VPN, and only for the next 10
+  minutes do you answer others. They're signed, so they can't be faked.
 - Discovery never leaves your own networks: nothing is announced on mobile
   data or over the internet.
+
+## What SRLTCP sends by itself (and what security software may report)
+
+SRLTCP only ever talks to **your contacts**, plus Tor and STUN to find them.
+Security software at work flagged earlier versions; here is what each kind of
+traffic is and what 0.15 changed:
+
+| Traffic | What it is | 0.15 |
+|---|---|---|
+| Connections to Tor relays ("Tor address blocked") | The doorbell above, to find contacts on other networks | Paused on quiet networks; can be turned off |
+| An unknown public IP on UDP 7828 | A contact (or STUN server) during a direct-connection setup | No scanning: only addresses a contact gave; nothing on quiet networks |
+| Thousands of UDP probes | The old "birthday punch" | **Removed** |
+| Broadcasts on UDP 7826 every 5 s | Old automatic discovery | **Removed**: only when you press Announce |
+| UPnP / SSDP to the router | Router port mapping | **Off** by default |
+| Dials to a contact that's away | Reconnecting | Stops after 2 minutes until you open their chat, send them something, change networks or restart |
+
+**Reaching contacts.** When a contact can't be reached for 2 minutes, SRLTCP
+stops dialing them. It tries again when you open their chat, send them a
+message, file or call, when your network changes, or when the app restarts.
+You stay reachable the whole time: your listener (same Wi-Fi/VPN) and your
+Tor doorbell stay up, so when *they* message or call you, it comes through.
+
+**Who may connect.** TCP 7825 accepts connections only from private
+(LAN/VPN), carrier-NAT and link-local addresses, and from contacts' known
+addresses (or their IPv6 /64), unless *I port-forward TCP 7825* is on.
+Until a connection has proven who it is (the signed handshake), it may send
+at most 64 KiB per frame, at most 4 such connections per address and 64 in
+all, it must finish within 15 s, strangers get at most 20 handshakes a
+minute between them, and a session with someone who isn't a contact is
+closed after 5 minutes.
 
 ## Troubleshooting
 

@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.14.9 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.15.0 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -34,8 +34,8 @@
 | **Group chats** | End-to-end encrypted groups of up to 32; members who aren't each other's contacts still talk (the creator passes messages on, signed by their author so they can't be faked) |
 | **Voice & video calls** | WebRTC; signalling and media both travel inside the encrypted SRLTCP session (through a small forwarder on the phone itself), so calls work wherever chat works — no third-party servers. Over a serial radio: voice at ~8 kbit/s, each voice packet one radio packet ahead of everything else |
 | **Offline delivery** | Messages queue while a contact is offline and deliver on reconnect, with ✓/✓✓ receipts |
-| **Works over WireGuard** | VPN-aware discovery (unicast sweep + replies), Find by IP, automatic address updates |
-| **Signed LAN discovery** | Ed25519-signed UDP announces — spoofed peers rejected. Discovery stays on **your own networks** (the Wi-Fi/LAN you're on and your VPN): never sent on mobile data or across the internet, and announces, Find by IP and contact requests from other networks are ignored, so nobody elsewhere can find you |
+| **Works over WireGuard** | Find by IP over the VPN, automatic address updates |
+| **Signed LAN discovery** | Manual only (press **Announce**; nothing is announced or scanned by itself). Ed25519-signed UDP announces — spoofed peers rejected. Discovery stays on **your own networks** (the Wi-Fi/LAN you're on and your VPN): never sent on mobile data or across the internet, and announces, Find by IP and contact requests from other networks are ignored, so nobody elsewhere can find you |
 | **Contact requests** | Unknown peers can't message you; they appear as "wants to chat" until you accept |
 | **Chat history** | Saved locally, encrypted, pruned by your retention setting; long-press a message (Copy, Save, Save all for a group of photos, Select, Info, Delete; on a PC you can also drag over text with the mouse) or a chat (Delete chat, optionally with the files received in it), like in Signal |
 | **Albums** | Photos and videos sent together show as one grid, like Signal |
@@ -124,6 +124,16 @@ Identities are stored, encrypted, in `~/.srltcp/identities/` (or `%APPDATA%\SRLT
 
 **Port forwarding:** if you forward **TCP 7825** to your node, traffic after the handshake is still end-to-end encrypted; an observer on the internet can see connection timing, packet sizes and your public IP.
 
+### Security software alerts (work networks)
+
+SRLTCP only talks to your contacts, plus Tor and STUN to find them — nobody can get into your computer through it (TCP 7825 turns away strangers from the internet before reading anything). Antivirus or company firewalls may still notice that traffic: *"Tor address blocked"* is the Tor doorbell, and an "unknown IP" on UDP 7828 is a contact or STUN server. Since 0.15:
+
+- **Quiet networks** (*Settings → Network → Quiet networks*, or *Make the network I'm on quiet*): on those networks SRLTCP uses no Tor, STUN, direct internet connections or router port mapping at all. Contacts on the same Wi-Fi/VPN still work.
+- **No automatic discovery:** devices are found only when you press **Announce** or *Find by IP*.
+- **No scanning:** the "birthday punch" (thousands of probes to random ports) was removed.
+- **Router port mapping (UPnP) is off** unless you turn it on.
+- **Contacts that don't answer** for 2 minutes aren't dialed again until you open their chat, send them something, change networks or restart the app. They can still reach you: their messages and calls come through.
+
 ### What is not encrypted
 
 - LAN/UDP discovery announces (names, IPs, ports — signed but not encrypted)
@@ -156,7 +166,7 @@ On first launch, the web UI shows a setup wizard (or *Restore a backup* when mov
 | Incoming files folder | Where received files are saved |
 | Shared folder | Default folder for browse/share |
 | LAN IP | Pinned interface for discovery & announce |
-| Auto-announce | Broadcast presence every 5 seconds (LAN/VPN only) |
+| Quiet networks | Networks (work, school) where Tor, STUN, direct internet connections and router port mapping are all paused |
 | Tor | *Find contacts on other networks (Tor)*, on by default: only to set up direct connections |
 | Direct internet connections | Phone-to-phone over UDP (IPv4 and IPv6), on by default |
 | Privacy | Disappearing messages, app lock, private notifications, backup / restore |
@@ -240,7 +250,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.14.9.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.15.0.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -248,7 +258,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.14.9.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.14.9.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.15.0.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -286,15 +296,15 @@ Start the web UI on two machines on the same LAN:
 ```
 
 1. Click **Pair** on one machine and let the other scan the QR code (or paste the link) — both become trusted contacts
-   - Or press **Announce** on one device and **Trust** the other under *Discovered*
+   - Or press **Announce** on both devices and **Trust** the other under *Discovered*
 2. Select the contact and chat, send files, or start a voice/video call
 
 ### Finding each other (LAN, WireGuard / VPN)
 
 | Network | What to do |
 |---------|------------|
-| **Same Wi-Fi / LAN** | Press **Announce** (or leave *Let nearby devices find me* on). Devices appear under *Discovered*. |
-| **WireGuard / any VPN** | Same — press **Announce** once on either phone. VPNs carry no broadcast, so SRLTCP also sends its signed announce directly to every address in the VPN subnet, and the other device answers. Both appear under *Discovered* within a few seconds. |
+| **Same Wi-Fi / LAN** | Press **Announce** on both devices (within 10 minutes of each other). Devices appear under *Discovered*. SRLTCP never announces or scans by itself. |
+| **WireGuard / any VPN** | VPNs carry no broadcast: use **Find by IP** with the other device's VPN address (after it pressed Announce). |
 | **You know the IP** | *Add Contact → Find a device by IP*, e.g. `10.0.100.5`. |
 
 After that, addresses look after themselves: when a contact's IP changes (new Wi-Fi, mobile data, VPN reconnect) its signed announce updates your contact entry and the app reconnects — measured at under 15 seconds over WireGuard.
@@ -310,7 +320,7 @@ After that, addresses look after themselves: when a contact's IP changes (new Wi
 
 Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data usually has **no IPv4 address another phone can connect to**. SRLTCP still connects them **directly over UDP** in most cases (below): they meet over **Tor** (built in, no setup), swap addresses inside the encrypted session and punch through both NATs, and Tor never carries your messages, files or calls: they wait for the direct connection. There are no relays and no servers in between.
 
-**Direct without port forwarding (UDP).** With *Settings → Network → Try direct internet connections* on (default), two phones on different networks (two mobile carriers, mobile data and a home Wi-Fi, two homes) connect straight to each other: each learns its public address from a STUN server, they swap addresses and key shares inside the session they already have over Tor, and both send UDP packets to each other at once, which opens both NATs (hole punching). The connection is encrypted per packet with keys only the two of you have, the signed quantum-safe handshake runs inside it, and it carries chat, files and calls at the full speed of both connections (the header shows **DIRECT**). In our simulation (two carrier NATs, TCP between them blocked, packet loss) the phones were direct after about 10 s. Speed follows BBR (like YouTube/QUIC on mobile), so random radio losses don't slow it down: on an emulated LTE path with a 140 ms round trip and 1 % loss a file moves at about 2.1 of the link's 2.5 MB/s (before 0.12.1: 0.1 MB/s), and chat goes out ahead of file data. "Symmetric" carrier NAT (a new port for every destination) on *both* sides can't be crossed by any direct technique: messages wait until one phone is on Wi-Fi or both have IPv6, and *Check connection* (with its copyable report) says so. When only *one* side has such a strict NAT, the phones do a "birthday" punch (many sockets on the strict side, random port probes from the other) and still connect directly (21 s in our simulation). A phone on a home Wi-Fi asks its router to forward the direct-connection port (UPnP / NAT-PMP, like video-call and game apps; on by default, *Open a port on my home router*), so a phone on mobile data, whose carrier changes ports per destination, can still get in. Phones on a VPN and the home Wi-Fi also connect directly (LAN/VPN addresses are shared inside the session). This shares your public IP address with your contacts (and the STUN server); turn it off to connect only on the same Wi-Fi or VPN. Details: [docs/NETWORKING.md](docs/NETWORKING.md#direct-connections-across-networks-hole-punching).
+**Direct without port forwarding (UDP).** With *Settings → Network → Try direct internet connections* on (default), two phones on different networks (two mobile carriers, mobile data and a home Wi-Fi, two homes) connect straight to each other: each learns its public address from a STUN server, they swap addresses and key shares inside the session they already have over Tor, and both send UDP packets to each other at once, which opens both NATs (hole punching). The connection is encrypted per packet with keys only the two of you have, the signed quantum-safe handshake runs inside it, and it carries chat, files and calls at the full speed of both connections (the header shows **DIRECT**). In our simulation (two carrier NATs, TCP between them blocked, packet loss) the phones were direct after about 10 s. Speed follows BBR (like YouTube/QUIC on mobile), so random radio losses don't slow it down: on an emulated LTE path with a 140 ms round trip and 1 % loss a file moves at about 2.1 of the link's 2.5 MB/s (before 0.12.1: 0.1 MB/s), and chat goes out ahead of file data. "Symmetric" carrier NAT (a new port for every destination) on *both* sides can't be crossed by any direct technique: messages wait until one phone is on Wi-Fi or both have IPv6, and *Check connection* (with its copyable report) says so. SRLTCP never scans: it only sends to addresses a contact gave it. With *Open a port on my home router* on (UPnP / NAT-PMP, like video-call and game apps; **off by default**), a phone on a home Wi-Fi asks its router to forward the direct-connection port, so a phone on mobile data, whose carrier changes ports per destination, can still get in. Phones on a VPN and the home Wi-Fi also connect directly (LAN/VPN addresses are shared inside the session). This shares your public IP address with your contacts (and the STUN server); turn it off to connect only on the same Wi-Fi or VPN. Details: [docs/NETWORKING.md](docs/NETWORKING.md#direct-connections-across-networks-hole-punching).
 
 **No server, no port forwarding: Tor as the doorbell.** With *Settings → Network → Find contacts on other networks (Tor)* on (default) on both devices, they find each other from any network through the Tor network: phone on mobile data, PC on a VPN, a friend's Wi-Fi. Each device publishes a private onion service; its address goes only to trusted contacts (inside the encrypted connection), and only trusted contacts can connect through it. Tor is **only the doorbell**: over it the two devices swap their current addresses and keys and set up a direct UDP or IPv6 connection (the badge shows CONNECTING, then DIRECT, usually within seconds). Messages, files and calls never go over Tor; they wait and go out at full speed the moment the direct connection is up. Tor is built into the Android app; on a PC install [Tor Browser](https://www.torproject.org/download/) (SRLTCP starts its Tor by itself). Tested on a private Tor network (`scripts/tor_testnet.sh` + `scripts/simulate_tor.py`).
 

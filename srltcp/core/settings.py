@@ -94,7 +94,9 @@ class AppSettings:
     message_retention_preset: str = "1w"
     incoming_files_dir: str = ""
     shared_folder: str = ""
-    auto_announce: bool = True
+    # (No longer used: devices are only found by hand, with Announce or Find
+    # by IP. Kept so older settings files still load.)
+    auto_announce: bool = False
     enable_serial: bool = False
     serial_port: str = ""
     serial_baud: int = 57600
@@ -109,8 +111,9 @@ class AppSettings:
     # address with your contacts (only them, inside the encrypted session).
     direct_internet: bool = True
     # Ask the home router (UPnP / NAT-PMP) to forward our UDP port while on
-    # Wi-Fi: lets a phone on mobile data connect to this one directly.
-    router_port_mapping: bool = True
+    # Wi-Fi: lets a phone on mobile data connect to this one directly. Off
+    # unless you switch it on: it lets packets from the internet reach the port.
+    router_port_mapping: bool = False
     # STUN servers for direct UDP connections ("host:port, ..."; empty =
     # Google's and Cloudflare's public ones). They learn your IP address.
     stun_servers: str = ""
@@ -118,6 +121,11 @@ class AppSettings:
     # server or port forwarding). Bundled on Android; needs Tor on a PC.
     tor_enabled: bool = True
     tor_path: str = ""
+    # Quiet networks (work, school…): networks, as "10.20.0.0/16, …", where
+    # SRLTCP uses none of its internet features (no Tor, no STUN, no direct
+    # connections across networks, no router port mapping). Same Wi-Fi/VPN
+    # contacts and the radio still work.
+    quiet_networks: str = ""
     # Re-encode photos before sending (smaller, and without location data).
     shrink_photos: bool = False
     # Disappearing messages: what you send is deleted from both phones after
@@ -129,7 +137,7 @@ class AppSettings:
     auto_download_mb: int = 2048
     auto_download_radio_mb: int = 2
     handshake_protocol: str = "identity"
-    version: str = "0.14.9"
+    version: str = "0.15.0"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

@@ -393,3 +393,49 @@ def global_ipv6_addresses() -> list[str]:
         except OSError:
             pass
     return found[:4]
+
+
+def parse_networks(text: str) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """"10.20.0.0/16, 192.168.5.0/24" -> networks (entries that aren't one are skipped)."""
+    out: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for part in (text or "").replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            continue
+    return out[:32]
+
+
+def current_networks() -> list[str]:
+    """The private networks this device is on now, as "10.20.0.0/16" (for
+    "make this network quiet")."""
+    out: list[str] = []
+    for iface in list_interfaces(fresh=True):
+        ip, mask = str(iface.get("ip") or ""), str(iface.get("netmask") or "")
+        try:
+            addr = ipaddress.ip_address(ip)
+            if not addr.is_private or addr.is_loopback or addr.is_link_local:
+                continue
+            net = ipaddress.ip_network(f"{ip}/{mask or '24'}", strict=False)
+        except ValueError:
+            continue
+        if str(net) not in out:
+            out.append(str(net))
+    return out
+
+
+def on_networks(nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network]) -> bool:
+    """True when one of this device's addresses is inside one of ``nets``."""
+    if not nets:
+        return False
+    for iface in list_interfaces():
+        try:
+            addr = ipaddress.ip_address(str(iface.get("ip") or ""))
+        except ValueError:
+            continue
+        if any(addr.version == n.version and addr in n for n in nets):
+            return True
+    return False

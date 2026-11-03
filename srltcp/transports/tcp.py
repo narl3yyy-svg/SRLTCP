@@ -53,6 +53,10 @@ TOR_BUFFER = 256 * 1024
 # Hard cap on open TCP connections (a phone has a handful of contacts; a hub
 # a few hundred members).
 MAX_CONNECTIONS = 512
+# Connections someone opened to us that haven't passed the handshake yet:
+# at most this many from one address, and in all.
+MAX_PREAUTH_PER_IP = 4
+MAX_PREAUTH = 64
 
 
 class TCPTransport(Transport):
@@ -73,6 +77,8 @@ class TCPTransport(Transport):
         self.strict_ports = strict_ports
         self._server: asyncio.AbstractServer | None = None
         self._discovery_protocol: _DiscoveryProtocol | None = None
+        # Who may connect to us at all (address -> allowed); None = anyone.
+        self.accept_filter: Callable[[str], bool] | None = None
         self._discovery_transport: asyncio.DatagramTransport | None = None
         self._connections: dict[str, Connection] = {}
         self._running = False
@@ -119,6 +125,23 @@ class TCPTransport(Transport):
             return
         peer_addr = writer.get_extra_info("peername")
         address = f"{peer_addr[0]}:{peer_addr[1]}" if peer_addr else "unknown"
+        if not via_tor:
+            ip = str(peer_addr[0]) if peer_addr else ""
+            if self.accept_filter is not None and not self.accept_filter(ip):
+                # Not on our networks and not an address a contact gave us:
+                # closed before a single byte is read.
+                log.debug("Refused a connection from %s (not ours or a contact's)", ip)
+                writer.close()
+                return
+            pending = [
+                c for c in self._connections.values() if not getattr(c, "authenticated", True)
+            ]
+            if len(pending) >= MAX_PREAUTH or sum(
+                1 for c in pending if c.peer.address.rsplit(":", 1)[0] == ip
+            ) >= MAX_PREAUTH_PER_IP:
+                log.warning("Too many unauthenticated connections from %s; refusing", ip or "?")
+                writer.close()
+                return
         if via_tor:
             address = "tor"  # Tor hides the caller's address (by design)
         peer_id = str(uuid.uuid4())
@@ -126,6 +149,7 @@ class TCPTransport(Transport):
             self._tor_peers.add(peer_id)
         peer = TransportPeer(peer_id=peer_id, address=address, transport="tcp")
         conn = Connection(peer, reader, writer)
+        conn.limit()  # (small frames only until it has passed the handshake)
         conn.set_frame_handler(self._handle_frame)
         conn.set_close_handler(self._on_connection_closed)
         if via_tor:
@@ -235,6 +259,13 @@ class TCPTransport(Transport):
         self._connections.pop(peer.peer_id, None)
         self._tor_peers.discard(peer.peer_id)
         await self._emit_event(TransportEvent(kind="disconnected", peer=peer))
+
+    def mark_authenticated(self, peer_id: str) -> None:
+        """The peer on this connection passed the handshake: full-size frames."""
+        conn = self._connections.get(peer_id)
+        mark = getattr(conn, "mark_authenticated", None)  # (UDP connections have no limit)
+        if mark is not None:
+            mark()
 
     async def disconnect(self, peer_id: str) -> None:
         conn = self._connections.pop(peer_id, None)

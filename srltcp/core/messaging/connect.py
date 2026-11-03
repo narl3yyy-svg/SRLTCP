@@ -58,6 +58,7 @@ def _unb64(value: object, size: int) -> bytes:
 
 PENDING_HANDSHAKE_TTL = 15.0
 HANDSHAKES_PER_MINUTE = 12  # per connection (a radio retries a few times; floods are refused)
+STRANGER_HANDSHAKES_PER_MINUTE = 20  # from non-contacts, all connections together
 SERIAL_HANDSHAKE_TTL = 180.0
 # Over Tor a handshake (~9 KiB each way) takes several circuit round trips; a
 # second try before the first is answered would replace our key half.
@@ -483,6 +484,7 @@ class ConnectMixin:
         link = self.get_link(remote_hash)
         if not link:
             return
+        self.reached(remote_hash)  # (in touch: the give-up clock starts over)
         if remote_name:
             link.peer_name = remote_name
         if link.link_up_announced:
@@ -609,10 +611,20 @@ class ConnectMixin:
             return False
         return True
 
-    def _handshake_budget(self: MessagingBackend, peer_id: str) -> bool:
-        """At most HANDSHAKES_PER_MINUTE handshake openings per connection: each
-        one costs post-quantum work (slow on a phone)."""
+    def _handshake_budget(self: MessagingBackend, peer_id: str, *, contact: bool = True) -> bool:
+        """At most HANDSHAKES_PER_MINUTE handshake openings per connection, and
+        STRANGER_HANDSHAKES_PER_MINUTE from non-contacts in all: each one costs
+        post-quantum work (slow on a phone), and many connections must not add
+        up to more."""
         now = time.monotonic()
+        if not contact:
+            seen = self.__dict__.get("_stranger_handshakes", [])
+            recent_all = [t for t in seen if now - t < 60.0]
+            if len(recent_all) >= STRANGER_HANDSHAKES_PER_MINUTE:
+                log.warning("Too many handshakes from non-contacts — refused")
+                return False
+            recent_all.append(now)
+            self.__dict__["_stranger_handshakes"] = recent_all
         recent = [t for t in self._handshake_times.get(peer_id, []) if now - t < 60.0]
         if len(recent) >= HANDSHAKES_PER_MINUTE:
             log.warning("Too many handshakes on %s — refused", peer_id[:8])
@@ -872,15 +884,16 @@ class ConnectMixin:
             log.warning("Handshake with a bad signature from %s — refused", remote_hash[:8])
             await self._reject_connection(peer_id)
             return
-        if not self._handshake_budget(peer_id) or not self._handshake_is_fresh(
-            hello.ephemeral, hello.timestamp
-        ):
-            await self._reject_connection(peer_id)
-            return
         if self._infer_transport(peer_id) == "serial" and not self.is_trusted(remote_hash):
             # Anyone in range shares this one radio "connection": only contacts
             # may open a session on it (a stranger could otherwise replace one).
+            # Checked before the budget, so a stranger can't use it up for them.
             log.info("Ignored a radio handshake from a non-contact (%s)", remote_hash[:8])
+            return
+        if not self._handshake_budget(peer_id, contact=self.is_trusted(remote_hash)) or not (
+            self._handshake_is_fresh(hello.ephemeral, hello.timestamp)
+        ):
+            await self._reject_connection(peer_id)
             return
         if (
             self.tcp_transport
@@ -952,6 +965,8 @@ class ConnectMixin:
         link = await self._bind_link(peer_id, remote_hash, remote_pub, remote_name)
         if not link:
             return
+        if self.tcp_transport:
+            self.tcp_transport.mark_authenticated(peer_id)  # (proved who it is: full-size frames)
         # While we answer (the signature takes a moment on a phone), nobody may
         # start a handshake of our own on this connection: the two would leave
         # each side with different keys (connect_to_peer checks this).
@@ -1022,6 +1037,8 @@ class ConnectMixin:
         link.public_key = remote_pub
         link.peer_name = remote_name or link.peer_name
         link.pq_public = hello.pq_public
+        if self.tcp_transport:
+            self.tcp_transport.mark_authenticated(peer_id)
         self.set_link_keys(remote_hash, keys)
         if link.link_up_announced and link.transport == "serial" and self.is_trusted(remote_hash):
             # The answer to a later try re-keyed an existing session: tell

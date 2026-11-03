@@ -239,6 +239,11 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     async def tor_status(_request: web.Request) -> web.Response:
         return web.json_response(node.backend.tor_status())
 
+    async def network_current(_request: web.Request) -> web.Response:
+        from srltcp.utils.network import current_networks
+
+        return web.json_response({"networks": current_networks()})
+
     async def tor_new_address(_request: web.Request) -> web.Response:
         try:
             onion = await node.backend.new_tor_address()
@@ -314,6 +319,8 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         port = data.get("port")
         transport = data.get("transport", "tcp")
         force = bool(data.get("force", False))
+        if is_valid_hash_id(str(hash_id)):
+            node.backend.resume_reaching(str(hash_id).lower())  # (you opened their chat)
         try:
             ok = await node.backend.connect_to_peer(
                 hash_id, host=host, port=port, transport=transport, force=force
@@ -838,6 +845,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             return web.json_response({"error": "recipient_hash and signal required"}, status=400)
         if not node.backend.is_trusted(recipient):
             return web.json_response({"error": "peer not trusted"}, status=403)
+        node.backend.resume_reaching(recipient)  # (you're calling them)
         link = node.backend.get_link(recipient)
         if not link or not link.handshake_complete:
             await node.backend.connect_to_peer(recipient)
@@ -910,6 +918,19 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         except ValueError as exc:
             return web.json_response({"error": f"STUN servers: {exc}"}, status=400)
         updated.tor_enabled = bool(updated.tor_enabled)
+        from srltcp.utils.network import parse_networks
+
+        quiet = str(updated.quiet_networks or "")[:2000]
+        entries = [x.strip() for x in quiet.replace(";", ",").split(",") if x.strip()]
+        bad = [x for x in entries if not parse_networks(x)]
+        if bad:
+            return web.json_response(
+                {"error": f"Quiet networks: \"{bad[0][:40]}\" isn't a network (e.g. 10.20.0.0/16)"},
+                status=400,
+            )
+        if len(entries) > 32:
+            return web.json_response({"error": "Quiet networks: at most 32"}, status=400)
+        updated.quiet_networks = ", ".join(str(n) for n in parse_networks(quiet))
         updated.shrink_photos = bool(updated.shrink_photos)
         from srltcp.core.messaging.disappear import CHOICES
 
@@ -1329,6 +1350,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
     app.router.add_delete("/api/trusted/{hash_id}", trusted_remove)
     app.router.add_post("/api/trusted/{hash_id}/diagnose", trusted_diagnose)
     app.router.add_get("/api/tor/status", tor_status)
+    app.router.add_get("/api/network/current", network_current)
     app.router.add_post("/api/tor/new-address", tor_new_address)
     app.router.add_get("/api/messages", messages)
     app.router.add_post("/api/chats/delete", delete_chat)

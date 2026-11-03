@@ -148,10 +148,8 @@ class SRLTCPNode:
 
     async def apply_settings(self, settings: AppSettings) -> None:
         """Hot-apply settings that don't require transport restart."""
-        old_announce = self.config.announce
         self.settings = settings
         self.config.name = settings.display_name
-        self.config.announce = settings.auto_announce
         self.config.lan_ip = settings.lan_ip
         self.config.message_retention_hours = settings.message_retention_hours
         self.config.disappear_seconds = settings.disappear_seconds
@@ -169,7 +167,11 @@ class SRLTCPNode:
         tor_changed = (
             self.config.tor_enabled != settings.tor_enabled
             or self.config.tor_path != settings.tor_path
+            or self.config.quiet_networks != settings.quiet_networks
         )
+        direct_changed = direct_changed or self.config.quiet_networks != settings.quiet_networks
+        self.config.quiet_networks = settings.quiet_networks
+        self.config.accept_internet = settings.wan_expose_port
         self.config.tor_enabled = settings.tor_enabled
         self.config.tor_path = settings.tor_path
         incoming = str(settings.resolved_incoming_dir())
@@ -180,8 +182,6 @@ class SRLTCPNode:
             if identity.name != settings.display_name:
                 identity.name = settings.display_name
                 self.backend.identity_store.save(identity)
-        if settings.auto_announce != old_announce:
-            await self.backend.set_auto_announce(settings.auto_announce)
         await self.backend.apply_serial_transport()
         if direct_changed:
             await self.backend.port_mapping_changed()
@@ -260,6 +260,6 @@ class SRLTCPNode:
             "settings": self.settings.to_dict(),
             "web_port": self.settings.web_port,
             "version": __version__,
-            "auto_announce": self.config.announce,
+            "auto_announce": False,
             "transports": self.backend.get_transport_status(),
         }

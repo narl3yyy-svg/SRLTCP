@@ -8,7 +8,7 @@ import time
 from typing import TYPE_CHECKING
 
 from srltcp.core.messaging.constants import PING_INTERVAL
-from srltcp.core.protocol.messages import MessageType, build_header, decode_payload, encode_payload
+from srltcp.core.protocol.messages import MessageType, decode_payload, encode_payload
 from srltcp.utils.logging import get_logger
 
 LINK_DEAD_AFTER = 3.2 * PING_INTERVAL  # ~32 s without any frame or pong
@@ -41,19 +41,7 @@ class PingMixin:
     async def start_ping_loop(self: MessagingBackend) -> None:
         async def _loop() -> None:
             tick = 0
-            last_ips: set[str] = set()
             while self._running:
-                # Own address changed (network switch / VPN reconnect) while
-                # auto-announce is off: still tell VPN peers where we are now.
-                if not self.config.announce:
-                    try:
-                        ips = self._own_ips()
-                        if last_ips and ips != last_ips:
-                            log.info("Network address changed — notifying VPN peers")
-                            await self.sweep_vpn()
-                        last_ips = ips
-                    except Exception as exc:  # noqa: BLE001 - keep the loop alive
-                        log.debug("Address change check failed: %s", exc)
                 for link in self.list_links():
                     hash_id = link.get("hash_id", "")
                     # (On the radio a ping is one packet ahead of file data: it
@@ -106,12 +94,23 @@ class PingMixin:
         Wi-Fi lost): drop direct sessions that used it so they move to the
         other paths within seconds instead of waiting ~50 s for pings to fail."""
         last: set[str] = set()
+        quiet = self.on_quiet_network()
         while self._running:
             await asyncio.sleep(NETWORK_CHECK_EVERY)
             try:
                 ips = await asyncio.to_thread(self._own_ips)
             except Exception:  # noqa: BLE001 - best effort
                 continue
+            if last and ips != last:
+                # New network: contacts we stopped trying are tried again, and
+                # a quiet network (work…) pauses Tor and the internet features.
+                self.resume_reaching()
+                now_quiet = self.on_quiet_network()
+                if now_quiet != quiet:
+                    quiet = now_quiet
+                    log.info("On a quiet network now" if quiet else "Left the quiet network")
+                    await self.tor_settings_changed()
+                    await self.port_mapping_changed()
             if last and ips != last and self.tcp_transport:
                 for hash_id, link in list(self._links.items()):
                     if link.transport != "tcp":
@@ -207,19 +206,9 @@ class PingMixin:
             await self._on_peer_metrics(link.hash_id, self.get_peer_metrics(link.hash_id))
 
     async def _reply_pong_with_rtt(self: MessagingBackend, peer: object, body: bytes) -> None:
-        """A plaintext ping (older versions): echo it. Its answer changes
-        nothing here, since anyone could send one."""
-        from srltcp.transports.base import TransportPeer
-
-        if not isinstance(peer, TransportPeer):
-            return
-        try:
-            data = decode_payload(body)
-        except Exception:  # noqa: BLE001
-            data = {}
-        pong_body = encode_payload({"sent_at": data.get("sent_at", time.time())})
-        packet = build_header(MessageType.PONG, body=pong_body)
-        await self._send_raw(peer.peer_id, peer.transport, packet)
+        """A plaintext ping (very old versions): not answered. Anyone could send
+        one, and an echo would cost radio time and tell them we're here."""
+        return
 
     def get_peer_metrics(self: MessagingBackend, hash_id: str) -> dict[str, float | None]:
         link = self.get_link(hash_id)

@@ -102,6 +102,8 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         strict_ports=settings.strict_ports,
         direct_internet=settings.direct_internet,
         router_port_mapping=settings.router_port_mapping,
+        quiet_networks=settings.quiet_networks,
+        accept_internet=settings.wan_expose_port,
         stun_servers=settings.stun_servers,
         tor_enabled=settings.tor_enabled,
         tor_path=settings.tor_path,
@@ -109,7 +111,7 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         enable_serial=args.serial or settings.enable_serial,
         serial_port=args.serial_port or settings.serial_port,  # "": Automatic
         serial_baud=settings.serial_baud,
-        announce=settings.auto_announce,
+        announce=False,  # (devices are only found by hand)
         lan_ip=settings.lan_ip,
         incoming_dir=str(settings.resolved_incoming_dir()),
         message_retention_hours=settings.message_retention_hours,
@@ -211,15 +213,18 @@ def _version_tuple(version: str) -> tuple[int, ...]:
 def migrate_settings(settings: AppSettings, *, android: bool) -> bool:
     """One-time fixes when upgrading from older versions. Returns True if changed."""
     changed = False
-    if settings.setup_complete and _version_tuple(settings.version) < (0, 3, 0) and android:
-        # 0.2.x setup pinned the first interface (usually Wi-Fi), which goes
-        # stale when the phone changes networks, and left discovery off.
-        if settings.lan_ip:
-            settings.lan_ip = ""
-            changed = True
-        if not settings.auto_announce:
-            settings.auto_announce = True
-            changed = True
+    old = _version_tuple(settings.version)
+    # 0.2.x setup pinned the first interface (usually Wi-Fi), which goes stale
+    # when the phone changes networks.
+    if settings.setup_complete and old < (0, 3, 0) and android and settings.lan_ip:
+        settings.lan_ip = ""
+        changed = True
+    # 0.15: nothing announces itself automatically, and the router is only
+    # asked to open a port if you switch that on again.
+    if old < (0, 15, 0) and (settings.auto_announce or settings.router_port_mapping):
+        settings.auto_announce = False
+        settings.router_port_mapping = False
+        changed = True
     return changed
 
 

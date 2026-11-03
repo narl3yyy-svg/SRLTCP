@@ -24,10 +24,32 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
+# Names Windows reserves for devices ("CON", "COM1.txt"…): opening one opens
+# the device, not a file.
+_WINDOWS_RESERVED = re.compile(r"(?i)^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$")
+# Characters that change how a name is displayed (right-to-left overrides make
+# "photo\u202egpj.exe" show as "photoexe.jpg"), and invisible ones.
+_DISGUISE = re.compile("[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]")
+
+
 def safe_filename(name: str) -> str:
-    """Sanitize a filename for cross-platform use."""
-    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name.strip())
-    return cleaned or "unnamed"
+    """Sanitize a filename (from a contact) for any platform: no folders, no
+    device names, nothing that disguises the real extension."""
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", name)
+    cleaned = _DISGUISE.sub("", cleaned)
+    cleaned = cleaned.strip().rstrip(". ")  # (Windows drops trailing dots and spaces)
+    if _WINDOWS_RESERVED.match(cleaned):
+        cleaned = "_" + cleaned
+    if len(cleaned.encode("utf-8")) > 240:
+        stem, dot, ext = cleaned.rpartition(".")
+        ext = ext[:20] if dot and stem else ""
+        keep = cleaned[: len(cleaned) - len(ext) - (1 if ext else 0)]
+        while len(keep.encode("utf-8")) > 240 - len(ext) - 1:
+            keep = keep[:-1]
+        cleaned = f"{keep}.{ext}" if ext else keep
+    if cleaned in ("", ".", ".."):
+        return "unnamed"
+    return cleaned
 
 
 def unique_dest_path(directory: Path, filename: str) -> Path:

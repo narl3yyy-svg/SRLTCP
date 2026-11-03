@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import struct
 import zlib
+from collections.abc import Iterator
 
 # Magic: 'SRL\x01' + version byte
 FRAME_MAGIC = b"SRL\x01"
@@ -28,11 +29,59 @@ def pack_frame(payload: bytes) -> bytes:
     return FRAME_MAGIC + struct.pack(">I", length) + struct.pack(">I", checksum) + payload
 
 
+# Until a connection someone opened to us has passed the handshake, it may
+# only send small frames (a handshake is ~15 KiB): a stranger can't make us
+# hold megabytes per connection.
+PREAUTH_MAX_FRAME = 64 * 1024
+
+
+class FrameTooLarge(ValueError):
+    """A frame longer than this connection may send yet."""
+
+
 class FrameReader:
     """Incremental frame reader for stream transports."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_frame: int = MAX_FRAME_SIZE) -> None:
         self._buffer = bytearray()
+        self.max_frame = max_frame
+
+    def frames(self, data: bytes) -> Iterator[bytes]:
+        """Like :meth:`feed`, one frame at a time: the size limit is read
+        again before each frame (it is raised once the peer has proven who it
+        is, while the frames that followed its handshake are still queued).
+        Raises FrameTooLarge for a frame over ``max_frame`` (the connection
+        is then closed: no resynchronising on a peer that isn't allowed big
+        frames)."""
+        self._buffer.extend(data)
+        min_size = HEADER_SIZE + CRC_SIZE
+        while True:
+            buf = self._buffer
+            if len(buf) < min_size:
+                return
+            if buf[:4] != FRAME_MAGIC:
+                nxt = buf.find(FRAME_MAGIC, 1)
+                if nxt < 0:
+                    del buf[: max(0, len(buf) - (len(FRAME_MAGIC) - 1))]
+                    return
+                del buf[:nxt]
+                continue
+            length = struct.unpack_from(">I", buf, 4)[0]
+            if length > MAX_FRAME_SIZE:
+                del buf[:1]
+                continue
+            if length > self.max_frame:
+                raise FrameTooLarge(length)
+            total = min_size + length
+            if len(buf) < total:
+                return
+            expected_crc = struct.unpack_from(">I", buf, 8)[0]
+            payload = bytes(buf[12:total])
+            if crc32(payload) != expected_crc:
+                del buf[:1]
+                continue
+            del buf[:total]
+            yield payload
 
     def feed(self, data: bytes) -> list[bytes]:
         """Return every complete frame in the buffer.

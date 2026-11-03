@@ -338,12 +338,14 @@ async def test_retired_noise_handshake_is_refused(pair) -> None:  # type: ignore
 
 
 async def test_unicast_announce_gets_reply_both_discover(pair) -> None:  # type: ignore[no-untyped-def]
-    """VPN case: no broadcast. A unicast announce to B makes B reply, so both see each other."""
+    """A unicast announce to B makes B reply (B pressed Announce too), so both see each other."""
+    import time as _time
+
     a, b = pair
     ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
     a.trusted.remove(bh)
     b.trusted.remove(ah)
-    b.config.announce = True  # B is discoverable
+    b._last_manual_announce = _time.monotonic()  # B pressed Announce a moment ago
     payload = a.build_announce_payload("tcp")
     port = b.tcp_transport.discovery_port
     await a.tcp_transport.unicast_discovery(payload, ["127.0.0.1"], {port})
@@ -353,6 +355,20 @@ async def test_unicast_announce_gets_reply_both_discover(pair) -> None:  # type:
     await asyncio.sleep(0.3)
     assert len(b._announce_replies) == 1
     assert len(a._announce_replies) == 0
+
+
+async def test_nobody_answers_an_announce_unless_they_pressed_announce(pair) -> None:  # type: ignore[no-untyped-def]
+    """Devices are found by hand only: B sees A's announce but doesn't answer it."""
+    a, b = pair
+    ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+    a.trusted.remove(bh)
+    b.trusted.remove(ah)
+    payload = a.build_announce_payload("tcp")
+    port = b.tcp_transport.discovery_port
+    await a.tcp_transport.unicast_discovery(payload, ["127.0.0.1"], {port})
+    assert await wait_for(lambda: b.discovery.get(ah) is not None)
+    await asyncio.sleep(0.5)
+    assert a.discovery.get(bh) is None and not b._announce_replies
 
 
 async def test_announce_updates_trusted_contact_address(pair) -> None:  # type: ignore[no-untyped-def]
