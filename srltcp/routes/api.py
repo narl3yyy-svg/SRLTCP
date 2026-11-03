@@ -33,6 +33,19 @@ if TYPE_CHECKING:
     from srltcp.core.node import SRLTCPNode
 
 
+
+DESKTOP_RESTART_CODE = 75  # (desktop/main.js starts the node again on this exit code)
+
+
+def _start_again() -> None:
+    """Start this program again (after a restore, or settings that need it).
+    Under the desktop app the app does it; otherwise the same command line,
+    interpreter options included."""
+    if os.environ.get("SRLTCP_DESKTOP") == "1":
+        os._exit(DESKTOP_RESTART_CODE)
+    argv = list(getattr(sys, "orig_argv", []) or [sys.executable, "-m", "srltcp", *sys.argv[1:]])
+    os.execv(sys.executable, [sys.executable, *argv[1:]])
+
 def _validate_path(path_str: str, *, must_exist: bool = False) -> Path | None:
     if not path_str or ".." in Path(path_str).parts:
         return None
@@ -1037,7 +1050,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         async def _do_restart() -> None:
             await asyncio.sleep(0.5)
             await node.stop()
-            os.execv(sys.executable, [sys.executable, "-m", "srltcp", *sys.argv[1:]])
+            _start_again()
 
         asyncio.create_task(_do_restart())
         return web.json_response({"restarting": True})
@@ -1200,7 +1213,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
 
         async def _restart() -> None:
             await asyncio.sleep(0.5)
-            os.execv(sys.executable, [sys.executable, "-m", "srltcp", *sys.argv[1:]])
+            _start_again()
 
         asyncio.create_task(_restart())
         return web.json_response({"restored": True, "restart": "self", **info})

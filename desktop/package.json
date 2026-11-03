@@ -1,0 +1,114 @@
+{
+  "name": "srltcp-desktop",
+  "productName": "SRLTCP",
+  "version": "0.16.0",
+  "description": "SRLTCP desktop app: peer-to-peer, quantum-safe messenger (tray / menu bar app)",
+  "main": "main.js",
+  "author": "SRLTCP Contributors",
+  "license": "GPL-3.0-only",
+  "homepage": "https://github.com/narl3yyy-svg/SRLTCP",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win --x64",
+    "dist:mac": "electron-builder --mac --arm64",
+    "dist:linux": "electron-builder --linux --x64"
+  },
+  "devDependencies": {
+    "electron": "44.9.2",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "com.srltcp.desktop",
+    "productName": "SRLTCP",
+    "copyright": "SRLTCP Contributors — GPL v3",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "assets/**",
+      "package.json"
+    ],
+    "asar": true,
+    "electronLanguages": [
+      "en-US"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "extraResources": [
+        {
+          "from": "backend/win-x64",
+          "to": "backend"
+        }
+      ],
+      "artifactName": "SRLTCP-${version}-windows-x64-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SRLTCP",
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon-mac.png",
+      "category": "public.app-category.social-networking",
+      "identity": null,
+      "minimumSystemVersion": "12.0",
+      "extraResources": [
+        {
+          "from": "backend/mac-arm64",
+          "to": "backend"
+        }
+      ],
+      "extendInfo": {
+        "NSCameraUsageDescription": "SRLTCP uses the camera for video calls with your contacts.",
+        "NSMicrophoneUsageDescription": "SRLTCP uses the microphone for calls with your contacts.",
+        "NSLocalNetworkUsageDescription": "SRLTCP connects directly to your contacts on your Wi-Fi or VPN."
+      }
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "Network",
+      "extraResources": [
+        {
+          "from": "backend/linux-x64",
+          "to": "backend"
+        }
+      ]
+    },
+    "publish": null
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/narl3yyy-svg/SRLTCP.git"
+  }
+}

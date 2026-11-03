@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.15.2 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.16.0 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -16,7 +16,7 @@
 | **Dual transports** | TCP/IP networking + USB serial (pyserial on a PC, the USB host API on Android) |
 | **P2P mode** | Direct encrypted links between peers on LAN or serial cable |
 | **Serial radios** | Chat, files and voice calls with no network at all, over a pair of serial radio modems (SiK, LoRa or ESP32 bridges): only contacts connect (private beacons, nobody is discovered), a reliable link made for lossy half-duplex radios, chat and call audio ahead of file data, and the radio comes before the internet when you're not on the same Wi-Fi |
-| **Tor as the doorbell (no server needed)** | Find trusted contacts on any network without a server or port forwarding: each device publishes a private onion service that only its contacts can use, used only to swap addresses and set up the direct connection. Chat, files and calls never go over Tor. Bundled on Android; uses Tor Browser's Tor on a PC |
+| **Tor as the doorbell (no server needed)** | Find trusted contacts on any network without a server or port forwarding: each device publishes a private onion service that only its contacts can use, used only to swap addresses and set up the direct connection. Chat, files and calls never go over Tor. Built into the Android and desktop apps; `run.bat` / `run.sh` download it once |
 | **Direct across networks** | Full speed between two mobile carriers, a phone and a home Wi-Fi, two homes: the devices punch a direct, encrypted **UDP** connection through both NATs (like video calls do), with Tor only as the meeting point, no server or port forwarding. Reliable and ordered for chat and files, separate datagrams for call audio/video; follows a phone to a new network. Addresses are exchanged only inside the encrypted session; when a network doesn't allow it, messages wait |
 | **Quantum-safe encryption** | Every session: X25519 + ML-KEM-768 key exchange, Ed25519 + ML-DSA-65 signatures, AES-256-GCM with replay protection |
 | **Verified contacts** | 60-digit safety numbers over both identity keys; automatic when you pair in person (QR or NFC) |
@@ -42,7 +42,8 @@
 | **Tap to download** | Received files above a size you choose (default 2 GB, 2 MB over a serial radio) wait for a tap instead of downloading by themselves |
 | **Trusted peers** | Trust-before-message security model |
 | **Ping / RTT** | Latency in ms: the median of the last 5 round trips, averaged with the contact's own figure so both phones show the same number; pings travel encrypted. Serial link quality % (RTT-based estimate, not RF RSSI) |
-| **Cross-platform** | Linux, macOS, Windows CLI + Android (Chaquopy APK) |
+| **Desktop apps** | **Windows 11 (x64)** installer and **macOS (Apple silicon)** app: Python and Tor built in, runs in the system tray / menu bar so messages and calls keep coming in, optional start at login |
+| **Cross-platform** | Windows and macOS desktop apps, Android (Chaquopy APK), and from source on Linux, macOS and Windows (`run.sh` / `run.bat`) |
 
 ---
 
@@ -89,8 +90,9 @@ srltcp/
   routes/                   # REST + share + WS routes
   utils/                    # Vault (encryption at rest), files, network, platform helpers
 android/                    # Gradle + Chaquopy Android app (see android/README.md)
+desktop/                    # Windows / macOS desktop app (Electron tray app; see desktop/README.md)
 tests/                      # pytest suite
-scripts/                    # check.sh, build-android.sh, simulate*.py, tor_testnet.sh, pentest/
+scripts/                    # check.sh, build-android.sh, build_desktop.sh, simulate*.py, tor_testnet.sh, pentest/
 ```
 
 ## Security model
@@ -139,7 +141,7 @@ SRLTCP only talks to your contacts, plus Tor and STUN to find them — nobody ca
 - LAN/UDP discovery announces (names, IPs, ports — signed but not encrypted)
 - Connection metadata (who talks to whom, when)
 - Received files in your incoming folder (so other apps can open them). Your keys, contacts, chats, groups and settings **are** encrypted on the device: with a hardware-backed Android Keystore key on phones, DPAPI on Windows, an owner-only key file on Linux/macOS
-- Self-signed localhost HTTPS certificate (browser trust is manual; the Android app pins it)
+- Self-signed localhost HTTPS certificate (browser trust is manual; the Android and desktop apps pin it)
 
 See [SECURITY.md](SECURITY.md) for vulnerability reporting, the threat model and hardening; the latest penetration test is in [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md).
 
@@ -180,7 +182,27 @@ Change port from CLI: `./run.sh web --port 9999`
 
 ## Installation
 
-### macOS (Apple silicon) and Linux
+### Desktop app: Windows 11 (x64) and macOS (Apple silicon)
+
+The easiest way on a computer: download from [Releases](https://github.com/narl3yyy-svg/SRLTCP/releases). Nothing else to install: Python, SRLTCP and Tor are inside.
+
+| | File | Install |
+|---|---|---|
+| **Windows 10/11, x64** | `SRLTCP-X.Y.Z-windows-x64-setup.exe` | Run it and follow the steps (no admin rights needed; installs for your user). The first time, Windows SmartScreen may say *Windows protected your PC* because the installer isn't code-signed: **More info → Run anyway**. When Windows Firewall asks about *python.exe*, allow **Private networks** (contacts on your Wi-Fi/VPN connect to it). |
+| **macOS 12+, Apple silicon (M1 and later)** | `SRLTCP-X.Y.Z-macos-arm64.zip` | Open the zip and drag **SRLTCP** into *Applications*. The app isn't notarized by Apple, so the first time macOS says it can't check it: open *System Settings → Privacy & Security*, scroll down and click **Open Anyway** (or in Terminal: `xattr -dr com.apple.quarantine /Applications/SRLTCP.app`). Allow the camera and microphone when you start your first call. |
+
+How it works:
+
+- **One window, one tray icon.** SRLTCP opens in its own window. Closing the window keeps SRLTCP running in the **system tray** (Windows, next to the clock) or the **menu bar** (macOS), so messages and calls still come in; click the icon to open it again. *Quit SRLTCP* in the icon's menu stops it.
+- **Start when I sign in** (*Open at Login* on a Mac), in the icon's menu: SRLTCP starts in the background when you log in.
+- **Same data as run.bat / run.sh.** The app uses the same data folder (`%APPDATA%\SRLTCP` on Windows, `~/.srltcp` on a Mac): moving from `run.bat` keeps your identity, contacts and chats. Don't run both at once (they'd want the same ports); the app says so if you try.
+- **Unread messages** show as a badge on the Dock icon (Mac) or a flashing taskbar button (Windows).
+- **Log file:** the icon's menu → *Show log file* (no access token is ever written to it).
+- **Private and pinned:** the window only shows SRLTCP's own page. It trusts exactly the certificate the SRLTCP process made (its SHA-256), only on 127.0.0.1. Links to other sites open in your browser. Camera, microphone and notifications are allowed for SRLTCP's page only.
+
+Building the apps yourself: [desktop/README.md](desktop/README.md).
+
+### From source: macOS (Apple silicon) and Linux
 
 One launcher, `run.sh`, for both:
 
@@ -210,7 +232,7 @@ sudo usermod -aG dialout $USER
 ./run.sh web --serial
 ```
 
-### Windows
+### From source: Windows
 
 ```cmd
 git clone https://github.com/narl3yyy-svg/SRLTCP.git
@@ -258,7 +280,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.15.2.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.16.0.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -266,7 +288,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.15.2.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.15.2.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.16.0.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -315,13 +337,13 @@ Start the web UI on two machines on the same LAN:
 | **WireGuard / any VPN** | VPNs carry no broadcast: use **Find by IP** with the other device's VPN address (after it pressed Announce). |
 | **You know the IP** | *Add Contact → Find a device by IP*, e.g. `10.0.100.5`. |
 
-After that, addresses look after themselves: when a contact's IP changes (new Wi-Fi, mobile data, VPN reconnect) its signed announce updates your contact entry and the app reconnects — measured at under 15 seconds over WireGuard.
+After that, addresses look after themselves: when a contact's IP changes (new Wi-Fi, mobile data, VPN reconnect) it tells you its new addresses inside the encrypted session (or the two of you meet again over Tor) and the app reconnects; nobody has to press Announce again.
 
 **WireGuard checklist** (only if devices don't find each other):
 
 - Each phone's peer config must route the VPN subnet: `AllowedIPs = 10.0.100.0/24` (not just the server's address).
 - The server must forward traffic **between** peers: `net.ipv4.ip_forward=1` and allow `wg0 → wg0` in the firewall (e.g. `iptables -A FORWARD -i wg0 -o wg0 -j ACCEPT`).
-- Allow UDP **7826** (discovery) and TCP **7825** (connections) between peers. Port 9876 is local-only and never needs opening.
+- Allow TCP **7825** (connections) between peers, and UDP **7826** if you use Announce. Port 9876 is local-only and never needs opening.
 - Test from phone A's browser: `https://10.0.100.5:9876` should show a certificate warning or "SRLTCP is locked" — that proves the phones can reach each other.
 
 ### Phones on different mobile carriers / without the VPN
@@ -330,7 +352,7 @@ Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data usua
 
 **Direct without port forwarding (UDP).** With *Settings → Network → Try direct internet connections* on (default), two phones on different networks (two mobile carriers, mobile data and a home Wi-Fi, two homes) connect straight to each other: each learns its public address from a STUN server, they swap addresses and key shares inside the session they already have over Tor, and both send UDP packets to each other at once, which opens both NATs (hole punching). The connection is encrypted per packet with keys only the two of you have, the signed quantum-safe handshake runs inside it, and it carries chat, files and calls at the full speed of both connections (the header shows **DIRECT**). In our simulation (two carrier NATs, TCP between them blocked, packet loss) the phones were direct after about 10 s. Speed follows BBR (like YouTube/QUIC on mobile), so random radio losses don't slow it down: on an emulated LTE path with a 140 ms round trip and 1 % loss a file moves at about 2.1 of the link's 2.5 MB/s (before 0.12.1: 0.1 MB/s), and chat goes out ahead of file data. "Symmetric" carrier NAT (a new port for every destination) on *both* sides can't be crossed by any direct technique: messages wait until one phone is on Wi-Fi or both have IPv6, and *Check connection* (with its copyable report) says so. SRLTCP never scans: it only sends to addresses a contact gave it. With *Open a port on my home router* on (UPnP / NAT-PMP, like video-call and game apps; **off by default**), a phone on a home Wi-Fi asks its router to forward the direct-connection port, so a phone on mobile data, whose carrier changes ports per destination, can still get in. Phones on a VPN and the home Wi-Fi also connect directly (LAN/VPN addresses are shared inside the session). This shares your public IP address with your contacts (and the STUN server); turn it off to connect only on the same Wi-Fi or VPN. Details: [docs/NETWORKING.md](docs/NETWORKING.md#direct-connections-across-networks-hole-punching).
 
-**No server, no port forwarding: Tor as the doorbell.** With *Settings → Network → Find contacts on other networks (Tor)* on (default) on both devices, they find each other from any network through the Tor network: phone on mobile data, PC on a VPN, a friend's Wi-Fi. Each device publishes a private onion service; its address goes only to trusted contacts (inside the encrypted connection), and only trusted contacts can connect through it. Tor is **only the doorbell**: over it the two devices swap their current addresses and keys and set up a direct UDP or IPv6 connection (the badge shows CONNECTING, then DIRECT, usually within seconds). Messages, files and calls never go over Tor; they wait and go out at full speed the moment the direct connection is up. Tor is built into the Android app; on a PC install [Tor Browser](https://www.torproject.org/download/) (SRLTCP starts its Tor by itself). Tested on a private Tor network (`scripts/tor_testnet.sh` + `scripts/simulate_tor.py`).
+**No server, no port forwarding: Tor as the doorbell.** With *Settings → Network → Find contacts on other networks (Tor)* on (default) on both devices, they find each other from any network through the Tor network: phone on mobile data, PC on a VPN, a friend's Wi-Fi. Each device publishes a private onion service; its address goes only to trusted contacts (inside the encrypted connection), and only trusted contacts can connect through it. Tor is **only the doorbell**: over it the two devices swap their current addresses and keys and set up a direct UDP or IPv6 connection (the badge shows CONNECTING, then DIRECT, usually within seconds). Messages, files and calls never go over Tor; they wait and go out at full speed the moment the direct connection is up. Tor is built into the Android app and the desktop apps; from source, `run.bat web` / `./run.sh web` offer to download it the first time (or install [Tor Browser](https://www.torproject.org/download/): SRLTCP starts its own copy of Tor by itself). Tested on a private Tor network (`scripts/tor_testnet.sh` + `scripts/simulate_tor.py`).
 
 Every setting explained, plus common setups and troubleshooting: **[docs/NETWORKING.md](docs/NETWORKING.md)**.
 
@@ -382,7 +404,7 @@ Voice and video calls use WebRTC. Offer/answer are sent inside the encrypted SRL
 
 **Leaving the app during a call (Android).** Swipe home or switch apps and the call goes on: a **video call** shrinks into a small floating window over your other apps (picture-in-picture, like Maps while navigating; tap it to return, or use its hang-up button), and every call shows a **Call in progress** notification with the timer, *tap to return* and **Hang up**. The microphone (and camera, for video) stay on meanwhile; the app tells Android so (a foreground service for the microphone/camera, during calls only). During every call a watchdog checks every 2 s that the sound and picture are still playing and that the microphone and camera still deliver, and restarts whatever stopped (e.g. a camera Android took away while the app was in the background).
 
-**PC camera (Windows).** The browser needs the camera twice: allowed for the SRLTCP page (icon at the left of the address bar) and allowed by Windows in *Settings → Privacy & security → Camera* (and *Microphone*), including **Let desktop apps access your camera**, since browsers count as desktop apps. Only one app can use a webcam at a time on Windows: close Teams, Zoom, Skype, the Camera app or another tab using it. Some laptops also have a camera privacy switch or key. If the camera still can't be opened, the call continues with voice and the app shows the reason.
+**PC camera (Windows).** In the desktop app only Windows' own setting below applies. In a browser, the camera needs allowing twice: allowed for the SRLTCP page (icon at the left of the address bar) and allowed by Windows in *Settings → Privacy & security → Camera* (and *Microphone*), including **Let desktop apps access your camera**, since browsers count as desktop apps. Only one app can use a webcam at a time on Windows: close Teams, Zoom, Skype, the Camera app or another tab using it. Some laptops also have a camera privacy switch or key. If the camera still can't be opened, the call continues with voice and the app shows the reason.
 
 ### Group chats
 
@@ -401,6 +423,10 @@ Nothing changes: the app moves to direct UDP/IPv6 by itself and back to the VPN 
 ### Running in the background (Android)
 
 SRLTCP keeps running after you close it, like any messenger, so messages, calls and contact requests arrive as notifications. While the app is open, a message from a chat you don't have open shows only as the unread count on that contact or group (no pop-up over the app). To stop it completely, **swipe the SRLTCP notification away** (Android 14 and newer) or tap **Quit** on it (any version — older Android keeps that notification pinned). Opening the app starts it again.
+
+### Running in the background (desktop app)
+
+Closing the window keeps SRLTCP running in the tray / menu bar, so messages and calls still arrive (as notifications). The first time, a notification says so. Quit from the icon's menu (or Cmd+Q on a Mac): SRLTCP closes its connections and ports cleanly before it exits.
 
 ### USB Serial P2P
 
@@ -631,8 +657,10 @@ pytest tests/ -v
 | `sudo bash scripts/simulate_wireguard.sh` | Two "phones" + a server on a real WireGuard VPN in network namespaces: discovery, messaging, IP change |
 | `bash scripts/sync-android-python.sh` | Copy `srltcp/` into Android project before Gradle |
 | `bash scripts/build-android.sh` | Full local APK build |
+| `bash scripts/build_desktop.sh [win\|mac]` | Desktop apps: Windows x64 installer and macOS Apple-silicon app (see [desktop/README.md](desktop/README.md)) |
+| `xvfb-run -a node desktop/tests/smoke.js` | Desktop app test: node start, pinned certificate, tray, restart, clean quit |
 
-**Releases:** bump `srltcp/__init__.py` and `android/app/build.gradle.kts`, update `srltcp/RELEASE_NOTES.md`, build the APK locally, tag `vX.Y.Z`, attach APK + source zip to [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases).
+**Releases:** bump `srltcp/__init__.py` and `android/app/build.gradle.kts`, update `srltcp/RELEASE_NOTES.md`, build the APK and the desktop apps locally, tag `vX.Y.Z`, attach the APK, the Windows installer, the macOS zip and the source zip to [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases).
 
 ---
 
@@ -641,6 +669,14 @@ pytest tests/ -v
 Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the app status bar for in-app release notes.
 
 ## Roadmap
+
+**Done (v0.14–0.16)**
+
+- [x] Desktop apps: Windows 11 x64 installer and macOS Apple-silicon app, system tray / menu bar, Python and Tor built in (0.16.0)
+- [x] Nothing automatic or scan-like on the network: manual discovery, no random-port probing, router port mapping off by default, quiet networks for work and school (0.15.0)
+- [x] Security hardening: strangers refused before the handshake, small frames until authenticated, safer file names and folder sync (0.15.0)
+- [x] `run.bat` / `run.sh` offer to download Tor (Windows, macOS Apple silicon, Linux); built-in Tor on Android binds reliably (0.14.9–0.15.1)
+- [x] Video calls show the whole picture, with a Fit / Fill switch (0.15.1)
 
 **Done (v0.11–0.13)**
 
@@ -715,7 +751,7 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 
 **Done (v0.3.0)**
 
-- [x] Discovery over WireGuard/VPN (unicast sweep, announce replies, Find by IP)
+- [x] Discovery over WireGuard/VPN (unicast sweep — removed in 0.15 —, announce replies, Find by IP)
 - [x] Edit contact; automatic contact address updates; dead-link detection
 - [x] NFC pairing works by just holding phones together
 - [x] Background operation on Android with notifications
@@ -737,7 +773,7 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [ ] Reconnect directly after both apps restart without waiting for Tor (remember the last UDP addresses)
 - [ ] Bandwidth limiting and QoS per transfer
 - [ ] Signed APK releases with a stable release key (updates install over the old app)
-- [ ] Desktop system tray wrapper (Tauri/Electron)
+- [ ] Code-signed and notarized desktop apps (no SmartScreen / Gatekeeper warning); automatic updates
 
 ---
 

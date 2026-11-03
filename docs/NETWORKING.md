@@ -66,7 +66,8 @@ shares and sync **never go over Tor**.
   shows Tor's own reason (from its log). While it connects, *Settings → Network* shows Tor's
   own progress and any problem it reports (e.g. "Connection refused" on a
   network that blocks Tor).
-- **Windows, macOS and Linux:** the first time you start SRLTCP with
+- **Desktop app (Windows, macOS):** Tor is built in; nothing to install.
+- **From source on Windows, macOS and Linux:** the first time you start SRLTCP with
   `run.bat web` (Windows) or `./run.sh web` (macOS, Linux) and no Tor is
   found, it asks in the terminal whether to download the **Tor Expert
   Bundle** (the Tor program only, ~20 MB) from torproject.org, built for

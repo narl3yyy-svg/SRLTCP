@@ -74,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Verbose debug logging (all backend activity)",
     )
+    web.add_argument(
+        "--desktop",
+        action="store_true",
+        help=argparse.SUPPRESS,  # (run by the desktop app: see desktop/main.js)
+    )
 
     send = sub.add_parser("send", help="Send a message (CLI)")
     send.add_argument("--recipient", required=True, help="Recipient hash ID")
@@ -182,7 +187,9 @@ async def run_web(args: argparse.Namespace) -> None:
     from srltcp.web.auth import load_or_create_token
 
     log.info("SRLTCP v%s running", __version__)
-    if not is_android():
+    if getattr(args, "desktop", False):
+        _desktop_ready(bound_port, shutdown)
+    elif not is_android():
         # Printed (not logged) so it does not end up in shared log files.
         print(
             "\n  Open SRLTCP in your browser (keep this link private):\n"
@@ -200,6 +207,34 @@ async def run_web(args: argparse.Namespace) -> None:
 
     await shutdown.wait()
     await shutdown.run_cleanup()
+
+
+def _desktop_ready(port: int, shutdown: GracefulShutdown) -> None:
+    """Started by the desktop app (desktop/main.js): tell it where the page is
+    (one JSON line on stdout: port, access token, certificate fingerprint to
+    pin), and stop cleanly when it closes our stdin (it quit, or crashed)."""
+    import json
+    import threading
+
+    from srltcp.utils.tls import localhost_cert_sha256
+    from srltcp.web.auth import load_or_create_token
+
+    print("SRLTCP-DESKTOP " + json.dumps({
+        "port": port, "token": load_or_create_token(), "cert_sha256": localhost_cert_sha256(),
+        "version": __version__,
+    }), flush=True)
+    loop = asyncio.get_running_loop()
+
+    def watch() -> None:
+        try:
+            while sys.stdin.readline():
+                pass
+        except (OSError, ValueError):
+            pass
+        log.info("Desktop app closed — stopping")
+        loop.call_soon_threadsafe(shutdown.event.set)
+
+    threading.Thread(target=watch, name="desktop-stdin", daemon=True).start()
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:

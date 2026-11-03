@@ -60,6 +60,7 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 - **Received file names** — folders, device names (`CON`, `COM1`…), trailing dots and spaces, control characters and right-to-left/invisible characters (which can make `photo‮gpj.exe` look like `photoexe.jpg`) are removed from names before a file is saved.
 - **Folder sync paths** — a synced file is never written, trashed or copied through a symbolic link or junction inside the folder, and a folder can be synced with only one contact (not inside or around another sync).
 - **Android** — the call notification's *Answer* and full-screen intents carry a secret only this app process knows, so another app can't open the call screen or answer a call; text you copy from a chat is marked sensitive (Android 13+: hidden from the clipboard preview).
+- **Desktop app** — runs its own bundled Python (`-I`: no outside packages or `PYTHON*` variables) and Tor (no pluggable transports), checked at build time against pinned (Python) and published (Tor) SHA-256s, and never writes into its own folder. Electron's files are kept apart from SRLTCP's data folder; the log file never contains the access token.
 - **Tor program (PC)** — Tor is only looked for in your user folders, Program Files, the SRLTCP folder and PATH (not in folders any user can write to, like `C:\` or `C:\Tor`), and a downloaded Tor Expert Bundle is checked against the Tor Project's SHA-256.
 - **Share sessions** use constant-time token comparison; path traversal is blocked on file APIs.
 
@@ -72,6 +73,7 @@ SRLTCP is designed for **peer-to-peer, end-to-end encrypted** communication over
 | Direct internet traffic | Observers see connection endpoints, timing, and volume — not decrypted payloads |
 | Local disk | Encrypted at rest (see above). Not encrypted: received files in your incoming folder (other apps must open them), the Tor onion key (Tor reads it), the localhost certificate and web token, logs |
 | Android WebView | Pins the app's own localhost certificate (SHA-256); user-installed CAs are not trusted for it; the JavaScript bridge only answers the app's own page |
+| Desktop app (Windows / macOS) | Trusts only the localhost certificate whose SHA-256 the SRLTCP process reported, on 127.0.0.1; the page runs sandboxed without Node.js, can't navigate elsewhere, and only it gets camera, microphone and notifications. Not code-signed (Windows) / not notarized (macOS): get it from the project's Releases page |
 | NFC pairing | Contact cards (public data) are exchanged in the clear over a few centimetres |
 | VPN discovery | VPNs carry no broadcast: use *Find by IP* with the other device's VPN address. Your signed announce (name, hash ID, public key, addresses) goes only to that address, and for 10 minutes you answer announces from your own networks. (Before 0.15 an announce was sent to every address in the VPN subnet; removed as scan-like.) |
 

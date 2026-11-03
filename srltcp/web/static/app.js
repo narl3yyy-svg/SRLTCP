@@ -349,12 +349,20 @@
     } catch (_) {
       state.unread = {};
     }
+    showUnreadInTitle();
   }
 
   function saveUnreadState() {
     try {
       localStorage.setItem(UNREAD_STORAGE_KEY, JSON.stringify(state.unread));
     } catch (_) { /* ignore */ }
+    showUnreadInTitle();
+  }
+
+  /** "(3) SRLTCP Chat": the tab, and the desktop app's dock / taskbar badge. */
+  function showUnreadInTitle() {
+    const total = Object.values(state.unread || {}).reduce((n, c) => n + (Number(c) || 0), 0);
+    document.title = total ? `(${total > 99 ? "99+" : total}) SRLTCP Chat` : "SRLTCP Chat";
   }
 
   function unreadCount(hashId) {
@@ -5725,6 +5733,9 @@
     }
   }, 4000);
 
+
+  // The desktop app (desktop/main.js) adds "SRLTCPDesktop/<version>" to its user agent.
+  if (/SRLTCPDesktop\//.test(navigator.userAgent)) document.documentElement.classList.add("desktop-app");
 
   async function initApp() {
     applyMobileLayout(

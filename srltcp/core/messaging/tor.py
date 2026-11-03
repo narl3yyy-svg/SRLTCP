@@ -186,6 +186,10 @@ def _tor_binary(configured: str = "") -> str | None:
             return str(path)
         if path.is_dir() and (inside := _tor_in(path)):
             return str(inside)
+    # The desktop app's own copy of Tor (desktop/main.js passes its path).
+    bundled = os.environ.get("SRLTCP_TOR_BINARY", "").strip()
+    if bundled and Path(bundled).is_file():
+        return bundled
     found = shutil.which("tor")
     if found:
         return found

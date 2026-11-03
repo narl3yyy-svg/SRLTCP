@@ -1,5 +1,34 @@
 # SRLTCP Release Notes
 
+## v0.16.0 (2026-11-03)
+
+### Desktop apps for Windows and macOS
+- **Windows 11 (x64)**: `SRLTCP-0.16.0-windows-x64-setup.exe`, an installer
+  for your user (no admin rights), with Start menu and desktop shortcuts
+  and an uninstaller.
+- **macOS (Apple silicon, M1 and later, macOS 12+)**:
+  `SRLTCP-0.16.0-macos-arm64.zip` — drag SRLTCP into Applications.
+- **Nothing else to install**: Python, SRLTCP and Tor are inside.
+- **In the tray / menu bar**: closing the window keeps SRLTCP running, so
+  messages and calls still come in; *Quit SRLTCP* in the icon's menu stops
+  it cleanly. *Start when I sign in* (*Open at Login*) starts it in the
+  background when you log in. Unread messages show on the Dock icon (Mac)
+  or flash the taskbar button (Windows).
+- **Same identity and chats as `run.bat` / `run.sh`** (same data folder).
+- **Locked down**: the window shows only SRLTCP's own page, trusts only the
+  certificate that SRLTCP made (pinned by its SHA-256), opens other links in
+  your browser, and gives camera, microphone and notifications to SRLTCP's
+  page only.
+- **First start**: the apps aren't code-signed by Microsoft / notarized by
+  Apple. On Windows, SmartScreen asks once (*More info → Run anyway*), and
+  Windows Firewall asks to allow *python.exe* (allow Private networks). On a
+  Mac: *System Settings → Privacy & Security → Open Anyway*.
+
+### Also
+- The browser tab shows the number of unread messages, e.g. "(3) SRLTCP Chat".
+- Restarting after a restored backup or a setting change keeps Python's
+  start options (the same command line).
+
 ## v0.15.2 (2026-11-03)
 
 - **Your Tor address shows up on the phone.** It appears under your hash ID
