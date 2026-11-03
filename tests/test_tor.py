@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+from pathlib import Path
 
 from srltcp.core.messaging.tor import valid_onion
 
@@ -168,3 +169,23 @@ def test_tor_is_found_where_windows_users_put_it(tmp_path, monkeypatch) -> None:
     other.write_bytes(b"MZ")
     assert tor._tor_binary(f'"{other}"') == str(other)
     assert tor._tor_binary(str(other.parent)) == str(other)  # (the folder holding tor.exe)
+
+
+def test_tor_downloaded_by_run_sh_is_found_on_mac_and_linux(  # type: ignore[no-untyped-def]
+    tmp_path: Path, monkeypatch
+) -> None:
+    import shutil
+    import sys
+
+    from srltcp.core.messaging import tor
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    bundled = Path(tor.__file__).resolve().parents[3] / "tor-expert-bundle" / "tor" / "tor"
+    real_is_file = Path.is_file
+    monkeypatch.setattr(Path, "is_file", lambda p: p == bundled or (
+        real_is_file(p) and str(p).startswith(str(tmp_path))))
+    assert tor._tor_binary("") == str(bundled)
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert tor._tor_binary("") == str(bundled)

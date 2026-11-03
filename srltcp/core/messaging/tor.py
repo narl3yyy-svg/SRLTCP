@@ -213,9 +213,23 @@ def _tor_binary(configured: str = "") -> str | None:
             except OSError:
                 pass
         candidates += [app_dir / "tor" / "tor.exe", app_dir / "tor" / "tor" / "tor.exe"]
-    elif sys.platform == "darwin":
-        candidates += [Path("/Applications/Tor Browser.app/Contents/MacOS/Tor/tor"),
-                       Path("/opt/homebrew/bin/tor"), Path("/usr/local/bin/tor")]
+    else:
+        # macOS and Linux: the bundle ./run.sh downloads (SRLTCP/tor-expert-bundle),
+        # Homebrew (Apple silicon first), and Tor Browser in your own folders.
+        app_dir = Path(__file__).resolve().parents[3]
+        candidates += [app_dir / "tor-expert-bundle" / "tor" / "tor"]
+        if sys.platform == "darwin":
+            candidates += [
+                Path("/opt/homebrew/bin/tor"), Path("/usr/local/bin/tor"),
+                Path("/Applications/Tor Browser.app/Contents/MacOS/Tor/tor"),
+                home / "Applications" / "Tor Browser.app" / "Contents" / "MacOS" / "Tor" / "tor",
+            ]
+        else:
+            candidates += [Path("/usr/bin/tor"), Path("/usr/local/bin/tor"),
+                           Path("/usr/sbin/tor")]
+            for base in (home, home / "Downloads", home / "Desktop", home / ".local" / "share"):
+                for name in ("tor-browser", "tor-browser_en-US"):
+                    candidates.append(base / name / "Browser" / "TorBrowser" / "Tor" / "tor")
     for c in candidates:
         if c.is_file():
             return str(c)
@@ -508,11 +522,17 @@ class TorMixin:
                     f"No Tor program at the Tor path set in Settings → Network ({configured}). "
                     "Put the full path of tor.exe there (or the folder it is in)."
                 )
+            if sys.platform == "win32":
+                raise _TorUnavailable(
+                    "Tor wasn't found on this computer. Run `run.bat tor-setup` to download "
+                    "it, or install Tor Browser, then restart SRLTCP — or put the path of "
+                    "tor.exe (or its folder) in Settings → Network → Tor path."
+                )
+            how = "brew install tor" if sys.platform == "darwin" else "your package manager"
             raise _TorUnavailable(
-                "Tor wasn't found on this computer. Install Tor Browser, or extract the Tor "
-                "Expert Bundle into the SRLTCP folder (so there is tor\\tor.exe) or Downloads, "
-                "then restart SRLTCP — or put the path of tor.exe (or its folder) in "
-                "Settings → Network → Tor path."
+                "Tor wasn't found on this computer. Run `./run.sh tor-setup` to download it "
+                f"(or install it with {how}), then restart SRLTCP — or put the path of the "
+                "tor program in Settings → Network → Tor path."
             )
         if configured and binary != configured.strip('"').strip("'"):
             log.info("Tor found at %s", binary)
@@ -544,6 +564,13 @@ class TorMixin:
             import subprocess
 
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        elif sys.platform.startswith("linux") and any(Path(binary).parent.glob("libevent*")):
+            # The Tor Expert Bundle and Tor Browser on Linux keep tor's own
+            # libraries (libevent, OpenSSL) next to it, without a run path.
+            env = dict(os.environ)
+            env["LD_LIBRARY_PATH"] = os.pathsep.join(
+                x for x in (str(Path(binary).parent), env.get("LD_LIBRARY_PATH", "")) if x)
+            kwargs["env"] = env
         self._tor_proc = await asyncio.create_subprocess_exec(
             binary, "-f", str(torrc), "--ignore-missing-torrc",
             stdout=asyncio.subprocess.DEVNULL,

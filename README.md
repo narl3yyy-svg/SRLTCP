@@ -180,7 +180,9 @@ Change port from CLI: `./run.sh web --port 9999`
 
 ## Installation
 
-### Linux / macOS
+### macOS (Apple silicon) and Linux
+
+One launcher, `run.sh`, for both:
 
 ```bash
 git clone https://github.com/narl3yyy-svg/SRLTCP.git
@@ -189,6 +191,12 @@ cd SRLTCP
 # Verbose backend logs:
 ./run.sh web --debug
 ```
+
+Requires Python 3.12+. macOS's own `python3` is older: install Python from [python.org](https://www.python.org/downloads/macos/) or with Homebrew (`brew install python@3.12`). On Linux: e.g. `sudo apt install python3.12 python3.12-venv`.
+
+**Tor on the first start.** If Tor isn't installed, `./run.sh web` asks in the terminal whether to download the **Tor Expert Bundle** for this computer from torproject.org (~20 MB, checksum-verified, into `SRLTCP/tor-expert-bundle`): the Apple-silicon (arm64) build on an M-series Mac, x86_64 or arm64 on Linux. Tor is only used to find contacts on other networks; answer **n** to skip (you won't be asked again; `./run.sh tor-setup` downloads it later). Tor you installed yourself (`brew install tor`, `sudo apt install tor`, Tor Browser) is found and used instead, and you're not asked.
+
+**Apple silicon (M1 and later).** `run.sh` runs everything natively as arm64, even from a Terminal opened with Rosetta: it picks a Python that runs as arm64 (python.org's and Homebrew's in `/opt/homebrew` do), rebuilds a `.venv` that an Intel (x86_64) Python made, and downloads the arm64 Tor. An Intel Mac gets the x86_64 builds. There's no separate Mac script: `run.sh` checks which system it's on.
 
 Open the link printed in the terminal — `https://127.0.0.1:9876/?token=…` (self-signed cert — accept once for localhost). The token keeps other programs on your machine out of your chats; run `srltcp url` to print the link again.
 
@@ -212,7 +220,7 @@ run.bat web
 
 Requires [Python 3.12+](https://www.python.org/downloads/) with **Add to PATH** checked.
 
-The first time, if Tor isn't installed, `run.bat web` asks whether to download the **Tor Expert Bundle** from torproject.org (~23 MB, checksum-verified, into `SRLTCP\tor-expert-bundle`). Tor is only used to find contacts on other networks; answer **n** to skip (you won't be asked again; `run.bat tor-setup` downloads it later).
+The first time, if Tor isn't installed, `run.bat web` asks whether to download the **Tor Expert Bundle** from torproject.org (~20 MB, checksum-verified, into `SRLTCP\tor-expert-bundle`). Tor is only used to find contacts on other networks; answer **n** to skip (you won't be asked again; `run.bat tor-setup` downloads it later).
 
 ### pip install
 
@@ -601,6 +609,7 @@ pip install -e ".[dev]"
 # Tests use SRLTCP_DATA_DIR automatically — do not run pytest against ~/.srltcp
 
 ./run.sh web                    # HTTPS web UI + P2P node (open the ?token= link it prints)
+./run.sh tor-setup              # download Tor for this computer (macOS arm64 / Linux / run.bat on Windows)
 bash scripts/check.sh           # ruff + mypy + pytest (run before tagging)
 pytest tests/ -v
 ```

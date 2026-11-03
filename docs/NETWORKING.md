@@ -66,18 +66,26 @@ shares and sync **never go over Tor**.
   shows Tor's own reason (from its log). While it connects, *Settings → Network* shows Tor's
   own progress and any problem it reports (e.g. "Connection refused" on a
   network that blocks Tor).
-- **Windows:** the first time you start SRLTCP with `run.bat web` and no
-  Tor is found, it asks whether to download the **Tor Expert Bundle** (the
-  Tor program only, ~23 MB) from torproject.org. Say yes: the newest stable
-  version is downloaded over HTTPS, checked against the SHA-256 checksum the
-  Tor Project publishes, and unpacked into `SRLTCP\tor-expert-bundle`. Say no
-  and you're not asked again (`run.bat tor-setup` downloads it later).
+- **Windows, macOS and Linux:** the first time you start SRLTCP with
+  `run.bat web` (Windows) or `./run.sh web` (macOS, Linux) and no Tor is
+  found, it asks in the terminal whether to download the **Tor Expert
+  Bundle** (the Tor program only, ~20 MB) from torproject.org, built for
+  your computer: Windows x86_64, macOS on Apple silicon (arm64; Intel Macs
+  get x86_64), Linux x86_64 or arm64. Say yes: the newest stable version is
+  downloaded over HTTPS, checked against the SHA-256 checksum the Tor
+  Project publishes, and unpacked into `SRLTCP/tor-expert-bundle`. Say no
+  and you're not asked again (`run.bat tor-setup` or `./run.sh tor-setup`
+  downloads it later). Started without a terminal (a service), it never
+  asks.
 - **PC (any):** or install [Tor Browser](https://www.torproject.org/download/)
   on Windows or macOS, or the `tor` package on Linux (`sudo apt install tor`).
   SRLTCP finds it and starts its own copy in the background. On Windows it
   looks in Tor Browser's usual places (Desktop, Program Files, AppData), for
   the **Tor Expert Bundle** extracted in Downloads, on the Desktop or in the
-  SRLTCP folder (`SRLTCP\tor\tor.exe`), and on PATH. Anywhere else, put the
+  SRLTCP folder (`SRLTCP\tor\tor.exe`), and on PATH. On macOS: PATH,
+  `SRLTCP/tor-expert-bundle`, Homebrew (`/opt/homebrew`, then `/usr/local`)
+  and Tor Browser in Applications. On Linux: PATH, `SRLTCP/tor-expert-bundle`,
+  `/usr/bin`, `/usr/sbin` and Tor Browser in your home, Downloads or Desktop. Anywhere else, put the
   path of `tor.exe` (or the folder it's in) in *Settings → Network → Tor
   path*. Restart SRLTCP after installing.
 - **First connection:** the two devices swap onion addresses inside their
