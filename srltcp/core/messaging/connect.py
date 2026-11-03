@@ -59,6 +59,7 @@ def _unb64(value: object, size: int) -> bytes:
 PENDING_HANDSHAKE_TTL = 15.0
 HANDSHAKES_PER_MINUTE = 12  # per connection (a radio retries a few times; floods are refused)
 STRANGER_HANDSHAKES_PER_MINUTE = 20  # from non-contacts, all connections together
+DIAL_HOLD = 300.0  # an address that times out or is blocked here rests this long
 SERIAL_HANDSHAKE_TTL = 180.0
 # Over Tor a handshake (~9 KiB each way) takes several circuit round trips; a
 # second try before the first is answered would replace our key half.
@@ -397,13 +398,28 @@ class ConnectMixin:
         keep the first connection, close the rest. Returns (peer_id, host, port)."""
         assert self.tcp_transport is not None
         transport = self.tcp_transport
+        # Addresses that didn't answer or that this computer may not reach (a
+        # firewall or antivirus said "access denied") rest for a while instead
+        # of being dialed every few seconds; a new network or opening the
+        # contact's chat tries them again (resume_reaching).
+        held: dict[tuple[str, int], float] = self.__dict__.setdefault("_dial_held", {})
+        now = time.monotonic()
+        live = [c for c in candidates if held.get(c, 0.0) <= now]
+        if not live:
+            return ("", *candidates[0]) if candidates else ("", "", 0)
+        candidates = live
 
         async def one(index: int, host: str, port: int) -> tuple[str, str, int]:
             await asyncio.sleep(0.25 * index)
             try:
                 return await transport.connect(host, port, timeout=timeout), host, port
             except (OSError, TimeoutError, ConnectionError) as exc:
-                log.info("TCP connect to %s:%s failed: %s", host, port, exc or type(exc).__name__)
+                refused = isinstance(exc, ConnectionRefusedError)  # (up, but SRLTCP isn't: retry)
+                if not refused:
+                    held[(host, port)] = time.monotonic() + DIAL_HOLD
+                log.info("TCP connect to %s:%s failed: %s%s", host, port,
+                         exc or type(exc).__name__,
+                         "" if refused else f" — not tried again for {DIAL_HOLD / 60:.0f} min")
                 return "", host, port
 
         tasks = [asyncio.create_task(one(i, h, p)) for i, (h, p) in enumerate(candidates)]

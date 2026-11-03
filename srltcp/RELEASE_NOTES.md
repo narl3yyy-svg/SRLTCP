@@ -1,5 +1,22 @@
 # SRLTCP Release Notes
 
+## v0.15.2 (2026-11-03)
+
+- **Your Tor address shows up on the phone.** It appears under your hash ID
+  as soon as Tor is ready. Before, it only appeared if Tor was ready before
+  the page loaded, which on a phone it rarely is.
+- **A quiet terminal.** The page's requests are no longer logged every few
+  seconds (they showed as `"%m %U" 200 733`); only failed requests are,
+  and everything with `--debug`.
+- **Blocked addresses rest.** A contact's address that this computer may not
+  reach (a firewall's "Access is denied") or that doesn't answer is tried
+  again after 5 minutes, when the network changes, or when you open the
+  chat after SRLTCP gave up on them, not every few seconds.
+- **Check connection explains home Wi-Fi + mobile data.** When direct
+  connections fail and router port mapping is off, it says to turn on
+  *Open a port on my home router* on the device at home (off by default
+  since 0.15), which that combination usually needs.
+
 ## v0.15.1 (2026-11-03)
 
 ### Video calls: the whole picture, not zoomed in

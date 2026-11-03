@@ -148,3 +148,37 @@ def test_filenames_from_contacts_are_made_harmless() -> None:
     long = safe_filename("x" * 400 + ".jpg")
     assert long.endswith(".jpg") and len(long.encode()) <= 240
     assert safe_filename("Holiday 2026 (1).jpg") == "Holiday 2026 (1).jpg"
+
+
+async def test_an_address_that_is_blocked_here_rests(tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """'Access is denied' (a firewall) or no answer: not dialed every few seconds."""
+    node = make_node(tmp_path, "alice")
+    calls: list[str] = []
+
+    class Blocked:
+        async def connect(self, host: str, port: int, timeout: float) -> str:
+            calls.append(host)
+            raise PermissionError(13, "Access is denied")
+
+    node.tcp_transport = Blocked()  # type: ignore[assignment]
+    assert (await node._dial_first([("10.0.30.107", 7825)], 1.0))[0] == ""
+    assert (await node._dial_first([("10.0.30.107", 7825)], 1.0))[0] == ""
+    assert calls == ["10.0.30.107"]  # (the second time it rested)
+    node.resume_reaching()  # a new network: try again
+    await node._dial_first([("10.0.30.107", 7825)], 1.0)
+    assert len(calls) == 2
+
+
+async def test_a_refused_address_is_retried(tmp_path: Path) -> None:
+    node = make_node(tmp_path, "alice")
+    calls: list[str] = []
+
+    class Refused:
+        async def connect(self, host: str, port: int, timeout: float) -> str:
+            calls.append(host)
+            raise ConnectionRefusedError(111, "refused")
+
+    node.tcp_transport = Refused()  # type: ignore[assignment]
+    await node._dial_first([("10.0.30.110", 7825)], 1.0)
+    await node._dial_first([("10.0.30.110", 7825)], 1.0)
+    assert len(calls) == 2  # (the device is there; SRLTCP will be back)

@@ -427,12 +427,21 @@ class MessagingBackend(
     def resume_reaching(self, hash_id: str | None = None) -> None:
         """You opened a chat, sent something or called (one contact), or the
         network changed (everyone): dial again."""
+        held = self.__dict__.get("_dial_held")
         if hash_id is None:
             self._reach_started.clear()
             self._reach_paused.clear()
+            if held:
+                held.clear()
         else:
+            was_paused = hash_id in self._reach_paused
             self._reach_started.pop(hash_id, None)
             self._reach_paused.discard(hash_id)
+            if held and was_paused:
+                # (After a give-up only: a message every few seconds doesn't
+                # re-dial a blocked address every few seconds.)
+                for c in self._direct_candidates(hash_id):
+                    held.pop(c, None)
 
     def reached(self, hash_id: str) -> None:
         """A session with the contact is up: the give-up clock starts over."""

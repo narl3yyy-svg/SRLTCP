@@ -700,6 +700,10 @@ class PunchMixin:
         elif not mine:
             reason = ("This device couldn't find its public address (the STUN servers didn't "
                       "answer: blocked on this network?), so it can't connect directly.")
+            tips.append("If your contact is on a home Wi-Fi, they can turn on Settings → Network → "
+                        "Open a port on my home router: then this device doesn't need an address "
+                        "of its own. Also check for a VPN, firewall or security app on this "
+                        "device that blocks UDP.")
         elif not theirs:
             reason = ("Your contact's device hasn't shared a public address (an older version, "
                       "direct connections turned off, or STUN blocked on their network).")
@@ -713,6 +717,9 @@ class PunchMixin:
                         "SIM → Access Point Names → APN protocol: IPv4/IPv6), often works.")
         else:
             reason = "Both devices have public addresses: a direct connection is being tried."
+        if failed and not self.port_mapping_enabled() and not self.on_quiet_network():
+            tips.insert(0, "On the device at home (on Wi-Fi), turn on Settings → Network → Open a "
+                           "port on my home router: home Wi-Fi and mobile data usually need it.")
         if path == "tor" and failed:
             tips.append("Turn on Wi-Fi on one of the phones (any home or public Wi-Fi that "
                         "allows normal internet use): most Wi-Fi routers can be crossed.")

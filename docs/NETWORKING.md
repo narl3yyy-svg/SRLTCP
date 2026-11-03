@@ -304,6 +304,8 @@ closed after 5 minutes.
 |---|---|
 | Not sure why a contact won't connect | *Edit contact* → **Check connection**, then **Copy connection report**. |
 | Different networks never connect | Tor on and showing "ready" on both devices (Settings → Network), and paired once. |
+| A computer or phone at home and a phone on mobile data never connect directly | Turn on **Open a port on my home router** on the device at home (off by default since 0.15). Mobile carriers change ports per destination, and home routers drop packets that don't come from the exact port they expect. |
+| Log shows `TCP connect … failed: [WinError 5] Access is denied` | A firewall or security app on this computer blocks SRLTCP (Python) from that address. SRLTCP rests such addresses for 5 minutes instead of retrying. Allow Python in the firewall if the contact is on your network. |
 | Header stays on **CONNECTING** | The phones found each other but can't connect directly: the report says why (most often hard NAT on both carriers). One phone on Wi-Fi, or IPv6 on both, fixes it. |
 | Tor stays at "connecting…" | The network may block Tor. On a PC, check the clock is correct. |
 | VPN phone can't reach the home phone | The VPN client's `AllowedIPs` must include the home LAN. |

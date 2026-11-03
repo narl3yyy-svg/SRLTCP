@@ -899,6 +899,7 @@
   function renderMyOnion(tor) {
     const el = $("#me-onion");
     if (!el) return;
+    state.torEnabled = !!(tor && tor.enabled && !tor.quiet);
     const onion = tor && tor.enabled && tor.state === "ready" ? (tor.onion || "") : "";
     el.dataset.fullOnion = onion;
     el.textContent = onion ? `Tor: ${shortOnion(onion)}` : "";
@@ -937,6 +938,7 @@
   /* Settings → Network: Tor. */
   function renderTorStatus(tor) {
     const el = $("#tor-status");
+    if (tor) renderMyOnion(tor);  // (your address under your hash ID, once Tor is ready)
     if (!el || !tor) return;
     let text = "";
     let ok = false;
@@ -5702,6 +5704,13 @@
     const { ok, data } = await safeFetch("/api/tor/status", {}, { silent: true, fallback: null });
     if (ok && data) renderTorStatus(data);
   }, 2000);
+  // Tor still connecting (it takes a while on a phone): show your Tor address
+  // under your hash ID as soon as it's ready, without a reload.
+  startInterval(async () => {
+    if (!state.torEnabled || !$("#me-onion")?.classList.contains("hidden")) return;
+    const { ok, data } = await safeFetch("/api/tor/status", {}, { silent: true, fallback: null });
+    if (ok && data) renderMyOnion(data);
+  }, 5000);
   startInterval(async () => {
     if (state.settings.show_clock === false) return;
     const { ok, data } = await safeFetch("/api/system", {}, { silent: true, fallback: {} });
