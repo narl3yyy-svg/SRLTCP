@@ -43,6 +43,14 @@ the VPN phone's `AllowedIPs` include the home LAN, for example
 It's fine if only the VPN phone can open the connection: it dials in as soon as
 the VPN connects.
 
+**Two devices on the VPN from two different networks** (a laptop at work and a
+phone on mobile data, both on the home WireGuard). They connect directly over
+the tunnel. Each learns the other's VPN address inside the encrypted session
+(over Tor) and keeps it. Without Tor (a *quiet* work network), type the other
+device's VPN address in **Find by IP** once: it dials that contact at once, and
+the other device dials back. For this to work the WireGuard server must pass
+traffic **between** two clients, see *VPN checklist* below.
+
 **Two different networks (mobile data on two carriers, a friend's Wi-Fi).**
 Pair once (on the same Wi-Fi, or with a pairing code), keep Tor and *Direct
 internet connections* on (default) on both phones. They find each other over
@@ -310,4 +318,35 @@ closed after 5 minutes.
 | Header stays on **CONNECTING** | The phones found each other but can't connect directly: the report says why (most often hard NAT on both carriers). One phone on Wi-Fi, or IPv6 on both, fixes it. |
 | Tor stays at "connecting…" | The network may block Tor. On a PC, check the clock is correct. |
 | VPN phone can't reach the home phone | The VPN client's `AllowedIPs` must include the home LAN. |
+| Two devices on the VPN from different networks stay on CONNECTING | See *VPN checklist* below. |
 | Nothing works after changing ports | Every device must use the same peer and discovery ports. Restart the app. |
+
+## VPN checklist (two VPN clients on different networks)
+
+Two WireGuard clients reach each other through the server, so the server and
+both clients must allow client-to-client traffic:
+
+1. **Each client's `AllowedIPs` includes the tunnel subnet** (e.g.
+   `10.0.100.0/24`), not only the home LAN. Otherwise WireGuard on that client
+   drops packets to the other client's tunnel address. Full tunnel
+   (`0.0.0.0/0, ::/0`) includes it.
+2. **Firewall rule on the server's WireGuard interface** passing traffic from
+   the tunnel subnet to the tunnel subnet (OPNsense: *Firewall → Rules →
+   WireGuard (group)*, source and destination the tunnel net, TCP 7825 and
+   UDP 7828 at least). Make the rule **IPv4+IPv6** if the tunnel has IPv6
+   addresses: an IPv4-only rule makes the live log fill with blocked IPv6
+   from the clients.
+3. **SRLTCP isn't excluded from the VPN** on the phone (WireGuard app →
+   tunnel → *Excluded applications*).
+4. **Nothing on either device blocks Python/SRLTCP to the tunnel addresses**
+   (Windows Firewall, Malwarebytes). In the log this shows as
+   `[WinError 5] Access is denied`.
+5. **Find by IP** with the other device's tunnel address if neither has Tor
+   (quiet network).
+
+Blocked **IPv6 on UDP/TCP 7828** in the router's log while a contact is away is
+SRLTCP trying a direct internet path between the two devices' public IPv6
+addresses (only to that contact, a few packets at a time). A home router
+drops what arrives before its own device has answered; once a direct path
+(the VPN, or the IPv6 one) works, it stops.
+

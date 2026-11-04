@@ -93,7 +93,30 @@ def same_network(addr: str, *, fresh: bool = False) -> bool:
                 return True
         except ValueError:
             continue
-    return False
+    return _routed_from_own_subnet(ip)
+
+
+def _routed_from_own_subnet(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Windows and macOS list interfaces with a fallback that can miss a
+    WireGuard tunnel's address. Ask the system which of our addresses it would
+    send from (no packet is sent): a private address in the same /24 as the
+    target means a tunnel or LAN we're on."""
+    if ip.version != 4 or not ip.is_private or ip.is_loopback or ip.is_link_local:
+        return False
+    if os.path.isdir("/sys/class/net"):
+        return False  # (Linux and Android list every interface already)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect((str(ip), 9))
+            src = ipaddress.ip_address(s.getsockname()[0])
+        finally:
+            s.close()
+    except (OSError, ValueError):
+        return False
+    if not src.is_private or src.is_loopback or src == ip:
+        return False
+    return ip in ipaddress.ip_network(f"{src}/24", strict=False)
 
 
 _FRESH_CHECK = {"at": 0.0}
@@ -312,13 +335,21 @@ def _fallback_interfaces() -> list[dict[str, Any]]:
                 ips.add(ip)
     except OSError:
         pass
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("10.255.255.255", 1))
-        ips.add(s.getsockname()[0])
-        s.close()
-    except OSError:
-        pass
+    # Which of our addresses each private range is routed from (no packet is
+    # sent). Finds a WireGuard tunnel's address that the hostname lookup
+    # misses (common on macOS, possible on Windows).
+    for probe in ("10.255.255.255", "172.31.255.255", "192.168.255.255", "100.127.255.255"):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect((probe, 1))
+                ip = str(s.getsockname()[0])
+            finally:
+                s.close()
+            if ip and not ip.startswith(("127.", "0.")):
+                ips.add(ip)
+        except OSError:
+            pass
     if not ips:
         ips.add("127.0.0.1")
     return [{"interface": "default", "ip": ip, "prefix_len": 24, "label": ip} for ip in sorted(ips)]

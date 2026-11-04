@@ -129,6 +129,23 @@ class AnnounceMixin:
         for _ in range(ANNOUNCE_BURSTS):
             await self.tcp_transport.unicast_discovery(payload, [host])
             await asyncio.sleep(ANNOUNCE_BURST_DELAY)
+        self._dial_contacts_at(host)
+
+    def _dial_contacts_at(self: MessagingBackend, host: str) -> None:
+        """Find by IP named an address a contact has used (its VPN address,
+        say): dial that contact there now, whether or not it answers the
+        announce — we had maybe stopped trying, or Tor is off here."""
+        held = self.__dict__.get("_dial_held")
+        for peer in self.trusted.list_peers():
+            if peer.blocked or host not in (peer.tcp_host, *peer.alt_hosts):
+                continue
+            link = self.get_link(peer.hash_id)
+            if link and link.handshake_complete:
+                continue
+            self.resume_reaching(peer.hash_id)
+            if held:
+                held.pop((host, peer.tcp_port or self.config.tcp_port), None)
+            self._kick_connect(peer.hash_id)
 
     def _verify_link_soon(self: MessagingBackend, hash_id: str, wait: float = 6.0) -> None:
         """Ping a link now; if no answer arrives within ``wait`` s, replace it."""
@@ -295,6 +312,16 @@ class AnnounceMixin:
         if trusted and fresh and peer.transport == "tcp" and peer.tcp_host:
             self.request_direct_upgrade(peer.hash_id)  # same Wi-Fi again: leave Tor
             link = self.get_link(peer.hash_id)
+            if newer and not trusted.blocked and not (link and link.handshake_complete):
+                # A contact just told us, signed, where it is on our own
+                # network (Find by IP over the VPN, Announce on the Wi-Fi):
+                # dial it now, even if we had stopped trying, and even with no
+                # Tor (quiet work network) to find each other with.
+                self.resume_reaching(peer.hash_id)
+                held = self.__dict__.get("_dial_held")
+                if held:  # (it answers now: no 5-minute rest for that address)
+                    held.pop((peer.tcp_host, peer.tcp_port or self.config.tcp_port), None)
+                self._kick_connect(peer.hash_id)
             if link and link.up and link.transport == "serial" and newer:
                 self.check_paths_now(peer.hash_id)  # on our Wi-Fi: it beats the radio
         # Answer (so the sender finds us too) only if we pressed Announce

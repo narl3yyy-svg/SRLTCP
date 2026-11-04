@@ -37,6 +37,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from srltcp.core.protocol.messages import MessageType, decode_payload, encode_payload
+from srltcp.core.trusted import MAX_ALT_HOSTS
 from srltcp.transports.portmap import PortMapper
 from srltcp.transports.udp import (
     STUN_SERVERS,
@@ -303,14 +304,27 @@ class PunchMixin:
         return self.config.tcp_port + 3 if self.config.tcp_port else 0
 
     def local_candidates(self: MessagingBackend) -> list[str]:
-        """LAN / VPN addresses (contacts dial these directly)."""
-        out = []
-        for ip in sorted(self._own_ips()):
+        """LAN / VPN addresses (contacts dial these directly). VPN first: on a
+        phone that's the one a contact can actually reach. Mobile-data
+        addresses (rmnet, clat…) are left out: they're the carrier's network,
+        nobody can dial them, and they used to push a contact's saved VPN
+        address out of its short address list."""
+        from srltcp.utils.network import is_cellular_interface, is_vpn_interface, list_interfaces
+
+        ifaces = sorted(list_interfaces(), key=lambda i: 0 if is_vpn_interface(i) else 1)
+        out: list[str] = []
+        for iface in ifaces:
+            if is_cellular_interface(iface):
+                continue
+            ip = str(iface.get("ip", ""))
             try:
                 addr = ipaddress.ip_address(ip)
             except ValueError:
                 continue
-            if addr.version == 4 and not addr.is_loopback and not addr.is_link_local:
+            if (
+                addr.version == 4 and not addr.is_loopback and not addr.is_link_local
+                and ip not in out
+            ):
                 out.append(ip)
         return out[:MAX_CANDIDATES]
 
@@ -367,7 +381,7 @@ class PunchMixin:
         )
         if local:
             merged = list(dict.fromkeys([*local, peer.tcp_host, *peer.alt_hosts]))
-            merged = [h for h in merged if h and h != peer.tcp_host][:4]
+            merged = [h for h in merged if h and h != peer.tcp_host][:MAX_ALT_HOSTS]
             if merged != peer.alt_hosts:
                 self.trusted.update(hash_id, alt_hosts=merged)
                 self._upgrade_attempts.pop(hash_id, None)  # (new place to try at once)

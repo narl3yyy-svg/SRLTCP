@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from srltcp.core.messaging.connect import SERIAL_HANDSHAKE_TTL
 from srltcp.core.protocol.messages import MessageType, decode_payload, encode_payload
+from srltcp.core.trusted import MAX_ALT_HOSTS
 from srltcp.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -89,7 +90,7 @@ class PathsMixin:
         ):
             if host and (host, port or self.config.tcp_port) not in out:
                 out.append((host, port or self.config.tcp_port))
-        return out[:4]
+        return out[: 2 + MAX_ALT_HOSTS]
 
     def path_went_dead(self: MessagingBackend, hash_id: str) -> None:
         """The direct session stopped answering (their Wi-Fi went off): don't

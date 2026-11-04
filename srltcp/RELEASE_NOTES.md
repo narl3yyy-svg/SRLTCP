@@ -1,5 +1,24 @@
 # SRLTCP Release Notes
 
+## v0.16.1 (2026-11-03)
+
+### Two devices on the same VPN from two different networks
+(A laptop at work and a phone on 5G, both on the home WireGuard.)
+- **Find by IP connects a contact over the VPN**, even with no Tor (a quiet
+  work network has none) and after SRLTCP had stopped trying it: typing a
+  contact's VPN address dials that contact at once, and a contact that
+  receives it dials back.
+- **A contact's VPN address is no longer forgotten.** Phones shared their
+  mobile-data addresses too, which nobody can dial; a few network changes
+  pushed the useful VPN address out of the contact's short address list.
+  Mobile-data addresses aren't shared any more, the VPN address goes first,
+  and each contact keeps up to 6 addresses (was 4).
+- **Windows and macOS see their WireGuard address** more reliably (it was
+  sometimes missing, so Find by IP refused VPN addresses as "not on your
+  network").
+- *docs/NETWORKING.md* has a new checklist for the VPN case, including the
+  OPNsense firewall rules for client-to-client traffic and IPv6.
+
 ## v0.16.0 (2026-11-03)
 
 ### Desktop apps for Windows and macOS

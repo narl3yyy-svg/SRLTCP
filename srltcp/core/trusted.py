@@ -13,6 +13,9 @@ from srltcp.utils.platform import data_dir
 
 _HASH_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 REMOVED_HISTORY_GRACE = 24 * 3600.0  # deleted contact's chat is kept this long
+# Other addresses kept per contact (home Wi-Fi, VPN, work…). Room for the
+# usual places at once, so a VPN address isn't forgotten while away from it.
+MAX_ALT_HOSTS = 6
 
 _GENERIC_NAMES = frozenset({"peer", "trusted", "serial-peer", "tcp-peer", "unknown"})
 _FIXTURE_HASHES = frozenset(
@@ -235,7 +238,7 @@ class TrustedStore:
         if connection_mode is not None and connection_mode in ("auto", "lan", "wan"):
             peer.connection_mode = connection_mode
         if alt_hosts is not None:
-            peer.alt_hosts = [h.strip() for h in alt_hosts if h.strip()][:4]
+            peer.alt_hosts = [h.strip() for h in alt_hosts if h.strip()][:MAX_ALT_HOSTS]
         if pair_token_out is not None:
             peer.pair_token_out = pair_token_out
         if onion is not None:
