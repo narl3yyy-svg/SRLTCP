@@ -1,5 +1,14 @@
 # SRLTCP Release Notes
 
+## v0.16.2 (2026-11-07)
+
+- **Enter starts a new line on the phone.** The keyboard's Enter key (bottom
+  right) now goes to the next line of the message you're writing; the blue
+  arrow next to the message box sends it. With a real keyboard (a PC, the
+  desktop app) Enter still sends and Shift+Enter starts a new line.
+- **Line breaks show in messages.** A message written on several lines now
+  shows on several lines on both phones (before, the lines ran together).
+
 ## v0.16.1 (2026-11-03)
 
 ### Two devices on the same VPN from two different networks

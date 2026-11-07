@@ -5254,9 +5254,17 @@
   }, { passive: false });
   $("#send-btn")?.addEventListener("click", () => sendMessage());
 
+  // Enter: on a phone or tablet the keyboard's Enter key starts a new line
+  // (the blue arrow sends); with a real keyboard Enter sends and Shift+Enter
+  // starts a new line.
+  function enterStartsNewLine() {
+    if (isAndroidApp()) return true;
+    return window.matchMedia?.("(hover: none) and (pointer: coarse)").matches || false;
+  }
   $("#msg-input")?.addEventListener("keydown", (e) => {
     // Not while an IME is composing (CJK / some Android keyboards).
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229 &&
+        !enterStartsNewLine()) {
       e.preventDefault();
       sendMessage();
     }
