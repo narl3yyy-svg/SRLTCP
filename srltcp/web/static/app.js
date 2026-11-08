@@ -2270,6 +2270,103 @@
     }
   }
 
+  /* ── "Preparing to send": copying a picked file into SRLTCP ──
+   * A file picked in the page is first copied into SRLTCP (it can't read
+   * the original on its own); a big one on a slow disk takes minutes. Until
+   * the transfer starts, the chat shows it with progress and a Cancel. */
+  let preparingSeq = 0;
+  const preparing = new Map(); // key -> { peer, name, size, sent, started, phase, xhr, speed }
+
+  function preparingHtml(peer) {
+    let html = "";
+    for (const [key, p] of preparing) {
+      if (p.peer !== peer) continue;
+      html += `<div class="bubble-row out" data-preparing="${key}">
+        <div class="bubble out"><div class="file-bubble preparing">
+          <div class="file-icon">⏳</div>
+          <div class="file-info">
+            <div class="file-name">${escapeHtml(p.name)}</div>
+            <div class="file-progress-meta" data-preparing-line>${escapeHtml(preparingLine(p))}</div>
+            <div class="progress-track chat-progress"><div class="progress-fill" data-preparing-fill style="width:${preparingPct(p)}%"></div></div>
+          </div>
+          <button type="button" class="file-cancel" data-cancel-preparing="${key}" title="Cancel" aria-label="Cancel">✕</button>
+        </div></div>
+      </div>`;
+    }
+    return html;
+  }
+
+  function preparingPct(p) {
+    return p.size ? Math.min(100, Math.round((p.sent / p.size) * 100)) : 0;
+  }
+
+  function preparingLine(p) {
+    if (p.phase === "starting") return `Starting the transfer… · ${formatBytes(p.size)}`;
+    const parts = [`Preparing to send · ${preparingPct(p)}% · ${formatBytes(p.sent)} of ${formatBytes(p.size)}`];
+    if (p.speed > 0) {
+      parts.push(formatSpeed(p.speed));
+      parts.push(formatEta((p.size - p.sent) / p.speed));
+    }
+    return parts.filter(Boolean).join(" · ");
+  }
+
+  function showPreparing(key) {
+    const p = preparing.get(key);
+    const row = $(`[data-preparing="${key}"]`);
+    if (!p || !row) {
+      if (p && p.peer === state.selectedPeer) renderMessages(state.messageCache || [], { preserveScroll: true });
+      return;
+    }
+    const line = row.querySelector("[data-preparing-line]");
+    const fill = row.querySelector("[data-preparing-fill]");
+    if (line) line.textContent = preparingLine(p);
+    if (fill) fill.style.width = `${preparingPct(p)}%`;
+  }
+
+  function endPreparing(key) {
+    if (!preparing.delete(key)) return;
+    $(`[data-preparing="${key}"]`)?.remove();
+  }
+
+  /** POST the file to /api/upload with progress (fetch has no upload progress). */
+  function uploadWithProgress(file, key) {
+    return new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      const p = preparing.get(key);
+      if (p) p.xhr = xhr;
+      let lastAt = performance.now();
+      let lastSent = 0;
+      xhr.upload.onprogress = (e) => {
+        const cur = preparing.get(key);
+        if (!cur) return;
+        cur.sent = e.loaded;
+        const now = performance.now();
+        if (now - lastAt >= 1000) {
+          const rate = ((e.loaded - lastSent) * 1000) / (now - lastAt);
+          cur.speed = cur.speed ? cur.speed * 0.6 + rate * 0.4 : rate;  // (smoothed)
+          lastAt = now;
+          lastSent = e.loaded;
+        }
+        showPreparing(key);
+      };
+      xhr.upload.onload = () => {
+        const cur = preparing.get(key);
+        if (cur) { cur.sent = cur.size; cur.phase = "starting"; showPreparing(key); }
+      };
+      xhr.onload = () => {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText || "{}"); } catch (_) { /* not JSON */ }
+        resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, data });
+      };
+      xhr.onerror = () => resolve({ ok: false, status: 0, data: {}, error: new Error("network error") });
+      xhr.onabort = () => resolve({ ok: false, status: 0, data: {}, aborted: true });
+      xhr.open("POST", "/api/upload");
+      const form = new FormData();
+      form.append("file", file);
+      xhr.send(form);
+    });
+  }
+
   /** Upload and send one file. Resolves to "sending", "queued" (the
    *  contact is away; it goes out when they're back) or false. ``quiet``
    *  leaves the progress toasts to the caller (several files at once). */
@@ -2279,28 +2376,59 @@
     // contact is reachable again, like a message.
     if (!isPeerLinked(hashId)) await connectPeer(hashId, false);
     if (state.settings?.shrink_photos) file = await shrinkPhoto(file);
-    if (!quiet) toast(`Uploading ${file.name}…`);
-    const form = new FormData();
-    form.append("file", file);
-    const { ok: upOk, status, data: uploaded, error } = await safeFetch(
-      "/api/upload",
-      { method: "POST", body: form },
-      { fallback: {} }
-    );
-    if (!upOk || !uploaded?.path) {
-      // Say why: "Upload failed" alone can't be acted on.
-      const why = uploaded?.error
-        || (status === 0
-          ? `couldn't read ${file.name} on this device${error?.message ? ` (${error.message})` : ""}. `
-            + "If it's still downloading, wait until it's finished, or pick it again from Files"
-          : `the app answered ${status}`);
-      toast(why.startsWith("Upload failed") ? why : `Upload failed: ${why}`, "error");
-      logActivity(`Upload of ${file.name} failed: ${why}`);
-      return false;
+    const key = `p${++preparingSeq}`;
+    preparing.set(key, { peer: hashId, name: file.name, size: file.size || 0, sent: 0,
+      started: Date.now(), phase: "copying", speed: 0, xhr: null });
+    if (state.selectedPeer === hashId) {
+      state.stickBottom = true;
+      renderMessages(state.messageCache || [], { preserveScroll: true });
     }
+    try {
+      return await uploadAndSend(file, hashId, peerName, quiet, key);
+    } finally {
+      endPreparing(key);
+    }
+  }
+
+  async function uploadAndSend(file, hashId, peerName, quiet, key) {
+    // The desktop app knows where the picked file is: no copy, it's sent
+    // straight from there (a 4 GB file starts at once).
+    let local = "";
+    try { local = window.srltcpDesktop?.pathForFile?.(file) || ""; } catch (_) { local = ""; }
+    let uploaded = local ? { path: local } : null;
+    if (!uploaded) {
+      const { ok: upOk, status, data, error, aborted } = await uploadWithProgress(file, key);
+      if (aborted) {
+        toast(`${file.name} not sent`);
+        return false;
+      }
+      uploaded = upOk ? data : null;
+      if (!uploaded?.path) {
+        reportUploadFailure(file, status, data, error);
+        return false;
+      }
+    } else {
+      const p = preparing.get(key);
+      if (p) { p.phase = "starting"; p.sent = p.size; showPreparing(key); }
+    }
+    return startFileTransfer(uploaded.path, file, hashId, peerName, quiet);
+  }
+
+  function reportUploadFailure(file, status, uploaded, error) {
+    // Say why: "Upload failed" alone can't be acted on.
+    const why = uploaded?.error
+      || (status === 0
+        ? `couldn't read ${file.name} on this device${error?.message ? ` (${error.message})` : ""}. `
+          + "If it's still downloading, wait until it's finished, or pick it again from Files"
+        : `the app answered ${status}`);
+    toast(why.startsWith("Upload failed") ? why : `Upload failed: ${why}`, "error");
+    logActivity(`Upload of ${file.name} failed: ${why}`);
+  }
+
+  async function startFileTransfer(path, file, hashId, peerName, quiet) {
     const { ok, data: sent } = await apiPost("/api/transfer", {
       recipient_hash: hashId,
-      path: uploaded.path,
+      path,
       transport: activeLinkTransport(hashId),
     });
     if (!ok) {
@@ -2368,7 +2496,7 @@
       await sendFileToPeer(list[0], hashId, peerName);
       return;
     }
-    toast(`Uploading ${list.length} files…`);
+    toast(`Preparing ${list.length} files…`);
     let sending = 0;
     let queued = 0;
     for (const file of list) {
@@ -4111,6 +4239,7 @@
       } catch (_) { /* skip malformed message */ }
     }
 
+    html += preparingHtml(state.selectedPeer);
     el.innerHTML = html || '<div class="empty-hint" style="text-align:center;padding:2rem">No messages yet — say hello!</div>';
     el.querySelectorAll("[data-media-open]").forEach((btn) => {
       btn.addEventListener("click", (ev) => {
@@ -5390,6 +5519,12 @@
         dl.disabled = false;
         toast(data?.error || "Could not start the download", "error");
       }
+      return;
+    }
+    const stop = e.target.closest("[data-cancel-preparing]");
+    if (stop) {
+      e.stopPropagation();
+      preparing.get(stop.dataset.cancelPreparing)?.xhr?.abort();
       return;
     }
     const btn = e.target.closest("[data-cancel-transfer]");

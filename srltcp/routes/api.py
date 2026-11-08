@@ -46,6 +46,9 @@ def _start_again() -> None:
     argv = list(getattr(sys, "orig_argv", []) or [sys.executable, "-m", "srltcp", *sys.argv[1:]])
     os.execv(sys.executable, [sys.executable, *argv[1:]])
 
+
+UPLOAD_WRITE_BLOCK = 8 * 1024 * 1024  # (bytes gathered before each disk write)
+
 def _validate_path(path_str: str, *, must_exist: bool = False) -> Path | None:
     if not path_str or ".." in Path(path_str).parts:
         return None
@@ -431,12 +434,19 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             dest = upload_dir / f"{stem}_{int(time.time())}{suffix}"
         try:
             upload_dir.mkdir(parents=True, exist_ok=True)
+            # Written in big blocks, off the event loop: a multi-GB file on a
+            # slow disk mustn't stall chat, pings and the page meanwhile.
             with dest.open("wb") as f:
+                pending = bytearray()
                 while True:
-                    chunk = await field.read_chunk()
+                    chunk = await field.read_chunk(1024 * 1024)
+                    if chunk:
+                        pending += chunk
+                    if pending and (not chunk or len(pending) >= UPLOAD_WRITE_BLOCK):
+                        block, pending = bytes(pending), bytearray()
+                        await asyncio.to_thread(f.write, block)
                     if not chunk:
                         break
-                    f.write(chunk)
         except OSError as exc:
             dest.unlink(missing_ok=True)
             log.warning("Upload of %s failed: %s", filename, exc)

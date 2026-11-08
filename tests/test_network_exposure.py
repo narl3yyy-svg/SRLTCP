@@ -182,3 +182,32 @@ async def test_a_refused_address_is_retried(tmp_path: Path) -> None:
     await node._dial_first([("10.0.30.110", 7825)], 1.0)
     await node._dial_first([("10.0.30.110", 7825)], 1.0)
     assert len(calls) == 2  # (the device is there; SRLTCP will be back)
+
+
+async def test_a_big_upload_arrives_whole(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The page copies a picked file into SRLTCP before sending it; it's
+    written in big blocks off the event loop (a slow disk mustn't stall chat)."""
+    import hashlib
+    import os
+
+    import aiohttp
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    import srltcp.web.server  # noqa: F401 - the app's import order (routes import web)
+    from srltcp.routes import api
+
+    monkeypatch.setenv("SRLTCP_DATA_DIR", str(tmp_path / "data"))
+    node = make_node(tmp_path, "alice")
+    app = web.Application(client_max_size=0)
+    api.register_api_routes(app, node)  # type: ignore[arg-type]
+    blob = os.urandom(api.UPLOAD_WRITE_BLOCK * 2 + 12345)  # (more than one block, and a tail)
+    async with TestClient(TestServer(app)) as client:
+        form = aiohttp.FormData()
+        form.add_field("file", blob, filename="big.rar")
+        resp = await client.post("/api/upload", data=form)
+        assert resp.status == 200, await resp.text()
+        info = await resp.json()
+    saved = Path(info["path"])
+    assert info["size"] == len(blob) and saved.name == "big.rar"
+    assert hashlib.sha256(saved.read_bytes()).digest() == hashlib.sha256(blob).digest()

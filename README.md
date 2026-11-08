@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.16.2 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.16.3 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -196,6 +196,7 @@ How it works:
 - **One window, one tray icon.** SRLTCP opens in its own window. Closing the window keeps SRLTCP running in the **system tray** (Windows, next to the clock) or the **menu bar** (macOS), so messages and calls still come in; click the icon to open it again. *Quit SRLTCP* in the icon's menu stops it.
 - **Start when I sign in** (*Open at Login* on a Mac), in the icon's menu: SRLTCP starts in the background when you log in.
 - **Same data as run.bat / run.sh.** The app uses the same data folder (`%APPDATA%\SRLTCP` on Windows, `~/.srltcp` on a Mac): moving from `run.bat` keeps your identity, contacts and chats. Don't run both at once (they'd want the same ports); the app says so if you try.
+- **Big files start at once:** a file you pick or drop is sent straight from where it is on your disk (no copy first, as a browser needs). Keep it there until it's sent.
 - **Unread messages** show as a badge on the Dock icon (Mac) or a flashing taskbar button (Windows).
 - **Log file:** the icon's menu → *Show log file* (no access token is ever written to it).
 - **Private and pinned:** the window only shows SRLTCP's own page. It trusts exactly the certificate the SRLTCP process made (its SHA-256), only on 127.0.0.1. Links to other sites open in your browser. Camera, microphone and notifications are allowed for SRLTCP's page only.
@@ -280,7 +281,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.16.2.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.16.3.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -288,7 +289,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.16.2.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.16.2.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.16.3.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -525,6 +526,8 @@ curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" https://127.0.0.1:9876/api/tran
 Transfers are **resumable**: after a dropped connection, a path change or a **restart of either app**, the file continues from what the receiver already has on disk (`FILE_RESUME`). Unfinished transfers are kept in `transfers.json` (data folder, owner-only) and come back *paused* until the contact is connected again; the receiver re-checks the part it already has, and a file that was edited or deleted in the meantime is not resumed (both sides show it as failed). With *Keep messages: Until restart* nothing is kept.
 
 Files **wait like messages**: sending to a contact who isn't reachable right now returns a transfer in state `paused` (the chat shows *waiting for connection*). It's offered automatically as soon as a session with that contact comes up. An offer that's never answered (lost when the link dropped) is sent once more after 30 s, then waits for the next connection.
+
+**Preparing to send.** A file you pick in the page is first copied into SRLTCP (a browser doesn't let it read the original). For a big file on a slow computer that takes a while, so the chat shows it right away with *Preparing to send · 37 % · 1.6 of 4.4 GB · 14 MB/s · 3 min left* and a ✕ to cancel; then the transfer itself starts. The **desktop app** skips the copy: it sends the file straight from where it is, so even a 4 GB file starts at once.
 
 In the web UI, pick **several files at once** with the paperclip, or **drag files** from your file manager onto a contact in the sidebar. Progress, speed and a cancel button show in the file's bubble, in that contact's chat only. Images and videos preview in chat during transfer. Click to enlarge in a viewer that zooms with two fingers, a double-tap or the mouse wheel (the rest of the app doesn't zoom; it fits the screen); use **Download file** to save it — you are asked where to save (Android shows the system *Save as* screen; desktop Chrome/Edge show a save dialog, other browsers use their download folder).
 

@@ -42,6 +42,21 @@ const portFree = (port) => new Promise((res) => {
   await ok("API answers (the access token works)", () =>
     page.evaluate(async () => (await fetch("/api/version")).ok));
   const port = Number(new URL(page.url()).port);
+  // The desktop app tells the page where a picked file is (sent from there,
+  // no copy): window.srltcpDesktop.pathForFile, and nothing else of Node.
+  const picked = path.join(data, "picked file.bin");
+  fs.writeFileSync(picked, "x".repeat(1024));
+  await page.evaluate(() => {
+    const i = document.createElement("input"); i.type = "file"; i.id = "smoke-pick"; document.body.appendChild(i);
+  });
+  await page.setInputFiles("#smoke-pick", picked);
+  const where = await page.evaluate(() => ({
+    path: window.srltcpDesktop?.pathForFile(document.querySelector("#smoke-pick").files[0]),
+    keys: Object.keys(window.srltcpDesktop || {}), node: typeof require,
+  }));
+  if (where.path === picked && where.keys.join() === "pathForFile" && where.node === "undefined") {
+    console.log("ok: a picked file's location is known (sent without a copy); no Node.js in the page");
+  } else fail(`desktop file path: ${JSON.stringify(where)}`);
   await ok("live updates (WebSocket) connect through the pinned certificate", () =>
     page.evaluate(() => new Promise((res) => {
       const proto = location.protocol === "https:" ? "wss:" : "ws:";

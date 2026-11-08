@@ -1,5 +1,19 @@
 # SRLTCP Release Notes
 
+## v0.16.3 (2026-11-08)
+
+### Big files: you see what's happening
+- **"Preparing to send" right away.** A file you pick in the page is first
+  copied into SRLTCP, which for a 4 GB file on a slow PC takes minutes. Until
+  now nothing showed meanwhile. Now the chat shows the file at once with
+  *Preparing to send · 37 % · 1.6 of 4.4 GB · 14 MB/s · 3 min left*, a
+  progress bar and ✕ to cancel; then the normal transfer takes over.
+- **The desktop app doesn't copy at all.** It sends the file straight from
+  where it is on your disk, so even a 4 GB file starts sending at once.
+- **The app stays responsive during a big copy.** The file is written to disk
+  in big blocks, off SRLTCP's main loop, so chat, calls and pings don't stall
+  on a slow disk.
+
 ## v0.16.2 (2026-11-07)
 
 - **Enter starts a new line on the phone.** The keyboard's Enter key (bottom

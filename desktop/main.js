@@ -289,6 +289,7 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: true,
+      preload: path.join(__dirname, "preload.js"), // (window.srltcpDesktop.pathForFile only)
     },
   });
   win.removeMenu?.();

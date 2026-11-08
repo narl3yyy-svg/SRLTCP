@@ -25,6 +25,9 @@ Installing and using it: see *Desktop app* in the [main README](../README.md#des
   everything else gets Chromium's normal checks). Navigation outside the
   page opens in the browser; camera, microphone, notifications and clipboard
   are allowed for the page only; the page runs sandboxed, without Node.js.
+- `preload.js` gives the page one function, `window.srltcpDesktop.pathForFile(file)`
+  (Electron's `webUtils.getPathForFile`): a picked or dropped file is sent from
+  where it is instead of being copied into SRLTCP first. Nothing else is exposed.
 - Closing the window hides it (tray / menu bar). *Quit SRLTCP* stops the node
   (up to 12 s for a clean stop, then it's ended).
 - Electron's own files go to `%APPDATA%\SRLTCP Desktop` / `~/Library/Application
