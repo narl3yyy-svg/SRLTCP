@@ -51,6 +51,7 @@ import os
 import secrets
 import socket
 import struct
+import sys
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -1248,6 +1249,60 @@ class _Protocol(asyncio.DatagramProtocol):
 
     def error_received(self, exc: Exception) -> None:
         log.debug("UDP socket error: %r", exc)
+        _keep_reading(self.transport)
+
+
+# Windows reports an ICMP error (port unreachable, TTL expired: our priming
+# packets expire on purpose) as an error on the *next* read of the socket
+# (WSAECONNRESET / WSAENETRESET), and asyncio's Windows event loop then
+# stops reading that socket for good: STUN answers and contacts' packets
+# still arrive but are never seen. So these errors are turned off on every
+# UDP socket (as UDP programs on Windows do), and reading is restarted if
+# it stopped anyway.
+_SIO_UDP_CONNRESET = 0x9800000C
+_SIO_UDP_NETRESET = 0x9800000F
+
+
+def _ignore_icmp_errors(sock: socket.socket) -> bool:
+    """Windows: don't report ICMP errors as socket errors. True if done."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        ws2 = ctypes.WinDLL("ws2_32")  # type: ignore[attr-defined,unused-ignore]
+        ioctl = ws2.WSAIoctl
+        ioctl.argtypes = [
+            ctypes.c_size_t, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+            ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+            ctypes.c_void_p, ctypes.c_void_p,
+        ]
+        ioctl.restype = ctypes.c_int
+        results = []
+        for code in (_SIO_UDP_CONNRESET, _SIO_UDP_NETRESET):  # (the 2nd: best effort)
+            off = wintypes.BOOL(False)
+            returned = wintypes.DWORD(0)
+            rc = ioctl(sock.fileno(), code, ctypes.byref(off), ctypes.sizeof(off),
+                       None, 0, ctypes.byref(returned), None, None)
+            results.append(rc == 0)
+        return results[0]
+    except Exception as exc:  # noqa: BLE001 - reading is restarted anyway
+        log.debug("Couldn't turn off ICMP errors on the UDP socket: %r", exc)
+        return False
+
+
+def _keep_reading(transport: asyncio.BaseTransport | None) -> None:
+    """asyncio's Windows (proactor) datagram transport stops reading after a
+    read error; start it again. (Other event loops keep reading by themselves.)"""
+    if transport is None or transport.is_closing():
+        return
+    restart = getattr(transport, "_loop_reading", None)
+    if restart is None or getattr(transport, "_read_fut", object()) is not None:
+        return  # (not that transport, or still reading)
+    loop = getattr(transport, "_loop", None)
+    if loop is not None:
+        loop.call_soon(restart)
 
 
 def _port_of(transport: asyncio.DatagramTransport) -> int:
@@ -1338,6 +1393,7 @@ class UdpEndpoint:
                         raise
                     sock.bind((host, 0))  # taken: any port works (candidates carry it)
                 sock.setblocking(False)
+                _ignore_icmp_errors(sock)
             except OSError as exc:
                 sock.close()
                 log.debug(

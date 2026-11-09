@@ -458,6 +458,21 @@ class TCPTransport(Transport):
 class _DiscoveryProtocol(asyncio.DatagramProtocol):
     def __init__(self, transport: TCPTransport) -> None:
         self._tcp = transport
+        self._transport: asyncio.BaseTransport | None = None
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        # (Windows: an ICMP error mustn't stop this socket reading; see udp.py.)
+        from srltcp.transports.udp import _ignore_icmp_errors
+
+        self._transport = transport
+        sock = transport.get_extra_info("socket")
+        if sock is not None:
+            _ignore_icmp_errors(sock)
+
+    def error_received(self, exc: Exception) -> None:
+        from srltcp.transports.udp import _keep_reading
+
+        _keep_reading(self._transport)
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         if len(data) > 8192:  # announces are ~400 bytes; ignore junk

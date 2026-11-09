@@ -460,3 +460,44 @@ async def test_stun_works_when_a_dns_filter_blocks_the_server_names(  # type: ig
     assert (await ep._stun_address("stun.l.google.com", s.AF_INET6, trouble)
             == "2001:4860:4864:5:8000::1")
     assert await ep._stun_address("192.0.2.7", s.AF_INET, trouble) == "192.0.2.7"  # (literal)
+
+
+def test_windows_udp_sockets_keep_reading_after_an_icmp_error() -> None:
+    """Windows reports an ICMP error (our priming packets expire on purpose)
+    on the next read, and asyncio's Windows event loop then stops reading the
+    socket: STUN answers never arrive. Reading is restarted."""
+    from srltcp.transports import udp as udp_mod
+
+    calls: list[str] = []
+
+    class FakeLoop:
+        def call_soon(self, fn):  # type: ignore[no-untyped-def]
+            calls.append("restart")
+            fn()
+
+    class ProactorLike:  # (what asyncio's proactor datagram transport has)
+        _loop = FakeLoop()
+        _read_fut = None  # (reading stopped)
+
+        def is_closing(self) -> bool:
+            return False
+
+        def _loop_reading(self) -> None:
+            calls.append("reading")
+
+    proto = udp_mod._Protocol(endpoint=None)  # type: ignore[arg-type]
+    proto.connection_made(ProactorLike())  # type: ignore[arg-type]
+    proto.error_received(ConnectionResetError(10054, "WSAECONNRESET"))
+    assert calls == ["restart", "reading"]
+    still = ProactorLike()
+    still._read_fut = object()  # type: ignore[assignment]  (still reading: leave it)
+    calls.clear()
+    udp_mod._keep_reading(still)  # type: ignore[arg-type]
+    assert calls == []
+    import socket as s
+
+    sock = s.socket(s.AF_INET, s.SOCK_DGRAM)
+    try:
+        assert udp_mod._ignore_icmp_errors(sock) is False  # (only on Windows)
+    finally:
+        sock.close()

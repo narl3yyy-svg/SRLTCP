@@ -1,5 +1,22 @@
 # SRLTCP Release Notes
 
+## v0.16.8 (2026-11-09)
+
+### Windows: direct connections across networks work again
+- **The bug:** on Windows, when a UDP packet SRLTCP sent got an error back
+  from the network (a contact's old address that no longer answers, or the
+  priming packets that are meant to expire on the way), Windows reports it
+  on the socket's next read, and Python's Windows event loop then **stopped
+  reading that socket for good**. From then on STUN answers and contacts'
+  packets still arrived but were never seen: *Check connection* said
+  *Public address here: no* although the network let UDP through, and a
+  phone on mobile data stayed on CONNECTING.
+- **The fix:** SRLTCP turns those error reports off on its UDP sockets (as
+  UDP programs on Windows do), and if a socket stops reading anyway, starts
+  it again. Also for the LAN discovery socket (Announce).
+- Only Windows was affected (the PC app, `run.bat` and the desktop app);
+  Android, macOS and Linux keep reading after such errors.
+
 ## v0.16.7 (2026-11-09)
 
 ### IPv4 from a phone to a forwarded home works without the phone's own address
