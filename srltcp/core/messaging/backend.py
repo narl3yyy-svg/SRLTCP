@@ -88,6 +88,7 @@ class NodeConfig:
     router_port_mapping: bool = False  # UPnP / NAT-PMP on the home router (portmap.py)
     quiet_networks: str = ""  # networks with no internet features ("10.20.0.0/16, ...")
     accept_internet: bool = False  # any internet address may connect (you port-forward 7825)
+    udp_forwarded: bool = False  # you forward UDP 7828 here with a static port (OPNsense/pfSense)
     stun_servers: str = ""  # for direct UDP ("host:port, ..."; empty = defaults)
     tor_enabled: bool = False  # reach contacts over Tor (onion service)
     tor_path: str = ""  # tor executable on a PC (empty: find it)

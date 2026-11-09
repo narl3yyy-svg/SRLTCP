@@ -1,5 +1,25 @@
 # SRLTCP Release Notes
 
+## v0.16.5 (2026-11-09)
+
+### Home router is OPNsense or pfSense: phones on mobile data can connect
+- **Why it stayed on CONNECTING.** OPNsense and pfSense give every outgoing
+  connection a random port, a "hard" NAT, like mobile carriers. With a hard
+  NAT on both sides, no direct connection can form: the phone found your
+  home device over Tor but never got through.
+- **New setting: *I forward UDP 7828 to this device*** (*Settings → Network →
+  More network options*). After you set the router up once (an outbound NAT
+  rule with "Static port" for UDP 7828 and a port forward of WAN UDP 7828 to
+  the device: step by step in *docs/NETWORKING.md*), SRLTCP stays on port
+  7828 and gives contacts your public address with it, which the router lets
+  in from any port.
+- **SRLTCP stays on its port when the router forwards it.** After a failed
+  attempt it used to move to a fresh port, which left a forward or a UPnP
+  mapping behind. With the new setting or *Open a port on my home router*
+  on, it no longer does.
+- **Check connection tells you.** On a home or office network whose router
+  changes ports, the advice now names OPNsense / pfSense and the fix.
+
 ## v0.16.4 (2026-11-09)
 
 ### Stuck on CONNECTING with a DNS filter (AdGuard Home, Pi-hole…)

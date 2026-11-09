@@ -3006,6 +3006,7 @@
     refreshPhonePrivacy();
     setInputValue("set-tor-path", settings.tor_path || "");
     setCheckbox("set-wan-expose", !!settings.wan_expose_port);
+    setCheckbox("set-udp-forwarded", !!settings.udp_forwarded);
     setCheckbox("set-enable-serial", !!settings.enable_serial);
     loadSerialSettings(settings.serial_port || "", settings.serial_baud || 57600);
     const tzEl = $("#set-timezone");
@@ -5470,6 +5471,7 @@
       auto_download_radio_mb: parseInt($("#set-auto-download-radio")?.value || "2", 10),
       tor_path: ($("#set-tor-path")?.value || "").trim(),
       wan_expose_port: $("#set-wan-expose")?.checked || false,
+      udp_forwarded: $("#set-udp-forwarded")?.checked || false,
       handshake_protocol: "identity",
       enable_serial: $("#set-enable-serial")?.checked || false,
       serial_port: $("#set-serial-port")?.value || "",

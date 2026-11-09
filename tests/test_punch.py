@@ -548,3 +548,26 @@ async def test_a_dead_wifi_path_is_not_offered_again_at_once(tmp_path: Path) -> 
     assert peer in node._dead_path_until
     node.check_paths_now()  # our own network changed: try everything again
     assert not node._dead_path_until
+
+
+def test_a_forwarded_udp_port_is_offered_and_kept(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Behind OPNsense / pfSense (a new port per destination) you forward UDP
+    7828 with a static port: SRLTCP offers public-IP:7828 and stays on it."""
+    import socket
+
+    from tests.test_e2e_nodes import make_node
+
+    node = make_node(tmp_path, "alice")
+
+    class FakeUdp:
+        mapped = {socket.AF_INET: ("68.108.133.82", 29503)}  # (the router changed the port)
+        ports = {socket.AF_INET: 7828}
+
+    node.udp = FakeUdp()  # type: ignore[assignment]
+    node.config.router_port_mapping = False
+    assert ("68.108.133.82", 7828) not in node.udp_candidates()
+    assert not node.fixed_udp_port()
+    node.config.udp_forwarded = True
+    cands = node.udp_candidates()
+    assert cands[0] == ("68.108.133.82", 7828) and ("68.108.133.82", 29503) in cands
+    assert node.fixed_udp_port()  # (no moving to a fresh port after a failed round)

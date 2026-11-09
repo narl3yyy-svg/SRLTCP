@@ -339,6 +339,11 @@
 <span>I port-forward TCP 7825 on my router (optional; direct connections work without it)</span>
 </label>
 <small class="field-hint">Off: the TCP port only accepts connections from your own network (and VPN) and from your contacts' known addresses — strangers on the internet are turned away before anything is read.</small>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-udp-forwarded" />
+<span>I forward UDP 7828 to this device (with a static outgoing port)</span>
+</label>
+<small class="field-hint">For routers that change ports, like OPNsense and pfSense, where a phone on mobile data otherwise can't connect directly (the chat stays on CONNECTING). On the router: an outbound NAT rule with "Static port" for this device's UDP 7828, and a port forward of WAN UDP 7828 to it — see docs/NETWORKING.md. SRLTCP then stays on that port and gives contacts your public address with it. Only contacts' encrypted packets are answered.</small>
 </details>
 </div>
 <div class="settings-panel" data-panel="serial">

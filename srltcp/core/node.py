@@ -172,6 +172,8 @@ class SRLTCPNode:
         direct_changed = direct_changed or self.config.quiet_networks != settings.quiet_networks
         self.config.quiet_networks = settings.quiet_networks
         self.config.accept_internet = settings.wan_expose_port
+        direct_changed = direct_changed or self.config.udp_forwarded != settings.udp_forwarded
+        self.config.udp_forwarded = settings.udp_forwarded
         self.config.tor_enabled = settings.tor_enabled
         self.config.tor_path = settings.tor_path
         incoming = str(settings.resolved_incoming_dir())

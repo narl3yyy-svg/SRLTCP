@@ -109,6 +109,7 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         router_port_mapping=settings.router_port_mapping,
         quiet_networks=settings.quiet_networks,
         accept_internet=settings.wan_expose_port,
+        udp_forwarded=settings.udp_forwarded,
         stun_servers=settings.stun_servers,
         tor_enabled=settings.tor_enabled,
         tor_path=settings.tor_path,

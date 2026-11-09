@@ -107,6 +107,10 @@ class AppSettings:
     clock_source: str = "system"
     ntp_server: str = "pool.ntp.org"
     wan_expose_port: bool = False
+    # You forward UDP 7828 (the direct-connection port) to this device on your
+    # router, with a fixed ("static") outgoing port: needed behind OPNsense /
+    # pfSense, which change ports. SRLTCP then stays on that port and offers it.
+    udp_forwarded: bool = False
     # Direct connections across networks (hole punching). Shares your public
     # address with your contacts (only them, inside the encrypted session).
     direct_internet: bool = True
@@ -137,7 +141,7 @@ class AppSettings:
     auto_download_mb: int = 2048
     auto_download_radio_mb: int = 2
     handshake_protocol: str = "identity"
-    version: str = "0.16.4"
+    version: str = "0.16.5"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

@@ -252,6 +252,7 @@ routers and a VPN phone with a home-Wi-Fi phone.
 | **UDP discovery port** | Used to find devices on the LAN/VPN. Same on all your devices. | 7826 |
 | **Use exact ports** | If a port is busy, fail instead of quietly using the next one. | On |
 | **Tor program** | PC only: full path to `tor.exe` if SRLTCP can't find Tor Browser's. | Empty (auto) |
+| **I forward UDP 7828 to this device** | For routers that change ports (OPNsense, pfSense): you forward UDP 7828 here with a static outgoing port (see *Home router: OPNsense / pfSense*). SRLTCP stays on 7828 and offers your public address with it. | Off |
 | **I port-forward TCP 7825** | Optional manual setup; direct connections work without it. Off: TCP 7825 accepts connections only from your own networks (private and VPN ranges) and your contacts' known addresses. | Off |
 
 ## Ports at a glance
@@ -307,6 +308,46 @@ all, it must finish within 15 s, strangers get at most 20 handshakes a
 minute between them, and a session with someone who isn't a contact is
 closed after 5 minutes.
 
+## Home router: OPNsense / pfSense
+
+OPNsense and pfSense give every new connection a **random outgoing port**
+("symmetric" or hard NAT), unlike most home routers, which keep the port. A
+phone on mobile data is usually behind a hard NAT too, and two hard NATs
+can't be crossed directly: the chat stays on **CONNECTING** while you're away
+from home. Signs: *Check connection* says this network gives a different port
+for every destination, or the log shows a public port that isn't 7828
+(`UDP address for direct connections: 68.x.x.x:29503`). Fix it once on the
+router, either way:
+
+**A. Static port + port forward (no UPnP):**
+1. *Firewall → NAT → Outbound*: mode **Hybrid outbound NAT**, then add a rule:
+   Interface **WAN**, TCP/IP version **IPv4**, Protocol **UDP**, Source
+   address = the computer running SRLTCP (single host, e.g. `10.0.30.20/32`),
+   Source port **7828**, Translation **Interface address**, tick **Static
+   port**. Save, Apply. (SRLTCP's public port is now 7828, as STUN shows.)
+2. *Firewall → NAT → Port Forward*: add Interface **WAN**, Protocol **UDP**,
+   Destination **WAN address**, port **7828** → Redirect target IP = that
+   computer, port **7828**, with the associated filter rule. Save, Apply.
+3. Give that computer a fixed address (DHCP static mapping). Only SRLTCP's
+   encrypted packets are answered on 7828; anything else gets no reply.
+4. In SRLTCP on that computer: *Settings → Network → More network options →
+   **I forward UDP 7828 to this device***. SRLTCP then stays on port 7828
+   (it normally moves to a fresh port after a failed attempt, which would
+   leave the forward behind) and gives contacts your public address with
+   port 7828, which the router lets in from any port.
+
+**B. UPnP / NAT-PMP:** *System → Firmware → Plugins*: install **os-upnp**;
+*Services → Universal Plug and Play*: enable it and NAT-PMP, external
+interface WAN, internal interface the computer's LAN/VLAN, and allow only
+that computer (an ACL entry like `allow 7828-7828 10.0.30.20/32 7828-7828`).
+Then in SRLTCP on that computer: *Settings → Network → Open a port on my
+home router* (SRLTCP then also stays on its port).
+
+**IPv6** needs no NAT rules: two devices with IPv6 connect directly through
+OPNsense's stateful firewall. If *Check connection* shows IPv6 on both sides
+and it still won't connect, add a WAN rule passing **UDP 7828 (IPv6)** to
+that computer's IPv6 address.
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -316,6 +357,7 @@ closed after 5 minutes.
 | A computer or phone at home and a phone on mobile data never connect directly | Turn on **Open a port on my home router** on the device at home (off by default since 0.15). Mobile carriers change ports per destination, and home routers drop packets that don't come from the exact port they expect. |
 | Log shows `TCP connect … failed: [WinError 5] Access is denied` | A firewall or security app on this computer blocks SRLTCP (Python) from that address. SRLTCP rests such addresses for 5 minutes instead of retrying. Allow Python in the firewall if the contact is on your network. |
 | Header stays on **CONNECTING** | The devices found each other over Tor (so Tor works) but can't connect directly. *Edit contact → Check connection* says why. Most common, in this order: (1) a device at home with **Open a port on my home router** off — turn it on there; (2) a **DNS filter** (AdGuard Home, Pi-hole, NextDNS, the phone's *Private DNS*) blocking the STUN servers — the report says *STUN server names (DNS): blocked*; allow them (below); (3) hard NAT on both carriers — one device on Wi-Fi, or IPv6 on both. |
+| Home router is **OPNsense / pfSense** and a phone on mobile data never connects | The router randomizes ports (hard NAT): see *Home router: OPNsense / pfSense* above (static port + port forward, or the UPnP plugin). |
 | Using **AdGuard Home** / Pi-hole | Open its *Query log*, search for `stun`; if `stun.l.google.com`, `stun1.l.google.com` or `stun.cloudflare.com` show as *Blocked*, click *Unblock* (or add the allow rules `@@\|\|stun.l.google.com^`, `@@\|\|stun1.l.google.com^`, `@@\|\|stun.cloudflare.com^` under *Filters → Custom filtering rules*). Since 0.16.4 SRLTCP falls back to built-in STUN addresses when DNS blocks them, but allowing them keeps it working if those addresses change. Tor isn't affected by DNS filters. |
 | Tor stays at "connecting…" | The network may block Tor. On a PC, check the clock is correct. |
 | VPN phone can't reach the home phone | The VPN client's `AllowedIPs` must include the home LAN. |

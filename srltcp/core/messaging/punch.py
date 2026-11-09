@@ -271,6 +271,13 @@ class PunchMixin:
         ):
             out.append(forwarded)  # the home router forwards it: reachable from any port
         mapped4 = udp.mapped.get(socket.AF_INET)
+        port4 = udp.ports.get(socket.AF_INET)
+        if (
+            getattr(self.config, "udp_forwarded", False) and mapped4 and port4
+            and _public_address(mapped4[0], port4) and (mapped4[0], port4) not in out
+        ):
+            # You forward this port on your router: reachable from any port.
+            out.append((mapped4[0], port4))
         if mapped4 and _public_address(*mapped4) and mapped4 not in out:
             out.append(mapped4)
         # IPv6 has no NAT: our own global addresses, never one built from the
@@ -294,6 +301,12 @@ class PunchMixin:
 
     def direct_internet_enabled(self: MessagingBackend) -> bool:
         return bool(getattr(self.config, "direct_internet", True)) and not self.on_quiet_network()
+
+    def fixed_udp_port(self: MessagingBackend) -> bool:
+        """The router forwards our UDP port (you set it up, or UPnP / NAT-PMP):
+        stay on it. Moving to a fresh port after a failed round would leave the
+        forwarding behind."""
+        return bool(getattr(self.config, "udp_forwarded", False)) or self.port_mapping_enabled()
 
     def punch_port(self: MessagingBackend) -> int:
         if not self.direct_internet_enabled() or not self.tcp_transport:
@@ -588,7 +601,7 @@ class PunchMixin:
                     if current > 2:
                         self._prime_max[hash_id] = current - 1
                         retry_soon = True
-                        if self.udp:
+                        if self.udp and not self.fixed_udp_port():
                             await self.udp.rotate()
             if not peer_id and targets and not retry_soon:
                 # (Not while a UDP retry is coming: it nearly always works
@@ -730,8 +743,24 @@ class PunchMixin:
             reason = ("Both devices have public addresses, but the networks between you block "
                       f"direct connections ({failed} tr{'y' if failed == 1 else 'ies'}).")
             if symmetric:
-                reason += (" This network gives a different port for every destination "
-                           "(\"symmetric\" carrier NAT), which direct connections can't cross.")
+                from srltcp.transports.portmap import home_lan_ipv4
+
+                if home_lan_ipv4() and not self.fixed_udp_port():
+                    # On a home or office network: the router itself picks a new port per
+                    # destination (OPNsense / pfSense do by default).
+                    reason += (" This network's router gives a different port for every "
+                               "destination (\"symmetric\" NAT), which direct connections "
+                               "can't cross when the other side's is too.")
+                    tips.insert(0, "On OPNsense / pfSense: Firewall → NAT → Outbound, Hybrid "
+                                   "mode, add a rule for this device's UDP port 7828 with "
+                                   "\"Static port\" ticked, forward WAN UDP 7828 to this "
+                                   "device, then turn on Settings → Network → More → I forward "
+                                   "UDP 7828 to this device (or install the UPnP plugin and turn "
+                                   "on Open a port on my home router). See docs/NETWORKING.md.")
+                else:
+                    reason += (" This network gives a different port for every destination "
+                               "(\"symmetric\" carrier NAT), which direct connections can't "
+                               "cross.")
             tips.append("Wi-Fi on either side, or IPv6 on mobile data (Settings → Network → "
                         "SIM → Access Point Names → APN protocol: IPv4/IPv6), often works.")
         else:
