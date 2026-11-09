@@ -714,6 +714,11 @@ class PunchMixin:
         elif not mine:
             reason = ("This device couldn't find its public address (the STUN servers didn't "
                       "answer: blocked on this network?), so it can't connect directly.")
+            if self.udp is not None and getattr(self.udp, "stun_dns_blocked", False):
+                tips.append("Your DNS doesn't give the STUN servers' addresses: a DNS filter "
+                            "(AdGuard Home, Pi-hole, NextDNS, a phone's Private DNS) is likely "
+                            "blocking them. Allow stun.l.google.com, stun1.l.google.com and "
+                            "stun.cloudflare.com in it.")
             tips.append("If your contact is on a home Wi-Fi, they can turn on Settings → Network → "
                         "Open a port on my home router: then this device doesn't need an address "
                         "of its own. Also check for a VPN, firewall or security app on this "
@@ -818,6 +823,10 @@ class PunchMixin:
             f"Tor (doorbell): {self.tor_status().get('state', 'off')}",
             f"This phone, IPv4 public address: {nat(socket.AF_INET)}",
             f"This phone, IPv6: {nat(socket.AF_INET6)}",
+            "STUN server names (DNS): "
+            + ("blocked or no answer (a DNS filter such as AdGuard Home or Pi-hole?)"
+               " — built-in addresses used"
+               if udp and getattr(udp, "stun_dns_blocked", False) else "ok"),
             "Contact offers: "
             + (", ".join(
                 n for n, ok in (("IPv4", any(':' not in h for h, _p in theirs)),

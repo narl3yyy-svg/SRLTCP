@@ -126,6 +126,15 @@ STUN_SERVERS = (
     ("stun.cloudflare.com", 3478),
     ("stun1.l.google.com", 19302),
 )
+# The default STUN servers' addresses, used only when DNS doesn't give a
+# usable one: a DNS filter (AdGuard Home, Pi-hole, NextDNS…) blocking the
+# names (answering 0.0.0.0 / :: or "no such domain"), or a slow resolver.
+STUN_FALLBACK: dict[str, tuple[str, ...]] = {
+    "stun.l.google.com": ("74.125.250.129", "2001:4860:4864:5:8000::1"),
+    "stun1.l.google.com": ("74.125.250.129", "2001:4860:4864:5:8000::1"),
+    "stun.cloudflare.com": ("162.159.207.0",),
+}
+STUN_DNS_TIMEOUT = 4.0  # (a phone's DNS over mobile data or DoT can be slow)
 
 
 def derive_keys(secret: bytes, leader_hash: str, follower_hash: str) -> tuple[bytes, bytes]:
@@ -1264,6 +1273,10 @@ class UdpEndpoint:
         self.mapped_at = 0.0
         self.symmetric = False  # different ports towards different servers: punching rarely works
         self.stun_answers: dict[int, int] = {}  # family -> how many STUN servers answered
+        # DNS gave no usable address for a STUN server (blocked by a DNS
+        # filter, or no answer) at the last check: built-in addresses were used.
+        self.stun_dns_blocked = False
+        self._stun_addr_cache: dict[tuple[str, int], str] = {}  # (host, family) -> last good IP
 
     async def start(self) -> None:
         self._socks = await self._open(self.requested_port)
@@ -1465,18 +1478,13 @@ class UdpEndpoint:
             return {}
         loop = asyncio.get_running_loop()
         results: dict[int, list[tuple[str, int]]] = {}
+        dns_trouble: list[str] = []
 
         async def ask(family: int, server: tuple[str, int]) -> None:
-            try:
-                infos = await asyncio.wait_for(
-                    loop.getaddrinfo(server[0], server[1], family=family, type=socket.SOCK_DGRAM),
-                    timeout,
-                )
-            except (OSError, TimeoutError):
+            ip = await self._stun_address(server[0], family, dns_trouble)
+            if not ip:
                 return
-            if not infos:
-                return
-            target = infos[0][4]
+            target = (ip, server[1])
             txid = secrets.token_bytes(12)
             fut: asyncio.Future[tuple[str, int]] = loop.create_future()
             self._stun_waiting[txid] = fut
@@ -1504,7 +1512,46 @@ class UdpEndpoint:
             mapped[family] = found[0]
         self.mapped, self.mapped_at, self.symmetric = mapped, time.monotonic(), symmetric
         self.stun_answers = {family: len(found) for family, found in results.items()}
+        self.stun_dns_blocked = bool(dns_trouble)
+        if dns_trouble:
+            log.info("DNS gave no usable address for %s (a DNS filter such as AdGuard Home "
+                     "blocking it?) — used built-in STUN addresses",
+                     ", ".join(sorted(set(dns_trouble))))
         return mapped
+
+    async def _stun_address(self, host: str, family: int, trouble: list[str]) -> str:
+        """The address to send a STUN request to: from DNS when it gives a
+        usable one (remembered), else the last good one, else built-in."""
+        try:
+            literal = ipaddress.ip_address(host)
+        except ValueError:
+            literal = None
+        if literal is not None:
+            return host if (literal.version == 6) == (family == socket.AF_INET6) else ""
+        loop = asyncio.get_running_loop()
+        try:
+            infos = await asyncio.wait_for(
+                loop.getaddrinfo(host, None, family=family, type=socket.SOCK_DGRAM),
+                STUN_DNS_TIMEOUT,
+            )
+        except (OSError, TimeoutError):
+            infos = []
+        for info in infos:
+            ip = str(info[4][0])
+            if _usable_public(ip):
+                self._stun_addr_cache[(host, family)] = ip
+                return ip
+        if infos or family == socket.AF_INET:
+            # Blocked (0.0.0.0, ::, a private "blocked" page) or no answer at
+            # all. (No IPv6 answer alone is normal on an IPv4-only network.)
+            trouble.append(host)
+        cached = self._stun_addr_cache.get((host, family))
+        if cached:
+            return cached
+        for ip in STUN_FALLBACK.get(host.lower(), ()):
+            if (":" in ip) == (family == socket.AF_INET6):
+                return ip
+        return ""
 
     def _on_stun(self, data: bytes, addr: tuple[str, int]) -> None:
         msg_type, length, cookie = struct.unpack_from(">HHI", data)
@@ -1532,6 +1579,15 @@ class UdpEndpoint:
                     raw = bytes(a ^ b for a, b in zip(value[4:20], key, strict=True))
                     fut.set_result((str(ipaddress.IPv6Address(raw)), port))
                     return
+
+
+def _usable_public(ip: str) -> bool:
+    """A real internet address (not what a DNS filter answers for a blocked name)."""
+    try:
+        addr = ipaddress.ip_address(ip.split("%", 1)[0])
+    except ValueError:
+        return False
+    return addr.is_global
 
 
 # Public DNS resolvers people mistake for STUN servers (they don't answer STUN).

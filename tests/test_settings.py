@@ -13,7 +13,7 @@ def test_settings_defaults(tmp_path: Path) -> None:
     assert settings.auto_announce is False  # (devices are found by hand only)
     assert settings.router_port_mapping is False  # (only if you switch it on)
     assert settings.tor_enabled is True
-    assert settings.version == "0.16.3"
+    assert settings.version == "0.16.4"
     assert settings.tcp_port == 7825
     assert settings.discovery_port == 7826
     assert settings.strict_ports is True

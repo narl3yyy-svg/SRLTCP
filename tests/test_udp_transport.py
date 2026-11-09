@@ -418,3 +418,45 @@ async def test_new_punches_from_a_fresh_port_existing_connection_keeps_its_own()
         assert not p.a._retired
     finally:
         await close(p)
+
+
+async def test_stun_works_when_a_dns_filter_blocks_the_server_names(  # type: ignore[no-untyped-def]
+    monkeypatch,
+) -> None:
+    """AdGuard Home / Pi-hole answer 0.0.0.0 (or nothing) for blocked names:
+    the built-in address is used, the last good one is remembered, and the
+    connection report can say what's going on."""
+    import socket as s
+
+    from srltcp.transports import udp as udp_mod
+
+    ep = udp_mod.UdpEndpoint()
+    loop = asyncio.get_running_loop()
+    answers: dict[tuple[str, int], object] = {}
+
+    async def fake_getaddrinfo(host, port, family=0, type=0):  # type: ignore[no-untyped-def]
+        a = answers.get((host, family))
+        if isinstance(a, Exception):
+            raise a
+        return [(family, type, 0, "", (a, 0))] if a else []
+
+    monkeypatch.setattr(loop, "getaddrinfo", fake_getaddrinfo)
+    trouble: list[str] = []
+    answers[("stun.l.google.com", s.AF_INET)] = "0.0.0.0"  # blocked
+    assert await ep._stun_address("stun.l.google.com", s.AF_INET, trouble) == "74.125.250.129"
+    assert trouble == ["stun.l.google.com"]
+    trouble.clear()
+    answers[("stun.cloudflare.com", s.AF_INET)] = "162.159.207.9"  # fine
+    assert await ep._stun_address("stun.cloudflare.com", s.AF_INET, trouble) == "162.159.207.9"
+    assert not trouble
+    answers[("stun.cloudflare.com", s.AF_INET)] = OSError("no such domain")  # blocked later
+    assert await ep._stun_address("stun.cloudflare.com", s.AF_INET, trouble) == "162.159.207.9"
+    assert trouble == ["stun.cloudflare.com"]  # (remembered address, but reported)
+    trouble.clear()
+    # No IPv6 answer alone is normal (an IPv4-only network): not "blocked".
+    assert await ep._stun_address("stun.cloudflare.com", s.AF_INET6, trouble) == ""
+    assert not trouble
+    answers[("stun.l.google.com", s.AF_INET6)] = "::"  # blocked over IPv6
+    assert (await ep._stun_address("stun.l.google.com", s.AF_INET6, trouble)
+            == "2001:4860:4864:5:8000::1")
+    assert await ep._stun_address("192.0.2.7", s.AF_INET, trouble) == "192.0.2.7"  # (literal)

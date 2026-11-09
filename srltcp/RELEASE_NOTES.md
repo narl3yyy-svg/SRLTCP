@@ -1,5 +1,24 @@
 # SRLTCP Release Notes
 
+## v0.16.4 (2026-11-09)
+
+### Stuck on CONNECTING with a DNS filter (AdGuard Home, Pi-hole…)
+- **Direct connections work even when a DNS filter blocks the STUN servers.**
+  To connect directly across networks, each device asks a STUN server for its
+  public address. DNS filters such as AdGuard Home, Pi-hole, NextDNS or a
+  phone's *Private DNS* can block those server names (answering 0.0.0.0 or
+  "no such domain"): the device then had no public address, and the chat
+  stayed on CONNECTING forever. Now SRLTCP notices a blocked or missing DNS
+  answer and uses the servers' built-in addresses instead (and remembers the
+  last good ones).
+- **More time for slow DNS.** A phone's DNS over mobile data can take longer
+  than the 1.5 s allowed before; it now gets 4 s.
+- **Check connection says so.** The connection report has a new line, *STUN
+  server names (DNS): blocked*, and the advice names the DNS filter and the
+  three names to allow.
+- *docs/NETWORKING.md*: what CONNECTING means, the usual causes in order, and
+  what to allow in AdGuard Home / Pi-hole.
+
 ## v0.16.3 (2026-11-08)
 
 ### Big files: you see what's happening
