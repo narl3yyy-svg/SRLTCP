@@ -530,13 +530,14 @@ def test_connection_report_has_no_addresses() -> None:
     node.tor_status = lambda: {"state": "ready"}  # type: ignore[attr-defined]
     node.udp = SimpleNamespace(  # type: ignore[assignment]
         mapped={socket.AF_INET: ("203.0.113.5", 40000)}, mapped_at=1.0, symmetric=True,
-        stun_answers={socket.AF_INET: 2},
+        stun_answers={socket.AF_INET: 2}, ports={socket.AF_INET: 7828},
     )
     node._peer_udp[peer] = [("198.51.100.9", 41000), ("2001:db8::9", 7828)]
     node._note_round(peer, [("198.51.100.9", 41000), ("2001:db8::9", 7828)], "no answer")
     report = node.connection_report(peer, "tor")
     assert "hard NAT" in report and "IPv4, IPv6" in report and "no answer" in report
     assert not re.search(r"\d+\.\d+\.\d+\.\d+|2001:db8|41000|40000", report)
+    assert "This device offers: IPv4" in report  # (what we offer too, never the address)
 
 
 async def test_a_dead_wifi_path_is_not_offered_again_at_once(tmp_path: Path) -> None:

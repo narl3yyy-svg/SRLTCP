@@ -844,6 +844,14 @@ class PunchMixin:
                     else "yes, easy NAT (same port for every destination)")
 
         theirs = self._peer_udp.get(hash_id, [])
+        mine = self.udp_candidates()
+
+        def families(cands: list[tuple[str, int]]) -> str:
+            return ", ".join(
+                n for n, ok in (("IPv4", any(":" not in h for h, _p in cands)),
+                                ("IPv6", any(":" in h for h, _p in cands))) if ok
+            )
+
         lines = [
             f"SRLTCP {__version__} connection report",
             f"Path now: {path or 'not connected'}",
@@ -856,6 +864,9 @@ class PunchMixin:
             + ("blocked or no answer (a DNS filter such as AdGuard Home or Pi-hole?)"
                " — built-in addresses used"
                if udp and getattr(udp, "stun_dns_blocked", False) else "ok"),
+            "This device offers: " + (families(mine) or "nothing (no public address found)")
+            + (" (UDP 7828 forwarded / allowed in: on)"
+               if getattr(self.config, "udp_forwarded", False) else ""),
             "Contact offers: "
             + (", ".join(
                 n for n, ok in (("IPv4", any(':' not in h for h, _p in theirs)),

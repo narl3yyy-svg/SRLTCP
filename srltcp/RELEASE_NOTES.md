@@ -1,5 +1,16 @@
 # SRLTCP Release Notes
 
+## v0.16.6 (2026-11-09)
+
+- **The connection report shows both sides.** A new line, *This device offers:
+  IPv4, IPv6*, sits next to *Contact offers*, so one report tells whether the
+  two devices have an address type in common (no common type: no direct
+  attempt is possible, e.g. one side only IPv6 and the other without it), and
+  whether *I forward UDP 7828 to this device* is on. Still no addresses in it.
+- *docs/NETWORKING.md*: OPNsense without port forwarding (an IPv6 pass rule
+  for UDP 7828, or your own WireGuard VPN), and what blocked NAT-PMP requests
+  to port 5351 mean.
+
 ## v0.16.5 (2026-11-09)
 
 ### Home router is OPNsense or pfSense: phones on mobile data can connect
