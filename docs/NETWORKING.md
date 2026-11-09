@@ -343,10 +343,24 @@ that computer (an ACL entry like `allow 7828-7828 10.0.30.20/32 7828-7828`).
 Then in SRLTCP on that computer: *Settings → Network → Open a port on my
 home router* (SRLTCP then also stays on its port).
 
-**IPv6** needs no NAT rules: two devices with IPv6 connect directly through
-OPNsense's stateful firewall. If *Check connection* shows IPv6 on both sides
-and it still won't connect, add a WAN rule passing **UDP 7828 (IPv6)** to
-that computer's IPv6 address.
+**C. IPv6, no port forwarding:** IPv6 has no NAT, so the changing-port
+problem doesn't exist there; a phone on 5G usually has IPv6. Only the
+firewall is in the way (OPNsense's log shows *blocked … UDP 7828* over IPv6).
+1. *Firewall → Rules → WAN*: add Action **Pass**, TCP/IP version **IPv6**,
+   Protocol **UDP**, Destination the computer's IPv6 address (or the LAN/VLAN
+   net), Destination port **7828**. Save, Apply. (A pass rule, not a port
+   forward: nothing is translated.)
+2. In SRLTCP on that computer: tick **I forward UDP 7828 to this device**, so
+   it stays on port 7828 (it otherwise moves to a fresh port after a failed
+   attempt, which the rule wouldn't match).
+
+**D. Your own VPN:** a phone that keeps a WireGuard tunnel to home (Android:
+*Always-on VPN*, `AllowedIPs` = your home networks) reaches the computer as on
+the same network: no NAT, no extra rules.
+
+If *Open a port on my home router* is on but the router has no UPnP / NAT-PMP
+(OPNsense without the plugin), its firewall logs SRLTCP's NAT-PMP requests to
+port **5351**: turn the setting off.
 
 ## Troubleshooting
 
