@@ -1456,8 +1456,14 @@ class UdpEndpoint:
             if (socket.AF_INET6 if ":" in c[0] else socket.AF_INET) in conn.socks
         ]
         if not usable:
-            conn._shutdown()
-            return False
+            # Nothing of theirs we can dial (their address lookup failed), but
+            # they can dial us (a forwarded port): wait for their probes.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(conn.opened.wait(), window)
+            if not conn.opened.is_set():
+                conn._shutdown()
+                return False
+            return not conn._closed
         self.prime(usable, hops, conn.socks)
         if delay:
             with contextlib.suppress(TimeoutError):

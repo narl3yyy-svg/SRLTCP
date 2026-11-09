@@ -1,5 +1,18 @@
 # SRLTCP Release Notes
 
+## v0.16.7 (2026-11-09)
+
+### IPv4 from a phone to a forwarded home works without the phone's own address
+- **A phone whose address lookup fails can still connect.** SRLTCP only dialed
+  a contact's IPv4 address if it had learned its *own* public IPv4 address
+  (STUN). A phone on mobile data whose lookup failed therefore never tried
+  your home's IPv4 address at all, even with UDP 7828 forwarded there. Now it
+  dials every address type it can send on, and one side dialing is enough:
+  the home waits for the phone's packets and answers them.
+- No IPv6 needed: with the home set up as in *Home router: OPNsense /
+  pfSense* (static port + forward of UDP 7828, *I forward UDP 7828 to this
+  device* on), a phone connects over IPv4.
+
 ## v0.16.6 (2026-11-09)
 
 - **The connection report shows both sides.** A new line, *This device offers:

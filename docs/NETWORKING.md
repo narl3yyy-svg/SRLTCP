@@ -335,6 +335,9 @@ router, either way:
    (it normally moves to a fresh port after a failed attempt, which would
    leave the forward behind) and gives contacts your public address with
    port 7828, which the router lets in from any port.
+   The phone doesn't even need to know its own public address (its STUN
+   lookup may fail on mobile data): it sends to yours, and the computer
+   answers (0.16.7).
 
 **B. UPnP / NAT-PMP:** *System → Firmware → Plugins*: install **os-upnp**;
 *Services → Universal Plug and Play*: enable it and NAT-PMP, external

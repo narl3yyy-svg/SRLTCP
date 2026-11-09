@@ -302,6 +302,19 @@ class PunchMixin:
     def direct_internet_enabled(self: MessagingBackend) -> bool:
         return bool(getattr(self.config, "direct_internet", True)) and not self.on_quiet_network()
 
+    def _udp_reachable(
+        self: MessagingBackend, theirs: list[tuple[str, int]]
+    ) -> list[tuple[str, int]]:
+        """Their UDP addresses we can send to: the families we have a socket
+        for, whether or not STUN told us our own public address (a phone whose
+        lookup failed can still reach a home's forwarded IPv4 port)."""
+        import socket
+
+        families = {":" in host for host, _port in self.udp_candidates()}
+        if self.udp is not None:
+            families |= {fam == socket.AF_INET6 for fam in self.udp.ports}
+        return [c for c in theirs if (":" in c[0]) in families]
+
     def fixed_udp_port(self: MessagingBackend) -> bool:
         """The router forwards our UDP port (you set it up, or UPnP / NAT-PMP):
         stay on it. Moving to a fresh port after a failed round would leave the
@@ -426,9 +439,14 @@ class PunchMixin:
         mine_udp = self.udp_candidates()
         tcp_ok = bool(mine) and bool(_same_family(self._peer_public.get(hash_id, []), mine))
         theirs_udp = self._peer_udp.get(hash_id, [])
-        # Offer UDP whenever we have an address: the answer brings theirs (it may
-        # have changed since their last RENDEZVOUS). Older versions ignore it.
-        udp_ok = bool(mine_udp) and (not theirs_udp or bool(_same_family(theirs_udp, mine_udp)))
+        # Offer UDP whenever we can send UDP: the answer brings their
+        # addresses (they may have changed since last time). Even with no
+        # public address of our own (our STUN lookup failed), we can still
+        # dial theirs, e.g. a home with a forwarded port. Older versions
+        # ignore the offer.
+        udp_ok = self.udp is not None and bool(self.udp.ports) and (
+            not theirs_udp or bool(self._udp_reachable(theirs_udp))
+        )
         if not tcp_ok and not udp_ok:
             return
         self._punch_offered[hash_id] = now
@@ -521,13 +539,15 @@ class PunchMixin:
         answer's UDP part."""
         theirs = [c for c in _clean_candidates(data.get("w")) if punchable_candidate(*c)]
         their_key, their_id = _hex(data.get("k"), 32), _hex(data.get("i"), 8)
-        if not theirs or their_key is None or their_id is None or self.udp is None:
+        if their_key is None or their_id is None or self.udp is None:
             return None, [], {}
         await self._refresh_udp(if_older=STUN_FRESH)
         await self._ensure_port_mapping()
         mine = self.udp_candidates()
-        targets = _same_family(theirs, mine)
-        if not mine or not targets:
+        targets = self._udp_reachable(theirs)
+        # One side dialing is enough: we dial them, or they dial us (they
+        # get our addresses in the answer) while we wait for their probes.
+        if not targets and not mine:
             return None, [], {}
         secret, my_id = secrets.token_bytes(32), secrets.token_bytes(8)
         # Keys: leader->follower and follower->leader; they lead (they offered).
@@ -552,8 +572,11 @@ class PunchMixin:
         secret, my_id, when = offer
         theirs = [c for c in _clean_candidates(data.get("w")) if punchable_candidate(*c)]
         their_key, their_id = _hex(data.get("k"), 32), _hex(data.get("i"), 8)
-        targets = _same_family(theirs, self.udp_candidates())
-        if not targets or their_key is None or their_id is None or time.monotonic() - when > 15:
+        targets = self._udp_reachable(theirs)
+        # (No target of theirs: they dial us, if we offered addresses.)
+        if not (targets or self.udp_candidates()):
+            return None, []
+        if their_key is None or their_id is None or time.monotonic() - when > 15:
             return None, []
         l2f, f2l = derive_keys(combine_secrets(secret, their_key), self._me_hash(), hash_id)
         conn = self.udp.new_connection(their_id, send_key=l2f, recv_key=f2l, my_id=my_id)
@@ -582,8 +605,8 @@ class PunchMixin:
             peer_id: str | None = None
             if udp_conn:
                 # UDP first: it gets through carrier NATs far more often than TCP.
-                if self.udp and udp_targets and await self.udp.punch(
-                    udp_conn, udp_targets, UDP_PUNCH_WINDOW,
+                if self.udp and await self.udp.punch(
+                    udp_conn, udp_targets or [], UDP_PUNCH_WINDOW,
                     delay=0.0 if leader else PUNCH_FOLLOWER_DELAY,
                     hops=self._prime_hops(hash_id),
                 ):

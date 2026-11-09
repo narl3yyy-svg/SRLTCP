@@ -572,3 +572,64 @@ def test_a_forwarded_udp_port_is_offered_and_kept(tmp_path) -> None:  # type: ig
     cands = node.udp_candidates()
     assert cands[0] == ("68.108.133.82", 7828) and ("68.108.133.82", 29503) in cands
     assert node.fixed_udp_port()  # (no moving to a fresh port after a failed round)
+
+
+@pytest.mark.parametrize("phone_leads", [True, False])
+async def test_a_phone_without_a_public_address_reaches_a_forwarded_home(
+    tmp_path: Path, monkeypatch: Any, phone_leads: bool
+) -> None:
+    """The phone's STUN lookup failed (no public address of its own), the home
+    is reachable (a forwarded UDP port). One side dialing is enough: the phone
+    dials the home and the home waits for it, whichever side starts."""
+    import socket
+
+    import srltcp.core.messaging.punch as punch_mod
+
+    monkeypatch.setattr(punch_mod, "punchable_candidate", lambda h, p: True)  # loopback here
+    monkeypatch.setattr(punch_mod, "_public_address", lambda h, p: True)
+    a, b = make_node(tmp_path, "alice"), make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    try:
+        trust(a, b)
+        trust(b, a)
+        ah, bh = a.identities["tcp"].hash_id, b.identities["tcp"].hash_id
+        leader, follower = (a, b) if ah < bh else (b, a)
+        lh, fh = (ah, bh) if leader is a else (bh, ah)
+        phone, home = (leader, follower) if phone_leads else (follower, leader)
+        await leader.connect_to_peer(fh)
+        assert await leader.wait_for_handshake(fh, timeout=8)
+        assert await wait_for(lambda: follower.get_link(lh) is not None
+                              and follower.get_link(lh).handshake_complete)
+        tor_l, tor_f = leader.get_link(fh), follower.get_link(lh)
+        leader.tcp_transport._tor_peers.add(tor_l.transport_peer_id)  # "over Tor"
+        follower.tcp_transport._tor_peers.add(tor_f.transport_peer_id)
+        for node in (leader, follower):
+            assert node.udp is not None
+            monkeypatch.setattr(node, "_refresh_udp", AsyncMock())  # no STUN from tests
+            monkeypatch.setattr(node, "public_candidates", lambda: [])  # UDP only
+            monkeypatch.setattr(node, "_direct_candidates", lambda _h: [])
+            monkeypatch.setattr(punch_mod, "global_ipv6_addresses", lambda: [], raising=False)
+        home.udp.mapped[socket.AF_INET] = ("127.0.0.1", home.udp.ports[socket.AF_INET])
+        phone.udp.mapped.clear()  # (its STUN got no answer)
+        import srltcp.utils.network as net
+
+        monkeypatch.setattr(net, "global_ipv6_addresses", lambda: [])
+        assert phone.udp_candidates() == [] and home.udp_candidates()
+        await follower.send_rendezvous(lh)  # (the leader learns the follower's addresses)
+        if follower is home:
+            assert await wait_for(lambda: bool(leader._peer_udp.get(fh)))
+        await leader._try_direct_upgrade(fh)
+        for node, other, old in ((leader, fh, tor_l), (follower, lh, tor_f)):
+            assert await wait_for(lambda node=node, other=other, old=old: (
+                (link := node.get_link(other)) is not None and link.handshake_complete
+                and link.transport_peer_id != old.transport_peer_id
+                and link.address.startswith("udp:")
+            ), timeout=15)
+        await phone.send_message(lh if phone is follower else fh, "hello from 5G")
+        assert await wait_for(
+            lambda: any(m["text"] == "hello from 5G" for m in home.get_messages())
+        )
+    finally:
+        await a.stop()
+        await b.stop()

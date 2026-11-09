@@ -141,7 +141,7 @@ class AppSettings:
     auto_download_mb: int = 2048
     auto_download_radio_mb: int = 2
     handshake_protocol: str = "identity"
-    version: str = "0.16.6"
+    version: str = "0.16.7"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:
