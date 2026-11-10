@@ -1,5 +1,49 @@
 # SRLTCP Release Notes
 
+## v0.17.0 (2026-11-10)
+
+### Home network ↔ mobile data
+- **Check connection measures the NAT again, from a fresh port.** After you
+  change the home router (OPNsense / pfSense: Hybrid outbound NAT with a
+  static-port rule), the router's old entries for the old port kept the old
+  random-port mapping, so the app still said *symmetric NAT here* until the
+  entries expired or you cleared them by hand. Now pressing *Check
+  connection* asks the STUN servers again from a new port (three small
+  requests, nothing else), shows the change at once and starts a fresh
+  direct attempt.
+- **Every device shows its NAT type** on the Check connection page (the
+  phone too, not only in the copied report): *NAT here: easy* (keeps its
+  port: direct connections work) or *symmetric NAT here (hard)*.
+- **The advice for a PC behind OPNsense / pfSense** lists the router's own
+  fix first, then IPv6 on the computer's network (no NAT at all), then
+  router port mapping. With *Open a port on my home router* on but a router
+  that has no UPnP / NAT-PMP, it says to turn that off (the router only logs
+  the requests).
+- **Router port mapping on, but no mapping made** (no UPnP / NAT-PMP on the
+  router, or on mobile data): SRLTCP moves on to a fresh port after a failed
+  attempt again, as it does with the setting off. Before, the setting alone
+  kept it on one port that nothing forwarded.
+- The connection report says *This device* instead of *This phone* (it's
+  also used on computers).
+
+### Fixes
+- **Two uploads with the same name** (two photos both called *image.jpg*,
+  picked within a second) no longer overwrite each other before they're
+  sent. Each gets its own file, claimed atomically.
+- Background jobs (punch rounds, path checks, reconnect checks, restarts)
+  are held until they finish: Python can otherwise drop a running task that
+  nothing refers to. One shared helper replaces seven copies of the same
+  code.
+- A contact's public IPv6 addresses for TCP are accepted by the inbound
+  filter like its UDP ones.
+- The default for router port mapping is *off* everywhere in the code (it
+  was already off in Settings).
+
+### Unchanged on purpose
+- Tor stays the doorbell only: messages, files and calls still wait for the
+  direct path. No relays, no random-port probing, nothing sent by itself.
+- Both devices should update; older versions still connect.
+
 ## v0.16.9 (2026-11-09)
 
 - **Check connection gives the right advice on a home or office PC.** When

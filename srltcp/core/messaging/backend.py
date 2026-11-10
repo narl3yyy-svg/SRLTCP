@@ -50,6 +50,7 @@ from srltcp.transports.serial import SerialTransport
 from srltcp.transports.tcp import TCPTransport
 from srltcp.utils.logging import get_logger
 from srltcp.utils.platform import resolve_serial_port
+from srltcp.utils.tasks import spawn
 
 log = get_logger(__name__)
 
@@ -395,8 +396,9 @@ class MessagingBackend(
             if peer.blocked:
                 continue
             known += [peer.tcp_host, getattr(peer, "wan_host", ""), *peer.alt_hosts]
-        for hosts in self._peer_udp.values():
-            known += [h for h, _p in hosts]
+        for table in (self._peer_udp, self._peer_public):  # (UDP and TCP-over-IPv6 ones)
+            for hosts in table.values():
+                known += [h for h, _p in hosts]
         for host in known:
             try:
                 other = ipaddress.ip_address(str(host or "").strip("[]").split("%", 1)[0])
@@ -582,9 +584,7 @@ class MessagingBackend(
                 await self.tcp_transport.disconnect(peer_id)
 
         if self._running:
-            task = asyncio.create_task(_check())
-            self.__dict__.setdefault("_expiry_tasks", set()).add(task)
-            task.add_done_callback(self.__dict__["_expiry_tasks"].discard)
+            spawn(_check())
 
     async def _on_transport_frame(self, peer: TransportPeer, payload: bytes) -> None:
         try:

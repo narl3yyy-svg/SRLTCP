@@ -5,7 +5,7 @@
 
 **SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
 
-**Current version:** 0.16.9 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+**Current version:** 0.17.0 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
 
 ---
 
@@ -281,7 +281,7 @@ rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew assembleDebug renameDebugApk
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.16.9.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-0.17.0.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
 **One-command build** (sync + Gradle): `bash scripts/build-android.sh`
 
@@ -289,7 +289,7 @@ Output: `android/app/build/outputs/apk/debug/SRLTCP-0.16.9.apk` (one APK for pho
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.16.9.apk
+adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.17.0.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -377,7 +377,7 @@ A pairing code is a signed contact card (hash ID, public keys, name, and every a
 
 Tap the contact's name at the top of a chat, the **⋮** next to a contact, or long-press it → *Edit contact*. You can rename them (only you see the name), set their LAN/VPN address and port, verify them, block/unblock and delete.
 
-**Check connection** (in *Edit contact*) tries every address the app knows for that contact (and Tor) and says in plain words what works and what to change — e.g. "the VPN must include the home network". It also names what the network itself is doing: a Wi-Fi that keeps devices apart (plane, hotel, café, guest Wi-Fi), both phones behind the same public address (the same Wi-Fi, a satellite link like Starlink, or a carrier), or UDP blocked.
+**Check connection** (in *Edit contact*) tries every address the app knows for that contact (and Tor) and says in plain words what works and what to change — e.g. "the VPN must include the home network". It also names what the network itself is doing: a Wi-Fi that keeps devices apart (plane, hotel, café, guest Wi-Fi), both phones behind the same public address (the same Wi-Fi, a satellite link like Starlink, or a carrier), or UDP blocked. It shows whether this device's NAT is *easy* (keeps its port: direct connections work) or *hard* (a new port for every destination), measured again each time you press it, so a router change shows at once; on a home PC behind OPNsense / pfSense it names the router fix ([docs/NETWORKING.md](docs/NETWORKING.md#home-router-opnsense--pfsense)).
 
 **Wi-Fi with a sign-in page** (planes, hotels, cafés): until you sign in, nothing reaches the internet. On Android the app shows a bar at the top, *This Wi-Fi needs you to sign in*, with a button to the Wi-Fi settings (tap the network there to open its sign-in page). It uses what Android already knows about the network; the app sends nothing to find out. SRLTCP doesn't try to get around a network's sign-in or its rules: on a plane, both phones usually can't reach each other directly (the Wi-Fi keeps passengers apart), so messages wait and go out once you're on another network.
 

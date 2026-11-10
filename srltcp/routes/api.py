@@ -25,6 +25,7 @@ from srltcp.utils.logging import get_logger
 from srltcp.utils.network import list_interfaces
 from srltcp.utils.serial_ports import baud_rates, list_serial_ports
 from srltcp.utils.system_stats import list_timezones, system_stats
+from srltcp.utils.tasks import spawn
 
 RELEASE_NOTES_PATH = Path(__file__).resolve().parents[1] / "RELEASE_NOTES.md"
 log = get_logger(__name__)
@@ -428,15 +429,28 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
         # the uploads folder.
         filename = safe_filename(field.filename or "upload.bin").lstrip(".") or "upload.bin"
         dest = upload_dir / filename
-        if dest.exists():
-            stem = dest.stem
-            suffix = dest.suffix
-            dest = upload_dir / f"{stem}_{int(time.time())}{suffix}"
+        created = False  # (only ever delete the file this upload made)
         try:
             upload_dir.mkdir(parents=True, exist_ok=True)
+            # A name of its own, claimed atomically ("x"): two pictures both
+            # called image.jpg, picked within a second, must not overwrite
+            # each other before they're sent.
+            f = None
+            for n in range(1000):
+                if n:
+                    dest = upload_dir / f"{Path(filename).stem}_{int(time.time())}_{n}" \
+                        f"{Path(filename).suffix}"
+                try:
+                    f = dest.open("xb")
+                    created = True
+                    break
+                except FileExistsError:
+                    continue
+            if f is None:
+                raise OSError("no free file name in the uploads folder")
             # Written in big blocks, off the event loop: a multi-GB file on a
             # slow disk mustn't stall chat, pings and the page meanwhile.
-            with dest.open("wb") as f:
+            with f:
                 pending = bytearray()
                 while True:
                     chunk = await field.read_chunk(1024 * 1024)
@@ -448,12 +462,14 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
                     if not chunk:
                         break
         except OSError as exc:
-            dest.unlink(missing_ok=True)
+            if created:
+                dest.unlink(missing_ok=True)
             log.warning("Upload of %s failed: %s", filename, exc)
             reason = "device storage is full" if exc.errno == 28 else "could not save the file"
             return web.json_response({"error": f"Upload failed: {reason}"}, status=507)
         except Exception as exc:  # noqa: BLE001 - the page must learn why
-            dest.unlink(missing_ok=True)
+            if created:
+                dest.unlink(missing_ok=True)
             log.warning("Upload of %s broke off: %s", filename, exc)
             return web.json_response(
                 {"error": f"Upload failed: the file stopped arriving ({type(exc).__name__})"},
@@ -1063,7 +1079,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             await node.stop()
             _start_again()
 
-        asyncio.create_task(_do_restart())
+        spawn(_do_restart())
         return web.json_response({"restarting": True})
 
     # ── Folder sync ──
@@ -1226,7 +1242,7 @@ def register_api_routes(app: web.Application, node: SRLTCPNode) -> None:
             await asyncio.sleep(0.5)
             _start_again()
 
-        asyncio.create_task(_restart())
+        spawn(_restart())
         return web.json_response({"restored": True, "restart": "self", **info})
 
     async def interfaces(_request: web.Request) -> web.Response:

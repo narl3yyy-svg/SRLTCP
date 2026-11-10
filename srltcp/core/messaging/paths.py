@@ -9,7 +9,6 @@ no relays and no servers in between.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import time
 from typing import TYPE_CHECKING, Any
@@ -18,6 +17,7 @@ from srltcp.core.messaging.connect import SERIAL_HANDSHAKE_TTL
 from srltcp.core.protocol.messages import MessageType, decode_payload, encode_payload
 from srltcp.core.trusted import MAX_ALT_HOSTS
 from srltcp.utils.logging import get_logger
+from srltcp.utils.tasks import spawn
 
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
@@ -122,7 +122,7 @@ class PathsMixin:
             if now - self._upgrade_attempts.get(hash_id, 0.0) < every:
                 continue
             self._upgrade_attempts[hash_id] = now
-            asyncio.create_task(self._try_direct_upgrade(hash_id, lan_only=on_radio))
+            spawn(self._try_direct_upgrade(hash_id, lan_only=on_radio))
 
     def check_paths_now(self: MessagingBackend, hash_id: str | None = None) -> None:
         """Where we or a contact are just changed (new network, they showed up
@@ -135,9 +135,7 @@ class PathsMixin:
             self._upgrade_attempts.pop(hash_id, None)
         if not self._running:
             return
-        task = asyncio.create_task(self.maintain_paths())
-        self.__dict__.setdefault("_path_tasks", set()).add(task)
-        task.add_done_callback(self.__dict__["_path_tasks"].discard)
+        spawn(self.maintain_paths())
 
     def _has_waiting(self: MessagingBackend, hash_id: str) -> bool:
         return hash_id in self.peers_with_undelivered() or hash_id in self.peers_with_queued_files()
@@ -165,7 +163,7 @@ class PathsMixin:
         self._upgrade_attempts[hash_id] = now
         if punch:
             self._punch_next.pop(hash_id, None)
-        asyncio.create_task(self._try_direct_upgrade(hash_id))
+        spawn(self._try_direct_upgrade(hash_id))
 
     async def _try_direct_upgrade(
         self: MessagingBackend, hash_id: str, *, lan_only: bool = False

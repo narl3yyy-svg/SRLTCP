@@ -11,6 +11,7 @@ from srltcp.core.messaging.constants import DISCOVERY_PORT
 from srltcp.core.protocol.signed import sign_payload
 from srltcp.utils.logging import get_logger
 from srltcp.utils.network import on_our_network, primary_ipv4
+from srltcp.utils.tasks import spawn
 
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
@@ -164,7 +165,7 @@ class AnnounceMixin:
                 await self._teardown_link(hash_id)
                 self._kick_connect(hash_id)
 
-        asyncio.ensure_future(_check())
+        spawn(_check())
 
     async def _reply_to_announce(
         self: MessagingBackend, address: str, discovery_port: object

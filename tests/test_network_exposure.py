@@ -211,3 +211,32 @@ async def test_a_big_upload_arrives_whole(tmp_path: Path, monkeypatch) -> None: 
     saved = Path(info["path"])
     assert info["size"] == len(blob) and saved.name == "big.rar"
     assert hashlib.sha256(saved.read_bytes()).digest() == hashlib.sha256(blob).digest()
+
+
+async def test_two_uploads_with_the_same_name_dont_overwrite_each_other(  # type: ignore[no-untyped-def]
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Two pictures both called image.jpg, picked within a second: each gets
+    its own file (the second used to overwrite the first before it was sent)."""
+    import aiohttp
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    import srltcp.web.server  # noqa: F401 - the app's import order (routes import web)
+    from srltcp.routes import api
+
+    monkeypatch.setenv("SRLTCP_DATA_DIR", str(tmp_path / "data"))
+    node = make_node(tmp_path, "alice")
+    app = web.Application()
+    api.register_api_routes(app, node)  # type: ignore[arg-type]
+    saved = []
+    async with TestClient(TestServer(app)) as client:
+        for blob in (b"first picture", b"second picture", b"third picture"):
+            form = aiohttp.FormData()
+            form.add_field("file", blob, filename="image.jpg")
+            resp = await client.post("/api/upload", data=form)
+            assert resp.status == 200, await resp.text()
+            saved.append((Path((await resp.json())["path"]), blob))
+    assert len({p for p, _b in saved}) == 3
+    for path, blob in saved:
+        assert path.read_bytes() == blob and path.suffix == ".jpg"

@@ -36,6 +36,7 @@ from srltcp.core.messaging.links import PeerLink
 from srltcp.core.protocol import beacon
 from srltcp.core.protocol.messages import MessageType, build_header
 from srltcp.utils.logging import get_logger
+from srltcp.utils.tasks import spawn
 
 if TYPE_CHECKING:
     from srltcp.core.messaging.backend import MessagingBackend
@@ -317,9 +318,7 @@ class RadioMixin:
             finally:
                 self._radio_checking.discard(hash_id)
 
-        task = asyncio.create_task(check())
-        self.__dict__.setdefault("_radio_tasks", set()).add(task)
-        task.add_done_callback(self.__dict__["_radio_tasks"].discard)
+        spawn(check())
 
     def check_radio_session(self: MessagingBackend, hash_id: str) -> None:
         """Ping the radio session; no answer in RADIO_CHECK_WAIT: drop it and
@@ -327,9 +326,7 @@ class RadioMixin:
         if hash_id in self._radio_checking:
             return
         self._radio_checking.add(hash_id)
-        task = asyncio.create_task(self._check_radio_session(hash_id))
-        self.__dict__.setdefault("_radio_tasks", set()).add(task)
-        task.add_done_callback(self.__dict__["_radio_tasks"].discard)
+        spawn(self._check_radio_session(hash_id))
 
     async def _check_radio_session(self: MessagingBackend, hash_id: str) -> None:
         try:
@@ -375,9 +372,7 @@ class RadioMixin:
         if self._me_hash() > hash_id and waiting < RADIO_DIAL_GRACE:
             return  # they dial first
         self._radio_dialing.add(hash_id)
-        task = asyncio.create_task(self._dial_radio(hash_id))
-        self.__dict__.setdefault("_radio_tasks", set()).add(task)
-        task.add_done_callback(self.__dict__["_radio_tasks"].discard)
+        spawn(self._dial_radio(hash_id))
 
     async def _dial_radio(self: MessagingBackend, hash_id: str) -> None:
         from srltcp.core.messaging.connect import SERIAL_HANDSHAKE_TTL

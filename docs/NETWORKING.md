@@ -322,12 +322,15 @@ router, either way:
 **Outgoing only (no port forward):** if the other side's network keeps one
 port per connection (most mobile carriers here did; your firewall log shows
 their packets arriving from the same port again and again), the static-port
-rule from step A.1 alone is enough: use **Source port: any** in it, then
-delete the computer's old entries under *Firewall → Diagnostics → States*
-(NAT rules only apply to new connections) and restart SRLTCP. *Check
-connection* on the computer must no longer say *symmetric NAT here*. The
-outbound NAT mode has to be **Hybrid** (in *Automatic* mode your own rules
-are ignored).
+rule from step A.1 alone is enough: use **Source port: any** in it. NAT
+rules only apply to new connections; since 0.17.0 *Check connection*
+measures the NAT again from a fresh port, so it shows the change at once
+(before that, delete the computer's old entries under *Firewall →
+Diagnostics → States* and restart SRLTCP). *Check connection* on the
+computer must then say *NAT here: easy*, no longer *symmetric NAT here*.
+The outbound NAT mode has to be **Hybrid** (in *Automatic* mode your own
+rules are ignored). Turn **Open a port on my home router** off on that
+computer unless you installed the UPnP plugin (B).
 
 **A. Static port + port forward (no UPnP):**
 1. *Firewall → NAT → Outbound*: mode **Hybrid outbound NAT**, then add a rule:
@@ -357,8 +360,13 @@ Then in SRLTCP on that computer: *Settings → Network → Open a port on my
 home router* (SRLTCP then also stays on its port).
 
 **C. IPv6, no port forwarding:** IPv6 has no NAT, so the changing-port
-problem doesn't exist there; a phone on 5G usually has IPv6. Only the
-firewall is in the way (OPNsense's log shows *blocked … UDP 7828* over IPv6).
+problem doesn't exist there; a phone on 5G usually has IPv6.
+0. The computer's network needs IPv6 first: *Interfaces → (its LAN/VLAN) →
+   IPv6 Configuration Type: Track Interface*, parent WAN (your ISP's prefix
+   delegation), and router advertisements on. *Check connection* on the
+   computer then says *IPv6 here: yes*. Often that's all: both devices send
+   at once, so the firewall takes the phone's packets as replies. Only if
+   OPNsense's log shows *blocked … UDP 7828* over IPv6, add steps 1 and 2.
 1. *Firewall → Rules → WAN*: add Action **Pass**, TCP/IP version **IPv6**,
    Protocol **UDP**, Destination the computer's IPv6 address (or the LAN/VLAN
    net), Destination port **7828**. Save, Apply. (A pass rule, not a port
@@ -384,7 +392,7 @@ port **5351**: turn the setting off.
 | A computer or phone at home and a phone on mobile data never connect directly | Turn on **Open a port on my home router** on the device at home (off by default since 0.15). Mobile carriers change ports per destination, and home routers drop packets that don't come from the exact port they expect. |
 | Log shows `TCP connect … failed: [WinError 5] Access is denied` | A firewall or security app on this computer blocks SRLTCP (Python) from that address. SRLTCP rests such addresses for 5 minutes instead of retrying. Allow Python in the firewall if the contact is on your network. |
 | Header stays on **CONNECTING** | The devices found each other over Tor (so Tor works) but can't connect directly. *Edit contact → Check connection* says why. Most common, in this order: (1) a device at home with **Open a port on my home router** off — turn it on there; (2) a **DNS filter** (AdGuard Home, Pi-hole, NextDNS, the phone's *Private DNS*) blocking the STUN servers — the report says *STUN server names (DNS): blocked*; allow them (below); (3) hard NAT on both carriers — one device on Wi-Fi, or IPv6 on both. |
-| Home router is **OPNsense / pfSense** and a phone on mobile data never connects | The router randomizes ports (hard NAT): see *Home router: OPNsense / pfSense* above (static port + port forward, or the UPnP plugin). |
+| Home router is **OPNsense / pfSense** and a phone on mobile data never connects | The router randomizes ports (hard NAT; *Check connection* says *symmetric NAT here*): see *Home router: OPNsense / pfSense* above. Outgoing only: Hybrid outbound NAT with a static-port rule (source port any). Or a port forward, the UPnP plugin, or IPv6 on the computer's network. |
 | Windows PC: *Public address here: no* although the network lets UDP out | Before 0.16.8 a Windows bug stopped SRLTCP's UDP socket from reading after one network error: update to 0.16.8 or newer. |
 | Using **AdGuard Home** / Pi-hole | Open its *Query log*, search for `stun`; if `stun.l.google.com`, `stun1.l.google.com` or `stun.cloudflare.com` show as *Blocked*, click *Unblock* (or add the allow rules `@@\|\|stun.l.google.com^`, `@@\|\|stun1.l.google.com^`, `@@\|\|stun.cloudflare.com^` under *Filters → Custom filtering rules*). Since 0.16.4 SRLTCP falls back to built-in STUN addresses when DNS blocks them, but allowing them keeps it working if those addresses change. Tor isn't affected by DNS filters. |
 | Tor stays at "connecting…" | The network may block Tor. On a PC, check the clock is correct. |

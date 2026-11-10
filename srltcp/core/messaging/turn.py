@@ -32,6 +32,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from srltcp.utils.logging import get_logger
+from srltcp.utils.tasks import spawn
 
 log = get_logger(__name__)
 
@@ -453,7 +454,7 @@ class LocalTurnServer:
         if peer[0] != virtual_ip(alloc.peer_hash):
             return  # only the call's peer is reachable through this relay
         self.relayed_out += 1
-        asyncio.ensure_future(self._send_media(alloc.peer_hash, alloc.relay_port, peer[1], payload))
+        spawn(self._send_media(alloc.peer_hash, alloc.relay_port, peer[1], payload))
 
     def _on_send_indication(self, msg: StunMessage, addr: tuple[str, int]) -> None:
         alloc = self._allocs.get(addr)

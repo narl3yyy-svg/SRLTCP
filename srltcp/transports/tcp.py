@@ -20,6 +20,7 @@ from srltcp.transports.base import (
 from srltcp.utils.logging import get_logger
 from srltcp.utils.network import broadcast_targets
 from srltcp.utils.ports import bind_udp_port, start_tcp_server
+from srltcp.utils.tasks import spawn
 
 if TYPE_CHECKING:
     from srltcp.transports.udp import UdpConnection
@@ -483,6 +484,6 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
             transport="tcp",
             metadata={"discovery": True, "payload": data},
         )
-        asyncio.create_task(
+        spawn(
             self._tcp._emit_event(TransportEvent(kind="discovered", peer=peer, data=data))
         )

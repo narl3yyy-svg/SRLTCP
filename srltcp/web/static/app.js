@@ -5716,7 +5716,10 @@
     const tips = (sp.tips || []).map((t) => `<li>${escapeHtml(t)}</li>`).join("");
     return `<p><strong>Speed:</strong> ${escapeHtml(sp.reason || "")}</p>` +
       `<p class="muted">Public address here: ${yn(sp.my_public)} · on their side: ${yn(sp.their_public)}` +
-      ` · IPv6 here: ${yn(sp.my_ipv6)}` + (sp.symmetric_nat ? " · symmetric NAT here" : "") +
+      ` · IPv6 here: ${yn(sp.my_ipv6)}` +
+      (sp.symmetric_nat ? " · symmetric NAT here (hard: a new port for every destination)"
+        : sp.nat === "easy" ? " · NAT here: easy (keeps its port)"
+        : sp.nat === "unknown" ? " · NAT here: unknown (only one STUN server answered)" : "") +
       `</p>` +
       (tips ? `<ul>${tips}</ul>` : "");
   }
