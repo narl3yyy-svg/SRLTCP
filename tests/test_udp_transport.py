@@ -501,3 +501,72 @@ def test_windows_udp_sockets_keep_reading_after_an_icmp_error() -> None:
         assert udp_mod._ignore_icmp_errors(sock) is False  # (only on Windows)
     finally:
         sock.close()
+
+
+def _free_udp_range(n: int) -> int:
+    """A base port with ``n`` free UDP ports from it (IPv4 and IPv6)."""
+    for _ in range(200):
+        base = random.randint(20000, 60000)
+        socks = []
+        try:
+            for i in range(n):
+                for fam, host in ((socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")):
+                    try:
+                        s = socket.socket(fam, socket.SOCK_DGRAM)
+                    except OSError:
+                        continue  # (no IPv6 here)
+                    socks.append(s)
+                    if fam == socket.AF_INET6:
+                        s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                    s.bind((host, base + i))
+            return base
+        except OSError:
+            continue
+        finally:
+            for s in socks:
+                s.close()
+    raise RuntimeError("no free UDP range")
+
+
+async def test_udp_stays_within_its_port_range() -> None:
+    """SRLTCP uses 7828-7831 only (a router rule or firewall exception can
+    name that range): a fresh port after a failed round is the next free one
+    in the range, never a random one; busy ports are skipped."""
+    base = _free_udp_range(udp.UDP_PORTS)
+    ep = UdpEndpoint(base, stun_servers=())
+    await ep.start()
+    try:
+        assert ep.port_range() == [base, base + 1, base + 2, base + 3]
+        assert ep.port == base and set(ep.ports.values()) == {base}
+        assert await ep.rotate() and ep.port == base + 1
+        blocker = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        blocker.bind(("0.0.0.0", base + 2))  # (something else has it)
+        try:
+            assert await ep.rotate() and ep.port == base + 3
+        finally:
+            blocker.close()
+        assert await ep.rotate() and ep.port == base  # wraps around
+        seen = set()
+        for _ in range(8):
+            await ep.rotate()
+            seen.add(ep.port)
+        assert seen <= set(ep.port_range())
+    finally:
+        ep.stop()
+
+
+async def test_udp_range_all_taken_falls_back_to_any_port() -> None:
+    base = _free_udp_range(udp.UDP_PORTS)
+    blockers = []
+    for i in range(udp.UDP_PORTS):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind(("0.0.0.0", base + i))
+        blockers.append(s)
+    ep = UdpEndpoint(base, stun_servers=())
+    try:
+        await ep.start()
+        assert ep.port and ep.port not in ep.port_range()  # (still works)
+    finally:
+        ep.stop()
+        for s in blockers:
+            s.close()

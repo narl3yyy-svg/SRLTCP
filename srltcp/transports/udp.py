@@ -117,6 +117,7 @@ PROBE_EVERY = 0.2
 # neither side's packets would match. Hops 2-4 cover a home router and a
 # carrier's NAT; the other side's NAT is many more hops away.
 PRIME_HOPS = (2, 3, 4)
+UDP_PORTS = 4  # SRLTCP's UDP ports: 7828-7831 (a fresh one after a failed round)
 DEFAULT_HOPS = 64
 MAX_CONNECTIONS = 64
 MAX_PENDING_PUNCHES = 16
@@ -1333,8 +1334,26 @@ class UdpEndpoint:
         self.stun_dns_blocked = False
         self._stun_addr_cache: dict[tuple[str, int], str] = {}  # (host, family) -> last good IP
 
+    def port_range(self) -> list[int]:
+        """The UDP ports SRLTCP uses: the configured one (7828) and the next
+        few (UDP_PORTS in all), so a router rule or firewall exception can
+        name a short range instead of "any port"."""
+        base = self.requested_port
+        return [base + i for i in range(UDP_PORTS) if base and base + i < 65536]
+
     async def start(self) -> None:
-        self._socks = await self._open(self.requested_port)
+        socks: dict[int, asyncio.DatagramTransport] = {}
+        for port in self.port_range():
+            socks = await self._open(port, strict=True)
+            if socks:
+                break
+        if not socks:
+            if self.port_range():
+                first, last = self.port_range()[0], self.port_range()[-1]
+                log.warning("UDP ports %d-%d are all in use (another SRLTCP running?): "
+                            "using a random port", first, last)
+            socks = await self._open(0)
+        self._socks = socks
         self.ports = {f: _port_of(t) for f, t in self._socks.items()}
         self.port = next(iter(self.ports.values()), 0)
         if self._socks:
@@ -1345,13 +1364,25 @@ class UdpEndpoint:
         mapping). After a failed round, routers on the way may hold stale
         state for the old pair of ports for ~30 s, refreshed by every retry:
         a new port is a new pair, so the next round can work at once.
-        Existing connections keep their sockets."""
-        fresh = await self._open(0)
+        Existing connections keep their sockets. The new port is the next
+        free one in :meth:`port_range` (never a random one there): with all
+        of them busy we stay where we are."""
+        pool = self.port_range()
+        fresh: dict[int, asyncio.DatagramTransport] = {}
+        if pool and self.port in pool:
+            at = pool.index(self.port)
+            for port in pool[at + 1:] + pool[:at]:
+                fresh = await self._open(port, strict=True)
+                if fresh:
+                    break
+        else:
+            fresh = await self._open(0)  # (no range configured, or already outside it)
         if not fresh:
             return False
         self._retired.append(self._socks)
         self._socks = fresh
         self.ports = {f: _port_of(t) for f, t in fresh.items()}
+        self.port = next(iter(self.ports.values()), 0)
         self._close_unused()
         self.mapped, self.mapped_at = {}, 0.0
         await self.refresh_mapping()
@@ -1369,8 +1400,12 @@ class UdpEndpoint:
                     transport.close()
         self._retired = keep
 
-    async def _open(self, wanted: int) -> dict[int, asyncio.DatagramTransport]:
-        """An IPv4 and an IPv6 socket on one port (``wanted``, else any)."""
+    async def _open(
+        self, wanted: int, *, strict: bool = False
+    ) -> dict[int, asyncio.DatagramTransport]:
+        """An IPv4 and an IPv6 socket on one port (``wanted``, else any).
+        ``strict``: exactly ``wanted`` — nothing if it's taken (an IPv6
+        socket that can't have it is left out rather than put elsewhere)."""
         loop = asyncio.get_running_loop()
         out: dict[int, asyncio.DatagramTransport] = {}
         bound = 0
@@ -1389,7 +1424,7 @@ class UdpEndpoint:
                 try:
                     sock.bind((host, port))
                 except OSError:
-                    if not port:
+                    if not port or strict:
                         raise
                     sock.bind((host, 0))  # taken: any port works (candidates carry it)
                 sock.setblocking(False)
@@ -1399,6 +1434,8 @@ class UdpEndpoint:
                 log.debug(
                     "UDP %s not available: %s", "IPv6" if family == socket.AF_INET6 else "IPv4", exc
                 )
+                if strict and not out and family == socket.AF_INET:
+                    return {}  # (the port is taken: the caller tries the next one)
                 continue
             transport, _ = await loop.create_datagram_endpoint(lambda: _Protocol(self), sock=sock)
             out[family] = transport

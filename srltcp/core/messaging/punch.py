@@ -776,14 +776,14 @@ class PunchMixin:
                 reason += (" This network's router gives a different port for every "
                            "destination (\"symmetric\" NAT), so your contact's packets "
                            "don't get in.")
-                tips.insert(0, "On OPNsense / pfSense: Firewall → NAT → Outbound, mode Hybrid; "
-                               "add a rule: Interface WAN, Protocol UDP, Source this device "
-                               "(/32), Source port any, Translation interface address, "
-                               "\"Static port\" ticked. Apply, then delete this device's old "
-                               "entries under Firewall → Diagnostics → States and restart "
-                               "SRLTCP. When Check connection no longer says \"symmetric NAT "
-                               "here\", it works without a port forward if your contact's "
-                               "network keeps ports. See docs/NETWORKING.md.")
+                tips.insert(0, "On OPNsense / pfSense: Firewall → NAT → Source NAT "
+                               "(\"Outbound\" on older versions), mode Hybrid; add a rule: "
+                               "Interface WAN, IPv4, "
+                               "Protocol UDP, Source this device (/32), Source port 7828-7831 "
+                               "(SRLTCP's ports), Destination any, Translation WAN / interface "
+                               "address, \"Static port\" ticked (Endpoint Independent off). Save, "
+                               "Apply, then press Check connection again: it must say \"NAT here: "
+                               "easy\". Nothing is opened to the internet. See docs/NETWORKING.md.")
                 tips.insert(1, "Or give this device's network IPv6 (OPNsense: Interfaces → "
                                "this VLAN → IPv6 Configuration Type: Track Interface): IPv6 has "
                                "no NAT, and a phone on 5G usually has IPv6.")

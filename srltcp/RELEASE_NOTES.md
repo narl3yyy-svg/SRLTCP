@@ -1,5 +1,20 @@
 # SRLTCP Release Notes
 
+## v0.17.1 (2026-11-10)
+
+- **SRLTCP uses only UDP ports 7828–7831 for direct connections.** It starts
+  on 7828 and, when it needs a fresh port after a failed attempt, takes the
+  next one of the four instead of a random port. So a router or firewall
+  rule can name just these ports: on OPNsense / pfSense, the static-port
+  Source NAT rule can use *Source port 7828–7831* instead of *any*, and
+  the rest of the computer's traffic keeps the router's normal behaviour.
+  Only if all four are taken (two copies of SRLTCP on one computer) does it
+  use another port, and the log says so.
+- Fixed: after moving to a fresh port, the endpoint still reported the old
+  port number internally.
+- Check connection's router tip uses OPNsense's current menu names
+  (*Firewall → NAT → Source NAT*) and the port range.
+
 ## v0.17.0 (2026-11-10)
 
 ### Home network ↔ mobile data

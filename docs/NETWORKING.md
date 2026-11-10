@@ -124,7 +124,8 @@ connection opens. Nothing on either router needs to be configured. This is the
 standard technique video-call apps use (ICE/STUN, RFC 8445/5389).
 
 1. Each phone asks a **STUN server** which public IPv4 address and port the
-   internet sees for its UDP socket (port **7828**). IPv6 needs no STUN: the
+   internet sees for its UDP socket (port **7828**, or one of 7829–7831 after a
+   failed attempt). IPv6 needs no STUN: the
    phone's own global address works (temporary privacy addresses; never one
    built from the hardware address).
 2. Over Tor, the phones swap those addresses, a random key share each and a
@@ -261,7 +262,7 @@ routers and a VPN phone with a home-Wi-Fi phone.
 |---|---|---|---|
 | 7825 | TCP | Each device (peer connections) | Only inside your LAN/VPN firewall, never on the router |
 | 7826 | UDP | Each device (LAN/VPN discovery, only when you press Announce) | Same as above |
-| 7828 | UDP | Each device (direct connections between networks) | No (on Wi-Fi the app asks the router itself, UPnP / NAT-PMP). It only answers authenticated packets from contacts it's connecting to |
+| 7828–7831 | UDP | Each device (direct connections between networks; it starts on 7828 and moves to the next one after a failed attempt, never outside this range unless all four are taken) | No (on Wi-Fi the app asks the router itself, UPnP / NAT-PMP). It only answers authenticated packets from contacts it's connecting to |
 | — | Tor | Each device (onion service) | No. Tor only dials out, and the onion listener is bound to 127.0.0.1 |
 | 9876 | TCP | Each device (local web UI, 127.0.0.1 only) | No |
 
@@ -322,7 +323,9 @@ router, either way:
 **Outgoing only (no port forward):** if the other side's network keeps one
 port per connection (most mobile carriers here did; your firewall log shows
 their packets arriving from the same port again and again), the static-port
-rule from step A.1 alone is enough: use **Source port: any** in it. NAT
+rule from step A.1 alone is enough: use **Source port 7828–7831** in it
+(SRLTCP's own ports, since 0.17.0; *any* works too but covers all of the
+computer's UDP). Leave *Endpoint Independent* off. NAT
 rules only apply to new connections; since 0.17.0 *Check connection*
 measures the NAT again from a fresh port, so it shows the change at once
 (before that, delete the computer's old entries under *Firewall →
