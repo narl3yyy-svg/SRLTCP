@@ -358,8 +358,11 @@ async def test_tor_session_never_replaces_a_working_direct_one(tmp_path: Path) -
         await b.stop()
 
 
-def test_speed_advice_names_the_missing_piece() -> None:
+def test_speed_advice_names_the_missing_piece(monkeypatch: Any) -> None:
     """Check connection explains why a contact on another network isn't direct."""
+    import srltcp.transports.portmap as portmap
+
+    monkeypatch.setattr(portmap, "home_lan_ipv4", lambda: [])  # (a phone on mobile data)
     peer = "a" * 32
     node = _Node(me="f" * 32, trusted={peer})
     node.config = SimpleNamespace(direct_internet=True)  # type: ignore[attr-defined]
@@ -373,6 +376,14 @@ def test_speed_advice_names_the_missing_piece() -> None:
     node._punch_failures[peer] = 2
     sp = node._speed_advice(peer, "tor")  # type: ignore[arg-type]
     assert "block" in sp["reason"] and sp["their_ipv6"] and any("APN" in t for t in sp["tips"])
+    # A PC at home behind a router that changes ports (OPNsense / pfSense):
+    # the router fix, not tips for phones on mobile data.
+    monkeypatch.setattr(portmap, "home_lan_ipv4", lambda: ["10.0.60.5"])
+    node.udp = SimpleNamespace(symmetric=True, mapped={}, ports={}, stun_dns_blocked=False)  # type: ignore[assignment]
+    sp = node._speed_advice(peer, "tor")  # type: ignore[arg-type]
+    assert "router" in sp["reason"] and "Static port" in sp["tips"][0]
+    assert not any("APN" in t for t in sp["tips"])
+    node.udp = None
     assert node._speed_advice(peer, "direct (udp)")["reason"].startswith("Direct")  # type: ignore[arg-type]
     node.config.direct_internet = False  # type: ignore[attr-defined]
     assert "off" in node._speed_advice(peer, "tor")["reason"]  # type: ignore[arg-type]

@@ -1,5 +1,16 @@
 # SRLTCP Release Notes
 
+## v0.16.9 (2026-11-09)
+
+- **Check connection gives the right advice on a home or office PC.** When
+  the router itself changes ports (OPNsense / pfSense: *symmetric NAT here*),
+  it now always names the router fix — Hybrid outbound NAT, a static-port
+  rule with source port *any*, clearing the old states — instead of tips
+  meant for phones on mobile data (APN settings), also when *I forward UDP
+  7828* or router port mapping is on.
+- *docs/NETWORKING.md*: when the static-port rule alone (no port forward) is
+  enough, and that NAT rules only apply to new connections.
+
 ## v0.16.8 (2026-11-09)
 
 ### Windows: direct connections across networks work again

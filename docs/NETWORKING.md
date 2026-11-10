@@ -319,6 +319,16 @@ for every destination, or the log shows a public port that isn't 7828
 (`UDP address for direct connections: 68.x.x.x:29503`). Fix it once on the
 router, either way:
 
+**Outgoing only (no port forward):** if the other side's network keeps one
+port per connection (most mobile carriers here did; your firewall log shows
+their packets arriving from the same port again and again), the static-port
+rule from step A.1 alone is enough: use **Source port: any** in it, then
+delete the computer's old entries under *Firewall → Diagnostics → States*
+(NAT rules only apply to new connections) and restart SRLTCP. *Check
+connection* on the computer must no longer say *symmetric NAT here*. The
+outbound NAT mode has to be **Hybrid** (in *Automatic* mode your own rules
+are ignored).
+
 **A. Static port + port forward (no UPnP):**
 1. *Firewall → NAT → Outbound*: mode **Hybrid outbound NAT**, then add a rule:
    Interface **WAN**, TCP/IP version **IPv4**, Protocol **UDP**, Source

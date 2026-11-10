@@ -765,27 +765,31 @@ class PunchMixin:
         elif failed:
             reason = ("Both devices have public addresses, but the networks between you block "
                       f"direct connections ({failed} tr{'y' if failed == 1 else 'ies'}).")
-            if symmetric:
-                from srltcp.transports.portmap import home_lan_ipv4
+            from srltcp.transports.portmap import home_lan_ipv4
 
-                if home_lan_ipv4() and not self.fixed_udp_port():
-                    # On a home or office network: the router itself picks a new port per
-                    # destination (OPNsense / pfSense do by default).
-                    reason += (" This network's router gives a different port for every "
-                               "destination (\"symmetric\" NAT), which direct connections "
-                               "can't cross when the other side's is too.")
-                    tips.insert(0, "On OPNsense / pfSense: Firewall → NAT → Outbound, Hybrid "
-                                   "mode, add a rule for this device's UDP port 7828 with "
-                                   "\"Static port\" ticked, forward WAN UDP 7828 to this "
-                                   "device, then turn on Settings → Network → More → I forward "
-                                   "UDP 7828 to this device (or install the UPnP plugin and turn "
-                                   "on Open a port on my home router). See docs/NETWORKING.md.")
-                else:
-                    reason += (" This network gives a different port for every destination "
-                               "(\"symmetric\" carrier NAT), which direct connections can't "
-                               "cross.")
-            tips.append("Wi-Fi on either side, or IPv6 on mobile data (Settings → Network → "
-                        "SIM → Access Point Names → APN protocol: IPv4/IPv6), often works.")
+            on_lan = bool(home_lan_ipv4())
+            if symmetric and on_lan:
+                # On a home or office network: the router itself picks a new
+                # port per destination (OPNsense / pfSense do by default).
+                reason += (" This network's router gives a different port for every "
+                           "destination (\"symmetric\" NAT), so your contact's packets "
+                           "don't get in.")
+                tips.insert(0, "On OPNsense / pfSense: Firewall → NAT → Outbound, mode Hybrid; "
+                               "add a rule: Interface WAN, Protocol UDP, Source this device "
+                               "(/32), Source port any, Translation interface address, "
+                               "\"Static port\" ticked. Apply, then delete this device's old "
+                               "entries under Firewall → Diagnostics → States and restart "
+                               "SRLTCP. When Check connection no longer says \"symmetric NAT "
+                               "here\", it works without a port forward if your contact's "
+                               "network keeps ports. See docs/NETWORKING.md.")
+            elif symmetric:
+                reason += (" This network gives a different port for every destination "
+                           "(\"symmetric\" carrier NAT), which direct connections can't "
+                           "cross.")
+            if not on_lan:
+                tips.append("Wi-Fi on either side, or IPv6 on mobile data (Settings → "
+                            "Network → SIM → Access Point Names → APN protocol: IPv4/IPv6), "
+                            "often works.")
         else:
             reason = "Both devices have public addresses: a direct connection is being tried."
         if failed and not self.port_mapping_enabled() and not self.on_quiet_network():
