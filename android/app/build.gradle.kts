@@ -12,7 +12,7 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 126
+        versionCode = 127
         versionName = "0.17.2"
 
         ndk {

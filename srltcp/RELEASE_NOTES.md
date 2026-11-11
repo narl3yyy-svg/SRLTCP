@@ -21,7 +21,8 @@
 - Removed from the icons in a chat's header, from the corner of the welcome
   screen and from the phone's top bar.
 - Android: your name and ID come right below the clock, without the empty
-  space above them.
+  space above them. The app also clears the phone's cached copy of the page
+  when it's updated, so an old layout can't linger after an update.
 
 ## v0.17.1 (2026-11-11)
 

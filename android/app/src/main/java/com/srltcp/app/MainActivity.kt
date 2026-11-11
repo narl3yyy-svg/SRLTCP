@@ -253,6 +253,13 @@ class MainActivity : AppCompatActivity() {
             wv.settings.builtInZoomControls = false
             wv.settings.displayZoomControls = false
             WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+            // After an app update, drop the WebView's cached copy of the old
+            // page, so the new layout shows at once (once per version).
+            val prefs = getSharedPreferences("srltcp_webview", MODE_PRIVATE)
+            if (prefs.getInt("cache_version", -1) != BuildConfig.VERSION_CODE) {
+                wv.clearCache(true)
+                prefs.edit().putInt("cache_version", BuildConfig.VERSION_CODE).apply()
+            }
             wv.addJavascriptInterface(SRLTCPBridge(this@MainActivity), "SRLTCPAndroid")
             wv.webChromeClient = object : WebChromeClient() {
                 override fun onPermissionRequest(request: PermissionRequest) {

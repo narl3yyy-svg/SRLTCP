@@ -39,7 +39,9 @@ def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application
     async def index(_request: web.Request) -> web.Response:
         index_path = STATIC_DIR / "index.html"
         if index_path.exists():
-            return web.FileResponse(index_path)
+            # (Never cached: after an app update the phone's WebView must show
+            # the new page, not a stale copy of the old layout.)
+            return web.FileResponse(index_path, headers={"Cache-Control": "no-store"})
         return web.Response(text="SRLTCP Web UI", content_type="text/html")
 
     async def static_file(request: web.Request) -> web.Response:
