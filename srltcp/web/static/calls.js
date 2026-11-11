@@ -427,8 +427,40 @@
     if (lv) lv.srcObject = null;
   }
 
+  /** Live call latency: the measured round trip of the call's media between
+   *  the two devices (RTCP), else of the connection checks. */
+  async function updateLatency() {
+    const el = $("#call-latency");
+    const pc = call.pc;
+    if (!el) return;
+    if (!pc || call.state === "idle") { el.classList.add("hidden"); return; }
+    let rtt = null;
+    try {
+      const stats = await pc.getStats();
+      let media = [];
+      let pair = null;
+      stats.forEach((r) => {
+        if (r.type === "remote-inbound-rtp" && typeof r.roundTripTime === "number") media.push(r.roundTripTime);
+        if (r.type === "candidate-pair" && r.nominated && r.state === "succeeded"
+            && typeof r.currentRoundTripTime === "number") pair = r.currentRoundTripTime;
+      });
+      media = media.filter((v) => v > 0);
+      if (media.length) rtt = Math.min(...media);
+      else if (pair !== null) rtt = pair;
+    } catch (_) { /* (closing) */ }
+    if (pc !== call.pc) return;
+    if (rtt === null) { el.classList.add("hidden"); return; }
+    const ms = Math.max(1, Math.round(rtt * 1000));
+    el.textContent = `${ms} ms`;
+    el.dataset.level = ms < 150 ? "good" : ms < 300 ? "fair" : "poor";
+    el.classList.remove("hidden");
+  }
+
   function startClock() {
     if (!call.startedAt) call.startedAt = Date.now();
+    clearInterval(call.latencyTimer);
+    call.latencyTimer = setInterval(updateLatency, 1000);
+    updateLatency();
     clearInterval(call.healthTimer);
     call.healthTimer = setInterval(keepMediaGoing, 2000);
     clearInterval(call.clockTimer);
@@ -444,6 +476,8 @@
     clearInterval(call.clockTimer);
     clearInterval(call.recoverTimer);
     clearInterval(call.healthTimer);
+    clearInterval(call.latencyTimer);
+    $("#call-latency")?.classList.add("hidden");
     try { call.pc?.close(); } catch (_) { /* ignore */ }
     call.local?.getTracks().forEach((t) => t.stop());
     Object.assign(call, {
@@ -451,7 +485,7 @@
       remote: null, role: null, state: "idle", pendingOffer: null, pendingIce: [],
       ringTimer: null, muted: false, cameraOff: false, speaker: false,
       startedAt: 0, lostAt: 0, recoverTimer: null, restarting: false, facing: "user", switching: false,
-      narrow: false, connectTimer: null, healthTimer: null, recovering: false,
+      narrow: false, connectTimer: null, healthTimer: null, recovering: false, latencyTimer: null,
     });
     $("#call-overlay")?.classList.remove("rear-camera");
     routeAudio(false);  // (also ends the Android call notification)

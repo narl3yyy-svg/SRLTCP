@@ -36,11 +36,9 @@ on the device is encrypted too.
 </table>
 
 > [!NOTE]
-> **Version 0.17.2.** Settings are now one tap away, next to the clock, on
-> every device. From this version on, Android updates install over the
-> installed app. In 0.17.1: a phone on mobile data and a computer at home
-> connect directly in seconds instead of minutes, with simpler network
-> settings. Update every device. See the [release notes](srltcp/RELEASE_NOTES.md).
+> **Version 0.17.3.** Pop-ups match the app, video calls show their live
+> latency and fit every phone, and Android updates install over the app.
+> Update every device. See the [release notes](srltcp/RELEASE_NOTES.md).
 
 ## Contents
 
@@ -57,10 +55,10 @@ Get the latest version from **[GitHub Releases](https://github.com/narl3yyy-svg/
 
 | Platform | Download | Requirements |
 |:--|:--|:--|
-| <img src="https://img.shields.io/badge/-Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows" /> | `SRLTCP-0.17.2-windows-x64-setup.exe` | Windows 10/11, x64 |
-| <img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" /> | `SRLTCP-0.17.2-macos-arm64.dmg` | macOS 12+, Apple silicon (M1 and newer) |
-| <img src="https://img.shields.io/badge/-Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android" /> | `SRLTCP-0.17.2.apk` | Android 8+ |
-| <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.2-source.zip` | Python 3.12+ ([from source](#installation)) |
+| <img src="https://img.shields.io/badge/-Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows" /> | `SRLTCP-0.17.3-windows-x64-setup.exe` | Windows 10/11, x64 |
+| <img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" /> | `SRLTCP-0.17.3-macos-arm64.dmg` | macOS 12+, Apple silicon (M1 and newer) |
+| <img src="https://img.shields.io/badge/-Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android" /> | `SRLTCP-0.17.3.apk` | Android 8+ |
+| <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.3-source.zip` | Python 3.12+ ([from source](#installation)) |
 
 Python and Tor are built into the Windows, macOS and Android apps: nothing else to install.
 

@@ -12,8 +12,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 127
-        versionName = "0.17.2"
+        versionCode = 128
+        versionName = "0.17.3"
 
         ndk {
             // One APK for phones (arm64). For an emulator or Chromebook add

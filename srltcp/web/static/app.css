@@ -1662,6 +1662,12 @@ label.field > span {
    drag; tap it for full screen again. */
 .call-minimize { position: absolute; left: 1rem; top: max(1rem, env(safe-area-inset-top)); z-index: 3; display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.8rem; border: none; border-radius: 999px; background: rgba(0,0,0,0.45); color: #fff; font: inherit; font-size: 0.85rem; cursor: pointer; }
 .call-minimize svg { width: 18px; height: 18px; }
+/* Live call latency (round trip, ms): top left, under "Chat". */
+.call-latency { position: absolute; left: 1rem; top: calc(max(1rem, env(safe-area-inset-top)) + 2.75rem); z-index: 3; display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.65rem; border-radius: 999px; background: rgba(0,0,0,0.45); color: #fff; font-family: var(--mono); font-size: 0.8rem; font-variant-numeric: tabular-nums; pointer-events: none; }
+.call-latency::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #3ecf8e; }
+.call-latency[data-level="fair"]::before { background: #f5a623; }
+.call-latency[data-level="poor"]::before { background: #f0546a; }
+.call-latency.hidden, .call-overlay.mini .call-latency, .call-overlay.pip .call-latency { display: none !important; }
 .call-minimize.hidden { display: none; }
 .call-mini-hangup { display: none; }
 .call-overlay.mini { inset: auto; right: 12px; top: calc(72px + env(safe-area-inset-top)); width: min(34vw, 150px); height: min(46vw, 200px); padding: 0; border-radius: 16px; overflow: hidden; justify-content: flex-end; box-shadow: 0 10px 30px rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.15); cursor: pointer; touch-action: none; z-index: 900; }
@@ -1702,11 +1708,11 @@ label.field > span {
 .call-info { position: relative; z-index: 2; text-align: center; margin-top: 3rem; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
 .call-peer-name { font-size: 1.6rem; font-weight: 600; }
 .call-status { color: #c6cbd8; margin-top: 0.35rem; }
-/* Buttons scale with the screen: five in a row fit a small phone (e.g. Pixel 5,
-   360-393 px wide) and stay at 64 px on bigger screens. */
-.call-actions { position: relative; z-index: 2; display: flex; justify-content: center; gap: min(1.5rem, 3vw); max-width: 100%; }
+/* Buttons shrink together to fit the screen (up to six in a row, inside the
+   side margins, also on a 360 px phone) and stay at 60 px on bigger screens. */
+.call-actions { position: relative; z-index: 2; display: flex; justify-content: center; align-items: center; gap: clamp(0.4rem, 2.5vw, 1.25rem); width: 100%; max-width: 30rem; padding: 0 max(0.5rem, env(safe-area-inset-left, 0)); box-sizing: border-box; }
 .call-actions.hidden { display: none; }
-.call-btn { width: min(64px, 15vw); height: min(64px, 15vw); min-width: 44px; min-height: 44px; flex: 0 0 auto; border-radius: 50%; border: none; font-size: 1.5rem; background: rgba(255,255,255,0.14); color: #fff; cursor: pointer; }
+.call-btn { flex: 0 1 60px; width: 60px; height: auto; aspect-ratio: 1 / 1; min-width: 0; min-height: 0; border-radius: 50%; border: none; font-size: 1.5rem; background: rgba(255,255,255,0.14); color: #fff; cursor: pointer; }
 .call-btn.active { background: var(--accent, #5b8def); color: #fff; }  /* (speaker on: blue) */
 .call-btn.accept { background: #3ecf8e; }
 .call-btn.decline { background: #f0546a; }
@@ -1960,3 +1966,46 @@ html, body { touch-action: pan-x pan-y; }
 
 /* A picked file being copied into SRLTCP before its transfer starts. */
 .file-bubble.preparing { min-width: min(320px, 70vw); }
+
+/* In-app dialogs (ask): a small themed card, also on phones */
+.ask-overlay { z-index: 950; }
+.ask-card {
+  width: min(420px, 100%);
+  padding: 1.25rem 1.25rem 1rem;
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+.ask-text .ask-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text);
+}
+.ask-text .ask-detail {
+  display: block;
+  margin: 0 0 0.5rem;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.ask-input {
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.ask-actions { justify-content: flex-end; margin-top: 1rem; }
+.mobile-layout .ask-overlay { padding: 1.25rem; align-items: center; }
+.mobile-layout .ask-card {
+  width: 100%;
+  height: auto;
+  max-height: 80vh;
+  border-radius: 16px;
+}

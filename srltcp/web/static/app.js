@@ -223,6 +223,62 @@
     modalEl.setAttribute("aria-hidden", "true");
   }
 
+  // ── In-app dialogs (themed; instead of the browser's confirm / prompt) ──
+  let askResolve = null;
+  let askInputMode = false;
+
+  function finishAsk(value) {
+    const modal = $("#ask-modal");
+    closeModal(modal);
+    const resolve = askResolve;
+    askResolve = null;
+    if (resolve) resolve(value);
+  }
+
+  // ask("Question?\n\nDetails.") -> Promise<boolean>
+  // ask("Rename contact:", { input: "old" }) -> Promise<string | null>
+  function ask(message, { ok = "OK", cancel = "Cancel", danger = false, input = null } = {}) {
+    const modal = $("#ask-modal");
+    if (!modal) {
+      return Promise.resolve(input === null ? window.confirm(message) : window.prompt(message, input));
+    }
+    if (askResolve) finishAsk(askInputMode ? null : false);  // (one dialog at a time)
+    askInputMode = input !== null;
+    const text = $("#ask-text");
+    text.textContent = "";
+    String(message).split(/\n\n+/).forEach((part, i) => {
+      const el = document.createElement(i === 0 ? "p" : "small");
+      el.className = i === 0 ? "ask-title" : "ask-detail";
+      el.textContent = part;
+      text.appendChild(el);
+    });
+    const field = $("#ask-input");
+    field.classList.toggle("hidden", !askInputMode);
+    field.value = askInputMode ? String(input) : "";
+    const okBtn = $("#ask-ok");
+    okBtn.textContent = ok;
+    okBtn.classList.toggle("danger-btn", danger);
+    $("#ask-cancel").textContent = cancel;
+    openModal(modal);
+    setTimeout(() => (askInputMode ? field : okBtn).focus(), 0);
+    if (askInputMode) field.select();
+    return new Promise((resolve) => { askResolve = resolve; });
+  }
+
+  function setupAsk() {
+    const modal = $("#ask-modal");
+    if (!modal) return;
+    const answer = () => finishAsk(askInputMode ? $("#ask-input").value : true);
+    const decline = () => finishAsk(askInputMode ? null : false);
+    $("#ask-ok")?.addEventListener("click", answer);
+    $("#ask-cancel")?.addEventListener("click", decline);
+    modal.addEventListener("click", (e) => { if (e.target === modal) decline(); });
+    modal.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); decline(); }
+      else if (e.key === "Enter" && (askInputMode || e.target === $("#ask-ok"))) { e.preventDefault(); answer(); }
+    });
+  }
+
   function setupModalClose(modalEl, extraCleanup) {
     if (!modalEl) return;
     modalEl.addEventListener("click", (e) => {
@@ -719,11 +775,18 @@
           if (state.selectedPeer) updateChatTransfer(data);
           if (type === "transfer_complete") {
             markTransferCooldown(data.sender_hash, data.recipient_hash);
-            notifyUser(
-              "Transfer complete",
-              data.filename || "File received",
-              { tag: `transfer-${data.id}` }
-            );
+            // Only for files you receive: a file you send already said
+            // "Sending …" and its bubble shows ✓✓ (a second notice with just
+            // the file name looked like the text twice). No pop-up over the
+            // chat it's in.
+            if (data.sender_hash && !isOutgoing(data.sender_hash)) {
+              const inOpenChat = state.selectedPeer === data.sender_hash && !chatHiddenFromUser();
+              notifyUser(
+                "File received",
+                `Received ${data.filename || "a file"}`,
+                { tag: `transfer-${data.id}`, inApp: !inOpenChat }
+              );
+            }
           }
           if (TERMINAL_TRANSFER_STATES.has(data.state)) setTimeout(pruneTerminalTransfers, 600);
           break;
@@ -927,8 +990,8 @@
   }
 
   async function newTorAddress() {
-    if (!confirm("Make a new Tor address? Contacts you're connected to get it at once; "
-      + "anyone else you gave the old one to will need the new one.")) return;
+    if (!(await ask("Make a new Tor address? Contacts you're connected to get it at once; "
+      + "anyone else you gave the old one to will need the new one.", { ok: "New address" }))) return;
     const btn = $("#tor-new-address");
     if (btn) btn.disabled = true;
     try {
@@ -1181,7 +1244,7 @@
     const g = groupById(state.groupEditing);
     if (!g) return;
     if (g.left) {
-      if (!confirm(`Delete the chat “${g.name}” from this device?`)) return;
+      if (!(await ask(`Delete the chat “${g.name}” from this device?`, { ok: "Delete", danger: true }))) return;
       const res = await safeFetch(`/api/groups/${encodeURIComponent(g.id)}`, { method: "DELETE" });
       if (!res.ok) return;
       state.groups = state.groups.filter((x) => x.id !== g.id);
@@ -1195,7 +1258,7 @@
       }
     } else {
       const what = g.is_owner ? "Close this group for everyone" : "Leave this group";
-      if (!confirm(`${what}?`)) return;
+      if (!(await ask(`${what}?`, { ok: g.is_owner ? "Close group" : "Leave", danger: true }))) return;
       const res = await apiPost(`/api/groups/${encodeURIComponent(g.id)}/leave`, {});
       if (!res.ok) {
         toast(res.data?.error || "Could not leave", "error");
@@ -1753,9 +1816,9 @@
     postVerify({ code });
   }
 
-  function confirmVerify() {
+  async function confirmVerify() {
     const name = $("#verify-name")?.textContent || "this contact";
-    if (!confirm(`Only confirm if every digit matches the number on ${name}'s phone.`)) return;
+    if (!(await ask(`Only confirm if every digit matches the number on ${name}'s phone.`, { ok: "They match" }))) return;
     postVerify({ confirm: true });
   }
   window.onAndroidNfcResult = (result) => {
@@ -1776,7 +1839,7 @@
   };
 
   async function deleteTrusted(hashId, name) {
-    if (!confirm(`Remove ${name} from trusted contacts?\n\nYour chat with them is kept for 24 hours: add them back before then and it carries on. After 24 hours it is deleted for good.`)) return;
+    if (!(await ask(`Remove ${name} from trusted contacts?\n\nYour chat with them is kept for 24 hours: add them back before then and it carries on. After 24 hours it is deleted for good.`, { ok: "Remove", danger: true }))) return;
     closeContactMenu();
     state.trusted = state.trusted.filter((p) => p.hash_id !== hashId);
     delete state.links[hashId];
@@ -1908,7 +1971,7 @@
 
   async function renameContact(hashId, currentName) {
     closeContactMenu();
-    const name = prompt("Rename contact:", currentName);
+    const name = (await ask("Rename contact:", { input: currentName, ok: "Save" }));
     if (!name || name.trim() === currentName) return;
     const { ok } = await apiPatch(`/api/trusted/${encodeURIComponent(hashId)}`, {
       name: name.trim(),
@@ -1927,7 +1990,7 @@
 
   async function blockContact(hashId, name) {
     closeContactMenu();
-    if (!confirm(`Block ${name}? They cannot message you until unblocked.`)) return;
+    if (!(await ask(`Block ${name}? They cannot message you until unblocked.`, { ok: "Block", danger: true }))) return;
     const { ok } = await apiPatch(`/api/trusted/${encodeURIComponent(hashId)}`, {
       blocked: true,
     });
@@ -2878,7 +2941,7 @@
   }
 
   async function revokeShareGrant(grantId) {
-    if (!grantId || !confirm("Stop sharing? They lose access right away.")) return;
+    if (!grantId || !(await ask("Stop sharing? They lose access right away.", { ok: "Stop sharing", danger: true }))) return;
     const { ok, data } = await apiPost("/api/share/peer/revoke", { grant_id: grantId });
     if (!ok) {
       toast(data?.error || "Could not stop sharing", "error");
@@ -3089,7 +3152,7 @@
       toast("No folder selected", "error");
       return;
     }
-    if (!confirm(`Delete folder on device?\n\n${folderPath}\n\nThis cannot be undone.`)) return;
+    if (!(await ask(`Delete folder on device?\n\n${folderPath}\n\nThis cannot be undone.`, { ok: "Delete", danger: true }))) return;
     const { ok, data } = await apiPost("/api/folders/delete", { path: folderPath }, { fallback: {} });
     if (!ok) {
       toast(data?.error || "Could not delete folder", "error");
@@ -3817,7 +3880,7 @@
     if (!ids.length) return;
     const files = ids.some((id) => { const m = messageById(id); return m && isFileMessage(m); });
     const what = ids.length === 1 ? "this message" : `${ids.length} messages`;
-    if (!confirm(`Delete ${what} from this device?${files ? " Files received with them are deleted too." : ""}\n\nYour contact keeps their copy.`)) return;
+    if (!(await ask(`Delete ${what} from this device?${files ? " Files received with them are deleted too." : ""}\n\nYour contact keeps their copy.`, { ok: "Delete", danger: true }))) return;
     const chat = state.selectedGroup ? { group: state.selectedGroup } : { peer: state.selectedPeer };
     const { ok, data } = await apiPost("/api/messages/delete", { ids, ...chat });
     if (!ok) {
@@ -3961,6 +4024,7 @@
   $("#select-delete")?.addEventListener("click", () => deleteMessages([...(state.selected || [])]));
   $("#msg-info-close")?.addEventListener("click", () => closeModal($("#msg-info-modal")));
   setupModalClose($("#msg-info-modal"));
+  setupAsk();
 
   function isNearBottom(el, threshold = 80) {
     return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
@@ -4592,7 +4656,7 @@
     } else if (d.syncResume) {
       await syncAction(`${base(d.syncResume)}/pause`, { paused: false });
     } else if (d.syncStop) {
-      if (!confirm("Stop syncing this folder? The files stay on both devices.")) return;
+      if (!(await ask("Stop syncing this folder? The files stay on both devices.", { ok: "Stop syncing", danger: true }))) return;
       await syncAction(base(d.syncStop), {}, "DELETE");
     }
   });
@@ -4706,7 +4770,7 @@
       setRestoreStatus("Pick the backup file and enter its password.", true);
       return;
     }
-    if (!confirm("Replace the identity, contacts and chats on this device with the backup's?")) return;
+    if (!(await ask("Replace the identity, contacts and chats on this device with the backup's?", { ok: "Replace", danger: true }))) return;
     const btn = $("#restore-submit");
     if (btn) btn.disabled = true;
     setRestoreStatus("Checking the password and restoring…");
@@ -5569,7 +5633,7 @@
   });
 
   $("#btn-restart")?.addEventListener("click", async () => {
-    if (!confirm("Restart SRLTCP?")) return;
+    if (!(await ask("Restart SRLTCP?", { ok: "Restart" }))) return;
     await apiPost("/api/restart", {}, { silent: true });
     toast("Restarting…");
     setTimeout(() => location.reload(), 3000);
@@ -5792,7 +5856,7 @@
   $("#identities")?.addEventListener("click", async (e) => {
     const regen = e.target.closest("[data-regen]");
     const del = e.target.closest("[data-del-id]");
-    if (regen && confirm(`Regenerate ${regen.dataset.regen} identity?`)) {
+    if (regen && (await ask(`Regenerate ${regen.dataset.regen} identity?`, { ok: "Regenerate", danger: true }))) {
       const { ok } = await safeFetch(
         `/api/identities/${regen.dataset.regen}/regenerate`,
         { method: "POST" },
@@ -5801,7 +5865,7 @@
       if (!ok) toast("Identity regenerate failed", "error");
       else await fetchStatus();
     }
-    if (del && confirm(`Delete ${del.dataset.delId} identity?`)) {
+    if (del && (await ask(`Delete ${del.dataset.delId} identity?`, { ok: "Delete", danger: true }))) {
       const { ok } = await apiDelete(`/api/identities/${del.dataset.delId}`);
       if (!ok) toast("Identity delete failed", "error");
       else await fetchStatus();

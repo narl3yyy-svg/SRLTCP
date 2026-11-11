@@ -1,5 +1,29 @@
 # SRLTCP Release Notes
 
+## v0.17.3 (2026-11-12)
+
+### Calls
+- **Live latency.** A video or voice call shows its latency at the top left
+  (under *Chat*): the measured round trip of the call's sound and picture
+  between the two devices, updated every second. Green under 150 ms, amber
+  under 300 ms, red above.
+- **The buttons fit the screen.** With six buttons (mute, speaker, camera,
+  switch camera, fit, hang up) the row was wider than a phone and the first
+  and last buttons were cut off. They now shrink together to fit any screen,
+  inside its margins, and stay at full size on bigger screens.
+
+### Pop-ups match the app
+- Questions such as *Delete this message?*, *Remove … from trusted
+  contacts?*, *Block …?* or *Rename contact* open in SRLTCP's own dark card,
+  not the system's plain white dialog. Actions that delete or remove have a
+  red button. Enter confirms, Esc cancels.
+
+### Fixes
+- **Sending a picture showed its name twice.** After *Sending …*, a second
+  notice with just the file name appeared when it finished. Files you send no
+  longer get that second notice (their bubble shows ✓✓); files you receive
+  say *Received …*, and not while that chat is open.
+
 ## v0.17.2 (2026-11-11)
 
 ### Android: updates install over the app
