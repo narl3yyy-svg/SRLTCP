@@ -1,5 +1,23 @@
 # SRLTCP Release Notes
 
+## v0.17.5 (2026-11-12)
+
+### Search in a chat
+- **New search button** in the chat's header (next to the call buttons), or
+  **Ctrl+F** (⌘F on a Mac). Type a word: every match in the conversation is
+  highlighted, in messages and in file names, and *N of M* shows where you
+  are. It starts at the newest match; **Enter** or ↑ goes to older ones,
+  **Shift+Enter** or ↓ to newer ones, **Esc** closes it.
+- The search runs on your device only: nothing is sent anywhere.
+
+### Files and folders from the message box
+- **Share folder**, **Send folder** and **Send file** moved from the chat's
+  header to the message box, next to the blue send button. On phones the two
+  folder buttons are now always there (before, they were hidden to make room
+  in the header).
+- The search box above your contacts now says *Search peers…* (it finds
+  contacts; the new chat search finds messages).
+
 ## v0.17.4 (2026-11-12)
 
 ### Photos and files survive a restart

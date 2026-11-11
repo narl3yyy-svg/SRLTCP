@@ -1733,11 +1733,8 @@ label.field > span {
 .call-avatar { width: 96px; height: 96px; border-radius: 50%; margin: 0 auto 1rem; display: flex; align-items: center; justify-content: center; font-size: 2.4rem; font-weight: 600; background: linear-gradient(135deg, #3b5bdb, #3ecf8e); color: #fff; }
 .call-overlay.video.remote-playing .call-avatar { display: none; }
 
-/* Phone chat header: keep room for the contact name next to the call buttons.
-   Folder actions stay reachable via long-press on the contact. */
+/* Phone chat header: keep room for the contact name next to the buttons. */
 @media (max-width: 600px) {
-  #btn-share-folder,
-  #btn-send-folder-peer { display: none; }
   .chat-header-actions { gap: 0.15rem; }
   .chat-header-info { min-width: 0; flex: 1; }
   .chat-peer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2022,3 +2019,47 @@ html, body { touch-action: pan-x pan-y; }
   color: var(--text-muted);
   font-size: 0.85rem;
 }
+
+/* Composer: share folder, send folder and send file next to the send button */
+.composer-tools { display: flex; align-items: center; gap: 0.1rem; flex-shrink: 0; align-self: flex-end; }
+.composer-tools .icon-btn { width: 36px; height: 36px; color: var(--text-muted); }
+.composer-tools .icon-btn:hover:not(:disabled) { color: var(--text); }
+.composer-tools .icon-btn svg { width: 19px; height: 19px; }
+@media (max-width: 600px) {
+  .composer-inner { gap: 0.35rem; padding-left: 0.85rem; }
+  .composer-tools { gap: 0; }
+  .composer-tools .icon-btn { width: 32px; height: 32px; }
+  .composer-tools .icon-btn svg { width: 18px; height: 18px; }
+}
+
+/* Search in this chat */
+.chat-search {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.75rem 0.45rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+.chat-search.hidden { display: none; }
+.chat-search-icon { width: 17px; height: 17px; color: var(--text-muted); flex-shrink: 0; }
+.chat-search input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.92rem;
+  padding: 0.35rem 0.25rem;
+}
+.chat-search input::-webkit-search-cancel-button { display: none; }
+.chat-search-count { font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.chat-search .icon-btn.small { width: 32px; height: 32px; }
+.chat-search .icon-btn.small svg { width: 18px; height: 18px; }
+#btn-chat-search[aria-expanded="true"] { color: var(--accent); }
+mark.search-hit { background: rgba(245, 166, 35, 0.35); color: inherit; border-radius: 3px; padding: 0 1px; }
+mark.search-hit.current { background: #f5a623; color: #0c0e14; }
+.bubble-row.search-current .bubble { box-shadow: 0 0 0 2px #f5a623; }

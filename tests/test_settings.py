@@ -12,7 +12,7 @@ def test_settings_defaults(tmp_path: Path) -> None:
     settings = store.load()
     assert settings.auto_announce is False  # (devices are found by hand only)
     assert settings.tor_enabled is True
-    assert settings.version == "0.17.4"
+    assert settings.version == "0.17.5"
     assert settings.tcp_port == 7825
     assert settings.discovery_port == 7826
     for removed in ("strict_ports", "router_port_mapping", "udp_forwarded", "wan_expose_port"):

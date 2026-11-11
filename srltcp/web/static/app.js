@@ -1135,6 +1135,7 @@
     const g = groupById(gid);
     if (!g) return;
     stopSelecting(false);
+    closeChatSearch();
     state.selectedPeer = gid;
     state.selectedGroup = gid;
     state.selectedName = g.name;
@@ -3542,6 +3543,7 @@
   function selectPeer(hashId, name) {
     if (!hashId) return;
     stopSelecting(false);
+    closeChatSearch();
     state.selectedPeer = hashId;
     state.selectedName = name;
     const switching = state.selectedGroup || state.selectedPeerShown !== hashId;
@@ -4025,6 +4027,7 @@
   $("#msg-info-close")?.addEventListener("click", () => closeModal($("#msg-info-modal")));
   setupModalClose($("#msg-info-modal"));
   setupAsk();
+  setupChatSearch();
   // A chat photo or video whose file is gone from this device (deleted from
   // Downloads, or removed by a cleaner app): say so instead of showing a
   // broken image and a Download link that can only fail.
@@ -4250,6 +4253,181 @@
     if (state.renderDeferred) renderMessages(state.messageCache, state.renderDeferred);
   });
 
+  // ── Search in this chat (on this device only: nothing is sent) ──
+  const chatSearch = { open: false, chat: null, hits: [], index: -1, timer: null };
+
+  function chatKey() {
+    return state.selectedGroup || state.selectedPeer || null;
+  }
+
+  function openChatSearch() {
+    const bar = $("#chat-search");
+    if (!bar || !chatKey()) return;
+    chatSearch.open = true;
+    chatSearch.chat = chatKey();
+    bar.classList.remove("hidden");
+    $("#btn-chat-search")?.setAttribute("aria-expanded", "true");
+    const input = $("#chat-search-input");
+    input?.focus();
+    input?.select();
+    runChatSearch(true);
+  }
+
+  function closeChatSearch() {
+    if (!chatSearch.open) return;
+    chatSearch.open = false;
+    chatSearch.chat = null;
+    clearTimeout(chatSearch.timer);
+    $("#chat-search")?.classList.add("hidden");
+    $("#btn-chat-search")?.setAttribute("aria-expanded", "false");
+    const input = $("#chat-search-input");
+    if (input) input.value = "";
+    clearSearchMarks();
+    chatSearch.hits = [];
+    chatSearch.index = -1;
+    updateSearchCount("");
+  }
+
+  function clearSearchMarks() {
+    document.querySelectorAll("#messages mark.search-hit").forEach((mark) => {
+      const parent = mark.parentNode;
+      mark.replaceWith(document.createTextNode(mark.textContent));
+      parent?.normalize();
+    });
+    document.querySelectorAll("#messages .bubble-row.search-current")
+      .forEach((r) => r.classList.remove("search-current"));
+  }
+
+  /** Wrap each case-insensitive occurrence of q inside el's text in <mark>. */
+  function markMatches(el, q) {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    let found = false;
+    for (const node of nodes) {
+      const text = node.nodeValue || "";
+      const lower = text.toLowerCase();
+      let at = lower.indexOf(q);
+      if (at < 0) continue;
+      found = true;
+      if (lower.length !== text.length) continue;  // (case mapping changed lengths: no marks)
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      while (at >= 0) {
+        frag.append(text.slice(last, at));
+        const mark = document.createElement("mark");
+        mark.className = "search-hit";
+        mark.textContent = text.slice(at, at + q.length);
+        frag.append(mark);
+        last = at + q.length;
+        at = lower.indexOf(q, last);
+      }
+      frag.append(text.slice(last));
+      node.replaceWith(frag);
+    }
+    return found;
+  }
+
+  function updateSearchCount(text) {
+    const el = $("#chat-search-count");
+    if (el) el.textContent = text;
+    const none = !chatSearch.hits.length;
+    $("#chat-search-prev")?.toggleAttribute("disabled", none);
+    $("#chat-search-next")?.toggleAttribute("disabled", none);
+  }
+
+  /** Find the query in the chat on screen. ``jump``: go to the newest match
+   *  (typing); otherwise stay on the current one (new messages arrived). */
+  function runChatSearch(jump) {
+    if (!chatSearch.open) return;
+    const currentId = chatSearch.hits[chatSearch.index];
+    clearSearchMarks();
+    const q = ($("#chat-search-input")?.value || "").trim().toLowerCase();
+    chatSearch.hits = [];
+    if (q) {
+      document.querySelectorAll("#messages .bubble-row[data-msg-id]").forEach((row) => {
+        let hit = false;
+        row.querySelectorAll(".bubble-text, .file-name").forEach((el) => {
+          if (markMatches(el, q)) hit = true;
+        });
+        if (!hit) {
+          hit = [...row.querySelectorAll(".album-tile[title]")]
+            .some((tile) => tile.title.toLowerCase().includes(q));
+        }
+        if (hit) chatSearch.hits.push(row.dataset.msgId);
+      });
+    }
+    const keep = jump ? -1 : chatSearch.hits.indexOf(currentId);
+    chatSearch.index = chatSearch.hits.length
+      ? (keep >= 0 ? keep : chatSearch.hits.length - 1) : -1;
+    showSearchHit(jump);
+  }
+
+  function showSearchHit(scroll) {
+    document.querySelectorAll("#messages .bubble-row.search-current")
+      .forEach((r) => r.classList.remove("search-current"));
+    document.querySelectorAll("#messages mark.search-hit.current")
+      .forEach((m) => m.classList.remove("current"));
+    const q = ($("#chat-search-input")?.value || "").trim();
+    const total = chatSearch.hits.length;
+    if (!q) { updateSearchCount(""); return; }
+    if (!total) { updateSearchCount("No matches"); return; }
+    updateSearchCount(`${chatSearch.index + 1} of ${total}`);
+    const id = chatSearch.hits[chatSearch.index];
+    const row = document.querySelector(`#messages .bubble-row[data-msg-id="${CSS.escape(id)}"]`);
+    if (!row) return;
+    row.classList.add("search-current");
+    row.querySelectorAll("mark.search-hit").forEach((m) => m.classList.add("current"));
+    if (scroll) {
+      state.stickBottom = false;  // (new messages don't pull the view away)
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }
+
+  function stepChatSearch(delta) {
+    const total = chatSearch.hits.length;
+    if (!total) return;
+    chatSearch.index = (chatSearch.index + delta + total) % total;
+    showSearchHit(true);
+  }
+
+  function setupChatSearch() {
+    $("#btn-chat-search")?.addEventListener("click", () => {
+      if (chatSearch.open) closeChatSearch();
+      else openChatSearch();
+    });
+    const input = $("#chat-search-input");
+    input?.addEventListener("input", () => {
+      clearTimeout(chatSearch.timer);
+      chatSearch.timer = setTimeout(() => { chatSearch.timer = null; runChatSearch(true); }, 120);
+    });
+    input?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (chatSearch.timer) {  // (typed and pressed Enter at once: search first)
+          clearTimeout(chatSearch.timer);
+          chatSearch.timer = null;
+          runChatSearch(true);
+          return;
+        }
+        stepChatSearch(e.shiftKey ? 1 : -1);  // Enter: older; Shift+Enter: newer
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        closeChatSearch();
+      }
+    });
+    $("#chat-search-prev")?.addEventListener("click", () => stepChatSearch(-1));
+    $("#chat-search-next")?.addEventListener("click", () => stepChatSearch(1));
+    $("#chat-search-close")?.addEventListener("click", closeChatSearch);
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f"
+          && chatKey() && !$("#chat-active")?.classList.contains("hidden")) {
+        e.preventDefault();
+        openChatSearch();
+      }
+    });
+  }
+
   function renderMessages(msgs, { preserveScroll = false, scrollToBottom = false } = {}) {
     const el = $("#messages");
     if (!el) return;
@@ -4342,6 +4520,10 @@
     if (wasAtBottom) {
       el.scrollTop = el.scrollHeight;
       requestAnimationFrame(() => repinMessages());
+    }
+    if (chatSearch.open) {
+      if (chatSearch.chat !== chatKey()) closeChatSearch();
+      else runChatSearch(false);  // (keep the marks on a re-render)
     }
   }
 
