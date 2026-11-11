@@ -4025,6 +4025,22 @@
   $("#msg-info-close")?.addEventListener("click", () => closeModal($("#msg-info-modal")));
   setupModalClose($("#msg-info-modal"));
   setupAsk();
+  // A chat photo or video whose file is gone from this device (deleted from
+  // Downloads, or removed by a cleaner app): say so instead of showing a
+  // broken image and a Download link that can only fail.
+  document.addEventListener("error", (e) => {
+    const media = e.target;
+    if (!(media instanceof HTMLElement) || !media.matches("img.chat-image, video.chat-video")) return;
+    const bubble = media.closest(".file-bubble");
+    if (!bubble || bubble.classList.contains("file-missing")) return;
+    bubble.classList.add("file-missing");
+    const btn = media.closest(".media-preview-btn");
+    const note = document.createElement("div");
+    note.className = "file-missing-note";
+    note.textContent = "No longer on this device";
+    (btn || media).replaceWith(note);
+    bubble.querySelector(".file-download")?.remove();
+  }, true);
 
   function isNearBottom(el, threshold = 80) {
     return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;

@@ -814,6 +814,10 @@ class MessagingBackend(
             if delete_files and received is not None:
                 with contextlib.suppress(OSError):
                     received.unlink(missing_ok=True)
+            sent_copy = self.sent_copy(transfer)  # (our private copy, never your original)
+            if sent_copy is not None and transfer.state in TERMINAL:
+                with contextlib.suppress(OSError):
+                    sent_copy.unlink(missing_ok=True)
             self._incoming_paths.pop(tid, None)
             self._transfers.pop(tid, None)
         self._journal_changed()

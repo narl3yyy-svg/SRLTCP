@@ -1,5 +1,28 @@
 # SRLTCP Release Notes
 
+## v0.17.4 (2026-11-12)
+
+### Photos and files survive a restart
+- **The bug:** after closing and reopening SRLTCP, photos in a chat showed
+  only their name and a broken picture, and *Save* said *Could not save the
+  file*, on both devices. The app only remembered unfinished transfers
+  across a restart, so it no longer knew where a finished file was. A photo
+  sent from a phone (which SRLTCP keeps as its own private copy) was even
+  deleted at startup as a "leftover".
+- **The fix:** finished files are remembered for as long as their message
+  is in the chat, so the preview, *Open* and *Save* keep working after a
+  restart. The private copy of a sent photo stays while its message exists,
+  and is deleted with the message (or when *Keep messages* expires it).
+  Files of yours elsewhere on the device are never touched.
+- A photo or video whose file really is gone (for example deleted from
+  Downloads) now says *No longer on this device* instead of showing a broken
+  image and a *Download* link that can't work.
+- Photos sent or received **before** this version, then followed by a
+  restart, can't be brought back: the app had already forgotten them, and
+  sent copies on a phone were deleted. A received photo is still in your
+  incoming files folder (*Downloads/SRLTCP/Incoming* on Android; on a
+  computer, the one in *Settings → Folders*).
+
 ## v0.17.3 (2026-11-12)
 
 ### Calls

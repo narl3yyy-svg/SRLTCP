@@ -31,9 +31,12 @@ Protocol (every message travels inside the session)::
   corrupt download is deleted.
 - Restarts: unfinished transfers are kept in ``transfers.json`` and come
   back PAUSED; they resume like after a dropped link once the contact is
-  connected. The receiver's partial file is what it has (it hashes that part
-  again before writing more); the sender re-reads the part already sent, and
-  gives up if the file was changed meanwhile.
+  connected. Finished ones are kept there too while their chat message
+  exists, so a photo's preview, Save and Open still work after a restart
+  (and a sent file's private copy isn't purged). The receiver's partial
+  file is what it has (it hashes that part again before writing more); the
+  sender re-reads the part already sent, and gives up if the file was
+  changed meanwhile.
 """
 
 from __future__ import annotations
@@ -102,6 +105,7 @@ REJECT_REPEAT = 2.0  # answer stray data for a cancelled transfer at most this o
 LINK_WAIT = 10.0  # a sender waits this long for a dropped session before pausing
 JOURNAL_DELAY = 1.0  # batch journal writes (state changes come in bursts)
 MAX_JOURNAL = 500
+MAX_JOURNAL_HISTORY = 5000  # finished transfers whose chat message still exists
 MAX_PENDING_INCOMING = 256  # unfinished incoming files per contact (a big photo batch fits)
 MiB = 1024 * 1024
 
@@ -342,8 +346,25 @@ class TransferMixin:
                 or self._awaits_expiry(t)
             )
         ]
-        if keep or self._journal_path.exists():
-            save_json(self._journal_path, {"version": 1, "transfers": keep[-MAX_JOURNAL:]})
+        # Finished files whose message is still in a chat: where each file is,
+        # so its preview and Save work after a restart. (A message deleted, or
+        # expired by "Keep messages", takes its entry with it.)
+        in_chat = {
+            str(m.metadata.get("transfer_id"))
+            for m in self._messages if m.metadata.get("transfer_id")
+        }
+        kept = {k["id"] for k in keep}
+        history = [
+            {**t.to_dict(), "path": str(t.path), "final": str(t.path)}
+            for t in self._transfers.values()
+            if t.state == TransferState.COMPLETE and t.id in in_chat and t.id not in kept
+            and not t.metadata.get("sync")
+        ]
+        if keep or history or self._journal_path.exists():
+            save_json(self._journal_path, {
+                "version": 1, "transfers": keep[-MAX_JOURNAL:],
+                "history": history[-MAX_JOURNAL_HISTORY:],
+            })
 
     def _awaits_expiry(self: MessagingBackend, transfer: FileTransfer) -> bool:
         """A received disappearing file: kept in the journal until its timer
@@ -365,10 +386,47 @@ class TransferMixin:
             transfer = self._transfer_from_journal(item, own) if isinstance(item, dict) else None
             if transfer and transfer.id not in self._transfers:
                 self._transfers[transfer.id] = transfer
+        history = raw.get("history") if isinstance(raw, dict) else None
+        for item in history if isinstance(history, list) else []:
+            transfer = self._finished_from_journal(item, own) if isinstance(item, dict) else None
+            if transfer and transfer.id not in self._transfers:
+                self._transfers[transfer.id] = transfer
         if items:
             log.info("%d unfinished transfer(s) will resume when their contacts connect",
                      sum(t.state == TransferState.PAUSED for t in self._transfers.values()))
         self._purge_copies()
+
+    def _finished_from_journal(
+        self: MessagingBackend, item: dict[str, Any], own: set[str]
+    ) -> FileTransfer | None:
+        """A finished file from before the restart, if it's still on this
+        device: its message's preview, Save and Open keep working."""
+        try:
+            tid = normalize_transfer_id(str(item["id"]))
+            sender, recipient = str(item["sender_hash"]), str(item["recipient_hash"])
+            path = Path(str(item.get("final") or item["path"]))
+            size = int(item["size"])
+            state = TransferState(str(item["state"]))
+            created = float(item.get("created", time.time()))
+        except (KeyError, ValueError, TypeError):
+            return None
+        if state != TransferState.COMPLETE or size < 0:
+            return None
+        if sender not in own and recipient not in own:
+            return None  # another identity (it was reset)
+        if not path.is_file():
+            return None  # deleted or moved meanwhile: nothing to show
+        transfer = FileTransfer(
+            id=tid, sender_hash=sender, recipient_hash=recipient,
+            filename=safe_filename(str(item.get("filename") or path.name)),
+            path=path, size=size, sha256=str(item.get("sha256") or ""),
+            transport=str(item.get("transport") or "tcp"),
+            state=state, offset=size, created=created,
+            metadata=dict(item.get("metadata") or {}),
+        )
+        if sender not in own:
+            self._incoming_paths[tid] = path
+        return transfer
 
     def _transfer_from_journal(
         self: MessagingBackend, item: dict[str, Any], own: set[str]
@@ -439,9 +497,12 @@ class TransferMixin:
             n += 1
 
     def _purge_copies(self: MessagingBackend) -> None:
+        # Copies of sent files still in a chat stay (their preview); the rest
+        # (message deleted or expired) go.
         keep = {
             t.path for t in self._transfers.values()
-            if t.state not in TERMINAL and self._is_outgoing(t)
+            if self._is_outgoing(t)
+            and (t.state not in TERMINAL or t.state == TransferState.COMPLETE)
         }
         removed = sum(purge_dir(d, keep=keep) for d in self._copy_dirs)
         if removed:
@@ -468,6 +529,21 @@ class TransferMixin:
         if transfer.metadata.get("sync"):
             return None  # (lives in the synced folder: never ours to serve or delete here)
         return self._incoming_paths.get(transfer.id) or transfer.path
+
+    def sent_copy(self: MessagingBackend, transfer: FileTransfer) -> Path | None:
+        """The private copy a sent file was made from (an upload from the page,
+        a zipped folder), never a file of yours elsewhere on the device."""
+        if not self._is_outgoing(transfer):
+            return None
+        try:
+            resolved = transfer.path.resolve()
+        except OSError:
+            return None
+        for directory in self._copy_dirs:
+            with contextlib.suppress(OSError, ValueError):
+                resolved.relative_to(directory.resolve())
+                return transfer.path
+        return None
 
     def list_transfers(self: MessagingBackend, *, active_only: bool = False) -> list[dict]:
         items = list(self._transfers.values())
@@ -1090,6 +1166,7 @@ class TransferMixin:
             transfer.state = TransferState.COMPLETE
             log.info("Transfer complete: %s", transfer.filename)
             self._mark_transfer_cooldown(transfer.sender_hash, transfer.recipient_hash)
+            self._journal_changed()  # (remembered across a restart)
         else:
             transfer.state = TransferState.FAILED
             log.error("SHA256 mismatch for %s — discarded", transfer.filename)
@@ -1438,6 +1515,7 @@ class TransferMixin:
                 transfer.offset = transfer.size
                 log.info("Transfer complete: %s", transfer.filename)
                 self._mark_transfer_cooldown(hash_id, transfer.recipient_hash)
+                self._journal_changed()  # (remembered across a restart)
                 await self._emit_transfer_progress(transfer, force=True)
                 if self._on_transfer_complete and not transfer.metadata.get("sync"):
                     await self._on_transfer_complete(transfer.to_dict())

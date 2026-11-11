@@ -2009,3 +2009,16 @@ html, body { touch-action: pan-x pan-y; }
   max-height: 80vh;
   border-radius: 16px;
 }
+
+/* A chat photo/video whose file is no longer on this device */
+.file-missing-note {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 4.5rem;
+  margin-bottom: 0.5rem;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}

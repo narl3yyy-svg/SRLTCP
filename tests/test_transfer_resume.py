@@ -163,3 +163,71 @@ async def test_upload_copies_of_unfinished_transfers_survive_the_restart_purge(
         assert a2._transfers[transfer.id].state == "paused"
     finally:
         await a2.stop()
+
+
+async def test_finished_photos_still_open_after_both_apps_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A photo sent from the phone's page (a private copy in uploads/) and
+    received on the other side: after both apps restart, both chats can still
+    show and save it (before 0.17.3 the preview broke and Save failed), the
+    sender's copy isn't purged, and deleting the message removes that copy."""
+    a = make_node(tmp_path, "alice")
+    b = make_node(tmp_path, "bob")
+    await a.start()
+    await b.start()
+    trust(a, b)
+    trust(b, a)
+    a2 = b2 = None
+    try:
+        bh = b.identities["tcp"].hash_id
+        uploads = tmp_path / "alice" / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        photo = uploads / "Screenshot_20261111-085035_SRLTCP.png"
+        payload = os.urandom(200 * 1024)
+        photo.write_bytes(payload)
+        tid = (await a.send_file(bh, photo))["id"]
+        assert await wait_for(lambda: b._transfers.get(tid) is not None
+                              and b._transfers[tid].state == "complete", timeout=30)
+        assert await wait_for(lambda: a._transfers[tid].state == "complete", timeout=10)
+        a_port, b_port = a.config.tcp_port, b.config.tcp_port
+        await a.stop()
+        await b.stop()
+
+        a2 = make_node(tmp_path, "alice", tcp_port=a_port)
+        b2 = make_node(tmp_path, "bob", tcp_port=b_port)
+        await a2.start()
+        await b2.start()
+        assert photo.exists()  # (not purged as a leftover copy)
+        sent, got = a2.transfer_file_path(tid), b2.transfer_file_path(tid)
+        assert sent is not None and sent.read_bytes() == payload
+        assert got is not None and got.read_bytes() == payload
+        assert a2._transfers[tid].state == "complete" == b2._transfers[tid].state
+
+        msg_id = next(m["id"] for m in a2.get_messages()
+                      if m["metadata"].get("transfer_id") == tid)
+        assert await a2.delete_messages([msg_id]) == 1
+        assert not photo.exists()  # the private copy goes with its message
+        assert a2.transfer_file_path(tid) is None
+    finally:
+        for node in (a2, b2):
+            if node:
+                await node.stop()
+
+
+def test_sent_copy_never_points_outside_the_apps_own_folders(tmp_path: Path) -> None:
+    """Deleting a message removes only SRLTCP's own copy of a sent file, never
+    a file of yours elsewhere (the desktop app sends straight from disk)."""
+    from srltcp.core.messaging.models import FileTransfer
+
+    a = make_node(tmp_path, "alice")
+    a.identities["tcp"] = type("I", (), {"hash_id": "a" * 32})()  # type: ignore[assignment]
+    mine = tmp_path / "Pictures" / "holiday.jpg"
+    mine.parent.mkdir()
+    mine.write_bytes(b"x")
+    t = FileTransfer.create("a" * 32, "b" * 32, mine, "tcp")
+    assert a.sent_copy(t) is None
+    copy = tmp_path / "alice" / "uploads" / "holiday.jpg"
+    copy.parent.mkdir(parents=True, exist_ok=True)
+    copy.write_bytes(b"x")
+    assert a.sent_copy(FileTransfer.create("a" * 32, "b" * 32, copy, "tcp")) == copy
