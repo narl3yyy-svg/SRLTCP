@@ -1687,7 +1687,7 @@ class TransferMixin:
         if transfer.state in TERMINAL:
             return
         reason = str(data.get("reason", ""))
-        if reason in ("failed", "no_space"):
+        if reason in ("failed", "no_space", "not_verified"):
             transfer.state = TransferState.FAILED
             transfer.metadata["reason"] = reason
         else:

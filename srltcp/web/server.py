@@ -137,6 +137,13 @@ def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application
         elif kind == "contact_request":
             who = data.get("name") or hid[:8]
             notify_if_no_ui("Contact request", f"{who} wants to chat", f"req-{hid}")
+        elif kind == "refused_unverified":
+            who = node.backend.trusted.get(hid)
+            notify_if_no_ui(
+                "Not verified",
+                f"Refused {data.get('what', 'something')} from {who.name if who else hid[:8]}",
+                f"unverified-{hid}",
+            )
         elif kind == "sync_invite":
             sync = data.get("sync") or {}
             notify_if_no_ui(
@@ -154,6 +161,7 @@ def create_app(node: SRLTCPNode, *, token: str | None = None) -> web.Application
             "messages_removed",
             "sync_invite",
             "sync_update",
+            "refused_unverified",
         ):
             await broadcast_event(node, kind, data)
         else:

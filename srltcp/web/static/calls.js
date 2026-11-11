@@ -908,8 +908,13 @@
         reset();
         break;
       case "hangup":
-        if ((call.state === "incoming" || call.state === "outgoing") && sig.reason !== "no_media") {
+        if ((call.state === "incoming" || call.state === "outgoing")
+            && sig.reason !== "no_media" && sig.reason !== "not_verified") {
           app().toast?.(sig.reason === "declined" ? "Call declined" : "Call ended");
+        }
+        if (sig.reason === "not_verified") {
+          app().toast?.(`${call.peerName} only takes calls from verified contacts: verify each other `
+            + "(the shield next to the name), then call again", "error");
         }
         if (sig.reason === "no_media") {
           app().toast?.(`${call.peerName}'s device couldn't open its microphone — the call was`

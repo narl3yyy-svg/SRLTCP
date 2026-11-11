@@ -120,6 +120,9 @@ class AppSettings:
     # connections across networks). Same Wi-Fi/VPN
     # contacts and the radio still work.
     quiet_networks: str = ""
+    # Only contacts you verified (safety number) can call you, send you files,
+    # share folders or start a folder sync; others can still chat. Off by default.
+    verified_only: bool = False
     # Re-encode photos before sending (smaller, and without location data).
     shrink_photos: bool = False
     # Disappearing messages: what you send is deleted from both phones after
@@ -131,7 +134,7 @@ class AppSettings:
     auto_download_mb: int = 2048
     auto_download_radio_mb: int = 2
     handshake_protocol: str = "identity"
-    version: str = "0.17.5"
+    version: str = "0.17.6"
 
     def resolved_incoming_dir(self) -> Path:
         if self.incoming_files_dir:

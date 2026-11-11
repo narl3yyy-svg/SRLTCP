@@ -629,6 +629,9 @@
     const offset = data.offset || 0;
     const stateLabel = data.state || "transferring";
     if (stateLabel === "cancelled") return "Transfer cancelled";
+    if (stateLabel === "failed" && data.reason === "not_verified") {
+      return "Not accepted: verify each other first (shield next to their name)";
+    }
     if (stateLabel === "failed") return "Transfer failed";
     if (stateLabel === "complete") return `${formatBytes(size)} · complete`;
     if (data.ask) return `${formatBytes(size)} · tap Download to receive`;
@@ -804,6 +807,16 @@
         case "group_update":
           onGroupUpdate(data.group);
           break;
+        case "refused_unverified": {
+          const who = peerByHash(data.hash_id)?.name || data.hash_id?.slice(0, 8) || "A contact";
+          notifyUser(
+            "Not verified",
+            `Refused ${data.what || "something"} from ${who}: only verified contacts can call you `
+              + "or send files (Settings → Privacy). Verify them with the shield next to their name.",
+            { tag: `unverified-${data.hash_id}` }
+          );
+          break;
+        }
         case "messages_removed":
           onMessagesRemoved(data.ids);
           break;
@@ -3064,6 +3077,7 @@
     setInputValue("set-stun-servers", settings.stun_servers || "");
     setCheckbox("set-tor-enabled", settings.tor_enabled !== false);
     setCheckbox("set-shrink-photos", !!settings.shrink_photos);
+    setCheckbox("set-verified-only", !!settings.verified_only);
     setSelectValue("set-disappear", String(settings.disappear_seconds || 0));
     setSelectValue("set-auto-download", String(settings.auto_download_mb ?? 2048));
     setSelectValue("set-auto-download-radio", String(settings.auto_download_radio_mb ?? 2));
@@ -4136,6 +4150,7 @@
       folder_name: data.metadata?.folder_name ?? meta.folder_name,
       ask: data.metadata ? !!data.metadata.ask : meta.ask,
       waiting: data.metadata ? !!data.metadata.waiting : meta.waiting,
+      reason: data.metadata?.reason ?? meta.reason,
     };
   }
 
@@ -5722,6 +5737,7 @@
       stun_servers: ($("#set-stun-servers")?.value || "").trim(),
       tor_enabled: $("#set-tor-enabled")?.checked ?? true,
       shrink_photos: $("#set-shrink-photos")?.checked || false,
+      verified_only: $("#set-verified-only")?.checked || false,
       disappear_seconds: parseInt($("#set-disappear")?.value || "0", 10),
       auto_download_mb: parseInt($("#set-auto-download")?.value || "2048", 10),
       auto_download_radio_mb: parseInt($("#set-auto-download-radio")?.value || "2", 10),

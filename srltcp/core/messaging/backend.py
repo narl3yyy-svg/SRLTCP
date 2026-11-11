@@ -41,6 +41,7 @@ from srltcp.core.protocol.messages import (
     decode_payload,
     encode_payload,
     header_aad,
+    normalize_transfer_id,
     parse_header,
 )
 from srltcp.core.settings import prune_messages_by_retention
@@ -87,6 +88,7 @@ class NodeConfig:
     strict_ports: bool = True  # exactly these ports (never another one if busy)
     direct_internet: bool = True  # hole punching; shares public IP with contacts
     quiet_networks: str = ""  # networks with no internet features ("10.20.0.0/16, ...")
+    verified_only: bool = False  # calls, files, shares, sync only from verified contacts
     stun_servers: str = ""  # for direct UDP ("host:port, ..."; empty = defaults)
     tor_enabled: bool = False  # reach contacts over Tor (onion service)
     tor_path: str = ""  # tor executable on a PC (empty: find it)
@@ -651,6 +653,10 @@ class MessagingBackend(
         if not self.is_trusted(hash_id):
             await self._handle_untrusted_message(link, msg_type, body)
             return
+        if self._needs_verification(hash_id) and await self._refuse_unverified(
+            hash_id, msg_type, body
+        ):
+            return
         if msg_type == MessageType.TEXT:
             await self._handle_text(hash_id, body, flags)
         elif msg_type == MessageType.FILE_OFFER:
@@ -683,6 +689,56 @@ class MessagingBackend(
             await self._handle_rendezvous(hash_id, body)
         elif msg_type == MessageType.PUNCH:
             await self._handle_punch(hash_id, body)
+
+    def _needs_verification(self, hash_id: str) -> bool:
+        """"Verified contacts only" is on and this contact isn't verified."""
+        return bool(getattr(self.config, "verified_only", False)) and not self.contact_verified(
+            hash_id
+        )
+
+    async def _refuse_unverified(self, hash_id: str, msg_type: MessageType, body: bytes) -> bool:
+        """With "Verified contacts only" on: refuse what an unverified contact
+        starts (a call, a file, a shared folder, a folder sync) and tell them
+        why; chat still works. True if this packet was refused."""
+        try:
+            data = decode_payload(body)
+        except Exception:  # noqa: BLE001 - malformed: the normal handler drops it
+            return False
+        if not isinstance(data, dict):
+            return False
+        what = ""
+        if msg_type == MessageType.FILE_OFFER:
+            try:
+                tid = normalize_transfer_id(str(data.get("transfer_id", "")))
+            except ValueError:
+                return False
+            if tid in self._transfers:
+                return False  # (one accepted before the setting was turned on)
+            await self._send_reject(hash_id, tid, "not_verified")
+            what = "a file"
+        elif msg_type == MessageType.CALL_SIGNAL:
+            if data.get("type") != "offer":
+                return False
+            await self.send_call_signal(hash_id, {
+                "type": "hangup", "call_id": str(data.get("call_id", ""))[:64],
+                "reason": "not_verified",
+            })
+            what = "a call"
+        elif msg_type == MessageType.SHARE_LIST:
+            if data.get("action") != "offer":
+                return False
+            what = "a shared folder"
+        elif msg_type == MessageType.SYNC:
+            if data.get("op") != "invite":
+                return False
+            await self._send_sync(hash_id, {"op": "stop", "id": str(data.get("id", ""))[:64]})
+            what = "a folder sync"
+        else:
+            return False
+        log.info("Refused %s from %s: not verified (Verified contacts only)", what, hash_id[:8])
+        if self._on_event:
+            await self._on_event({"kind": "refused_unverified", "hash_id": hash_id, "what": what})
+        return True
 
     async def _handle_untrusted_message(
         self, link: PeerLink, msg_type: MessageType, body: bytes

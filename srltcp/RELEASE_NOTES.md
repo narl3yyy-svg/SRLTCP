@@ -1,5 +1,23 @@
 # SRLTCP Release Notes
 
+## v0.17.6 (2026-11-12)
+
+### Only verified contacts can call you or send you files (optional)
+- **New setting:** *Settings → Privacy → Only verified contacts can call me
+  or send me files*. Off by default.
+- With it on, a contact you haven't verified can still **chat** with you, but
+  their **calls, files, shared folders and folder sync** are refused:
+  - their call ends at once and their app says they need to verify with you
+    first (it never rings on your side);
+  - their file shows *Not accepted: verify each other first*;
+  - you get a notice saying what was refused and from whom.
+- Verifying makes everything work again: pair in person (QR code or NFC
+  tap: verified automatically), or open their chat, tap the shield next to
+  their name and compare the numbers on a call or in person.
+- This is checked by the app's background service as things arrive, not
+  just hidden in the screen, so it holds for every way something can come in.
+- Your own calls and files to a contact aren't affected.
+
 ## v0.17.5 (2026-11-12)
 
 ### Search in a chat

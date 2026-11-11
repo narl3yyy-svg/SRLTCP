@@ -167,6 +167,7 @@ class SRLTCPNode:
         )
         direct_changed = direct_changed or self.config.quiet_networks != settings.quiet_networks
         self.config.quiet_networks = settings.quiet_networks
+        self.config.verified_only = bool(settings.verified_only)
         self.config.tor_enabled = settings.tor_enabled
         self.config.tor_path = settings.tor_path
         incoming = str(settings.resolved_incoming_dir())

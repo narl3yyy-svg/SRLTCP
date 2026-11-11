@@ -239,6 +239,11 @@
 </select>
 <small>Messages and files you send are deleted this long after sending on your phone, and this long after they arrive on theirs (one-to-one chats). Your contacts' own setting decides for their messages. It can't undo a screenshot or a copy someone saved.</small>
 </label>
+<label class="field checkbox-field">
+<input type="checkbox" id="set-verified-only" />
+<span>Only verified contacts can call me or send me files</span>
+</label>
+<small class="field-hint">Calls, files, shared folders and folder sync from contacts you haven't verified are refused, and they're told to verify with you first. They can still chat with you. A contact paired in person (QR code or NFC tap) is verified already; for others, open their chat, tap the shield next to their name and compare the numbers.</small>
 <fieldset class="settings-group hidden" id="phone-privacy">
 <legend>This phone</legend>
 <label class="field checkbox-field">

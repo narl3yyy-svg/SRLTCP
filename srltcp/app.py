@@ -107,6 +107,7 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         strict_ports=True,  # the ports in Settings, never others
         direct_internet=settings.direct_internet,
         quiet_networks=settings.quiet_networks,
+        verified_only=settings.verified_only,
         stun_servers=settings.stun_servers,
         tor_enabled=settings.tor_enabled,
         tor_path=settings.tor_path,
