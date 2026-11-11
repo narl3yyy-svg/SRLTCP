@@ -1,0 +1,76 @@
+name: macOS app (.dmg)
+
+# Builds the macOS Apple-silicon app as a disk image on GitHub's M-series
+# Mac runners and keeps it as a downloadable build artifact. Nothing is
+# published: releases are made by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "srltcp/**"
+      - "desktop/**"
+      - "scripts/build_desktop.sh"
+      - "pyproject.toml"
+      - ".github/workflows/macos-dmg.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-dmg-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dmg:
+    runs-on: macos-14  # Apple silicon (arm64)
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Version
+        id: version
+        run: |
+          v=$(python -c 'import re; print(re.search(r"__version__ = \"([^\"]+)\"", open("srltcp/__init__.py").read()).group(1))')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build the app and the disk image
+        env:
+          PYTHON: python
+        run: bash scripts/build_desktop.sh mac
+
+      - name: Check the app
+        run: |
+          set -euo pipefail
+          v="${{ steps.version.outputs.version }}"
+          APP=desktop/dist/mac-arm64/SRLTCP.app
+          DMG="desktop/dist/SRLTCP-$v-macos-arm64.dmg"
+          test -f "$DMG"
+          codesign --verify --deep --strict "$APP"
+          file "$APP/Contents/MacOS/SRLTCP" | grep -q arm64
+          PY="$APP/Contents/Resources/backend/python/bin/python3"
+          "$PY" -I -c "import srltcp, sys; assert srltcp.__version__ == '$v', srltcp.__version__; print('backend', srltcp.__version__, sys.platform)"
+          test -x "$APP/Contents/Resources/backend/tor/tor/tor"
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/srltcp-dmg "$DMG"
+          test -d /tmp/srltcp-dmg/SRLTCP.app && test -L /tmp/srltcp-dmg/Applications
+          hdiutil detach /tmp/srltcp-dmg
+          shasum -a 256 "$DMG" | tee "desktop/dist/SRLTCP-$v-macos-arm64.dmg.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SRLTCP-${{ steps.version.outputs.version }}-macos-arm64-dmg
+          path: |
+            desktop/dist/SRLTCP-${{ steps.version.outputs.version }}-macos-arm64.dmg
+            desktop/dist/SRLTCP-${{ steps.version.outputs.version }}-macos-arm64.dmg.sha256
+          if-no-files-found: error
+          retention-days: 30

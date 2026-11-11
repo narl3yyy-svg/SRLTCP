@@ -1,96 +1,129 @@
 <div align="center">
 
+<img src="desktop/assets/icon-256.png" alt="SRLTCP" width="112" />
+
 # SRLTCP
 
-### Private, direct, end-to-end encrypted messaging, with no servers in between
+**Private, direct, end-to-end encrypted communication: no servers, no relays, no accounts.**
 
-Chat · voice & video calls · files · folder sharing & sync · group chats
+Chat · Voice & video calls · Files · Folder sharing & sync · Group chats
 
-[![Release](https://img.shields.io/github/v/release/narl3yyy-svg/SRLTCP?label=release&color=3EF58E)](https://github.com/narl3yyy-svg/SRLTCP/releases/latest)
-[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Android%20%7C%20Linux-informational)
-![Crypto](https://img.shields.io/badge/crypto-quantum--safe-8A2BE2)
+[![Latest release](https://img.shields.io/github/v/release/narl3yyy-svg/SRLTCP?style=flat-square&label=release&color=3EF58E)](https://github.com/narl3yyy-svg/SRLTCP/releases/latest)
+[![macOS build](https://img.shields.io/github/actions/workflow/status/narl3yyy-svg/SRLTCP/macos-dmg.yml?branch=main&style=flat-square&label=macOS%20build)](https://github.com/narl3yyy-svg/SRLTCP/actions/workflows/macos-dmg.yml)
+[![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.12+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Encryption](https://img.shields.io/badge/encryption-post--quantum-8A2BE2?style=flat-square)](#security-at-a-glance)
 
-**[Download](#download)** · **[How it connects](#how-it-connects)** · **[Security](#security-model)** · **[Networking guide](docs/NETWORKING.md)** · **[Release notes](srltcp/RELEASE_NOTES.md)**
+[**Download**](#download) &nbsp;•&nbsp; [**Quick start**](#quick-start) &nbsp;•&nbsp; [**How it works**](#how-it-works) &nbsp;•&nbsp; [**Security**](#security-at-a-glance) &nbsp;•&nbsp; [**Networking guide**](docs/NETWORKING.md) &nbsp;•&nbsp; [**Release notes**](srltcp/RELEASE_NOTES.md)
 
 </div>
 
----
+<br />
 
-**SRLTCP** (Serial + Relay-Less TCP) connects your devices **straight to each
-other**: same Wi-Fi, VPN, across the internet, or over a USB serial radio with
-no network at all. Only people you have added as trusted contacts can reach
-you. Every session is end-to-end encrypted with **quantum-safe** cryptography,
-and everything on the device is encrypted at rest.
+SRLTCP connects your devices **straight to each other**: on the same Wi-Fi or
+VPN, across the internet, or over USB serial radios with no network at all.
+Only contacts you have added and trusted can reach you. Every session is
+end-to-end encrypted with **post-quantum** cryptography, and everything stored
+on the device is encrypted too.
 
-> **No relays. No servers. No port forwarding. No accounts.**
-> SRLTCP picks the best route to each trusted contact by itself.
+<table>
+<tr>
+<td width="25%" align="center"><b>🔒 Private</b><br /><sub>Only trusted contacts can connect. Nothing goes through anyone's server.</sub></td>
+<td width="25%" align="center"><b>⚡ Direct</b><br /><sub>Device to device at full speed, picking the best route by itself.</sub></td>
+<td width="25%" align="center"><b>🛡️ Quantum-safe</b><br /><sub>Hybrid X25519 + ML-KEM-768 and Ed25519 + ML-DSA-65 on every session.</sub></td>
+<td width="25%" align="center"><b>🧩 Zero setup</b><br /><sub>No accounts, no port forwarding, no router changes.</sub></td>
+</tr>
+</table>
 
-**Current version: 0.17.1.** Update every device. A phone on mobile data and a
-computer at home now go direct in seconds instead of minutes, and the network
-settings are simpler. See the [release notes](srltcp/RELEASE_NOTES.md).
+> [!NOTE]
+> **Version 0.17.1.** A phone on mobile data and a computer at home now connect
+> directly in seconds instead of minutes, and the network settings are simpler.
+> Update every device. See the [release notes](srltcp/RELEASE_NOTES.md).
 
----
+## Contents
+
+- [Download](#download)
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Features](#features)
+- [Security at a glance](#security-at-a-glance)
+- [Architecture](#architecture) · [Security model](#security-model) · [Installation](#installation) · [Usage](#usage) · [Development](#development) · [Roadmap](#roadmap)
 
 ## Download
 
-Get the latest version from **[Releases](https://github.com/narl3yyy-svg/SRLTCP/releases/latest)**:
+Get the latest version from **[GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases/latest)**.
 
-| Platform | File | Notes |
-|---|---|---|
-| **Windows 10/11** (x64) | `SRLTCP-0.17.1-windows-x64-setup.exe` | Installer, no admin rights needed. Python and Tor are built in. |
-| **macOS 12+** (Apple silicon: M1 and newer) | `SRLTCP-0.17.1-macos-arm64.dmg` | Open it, drag **SRLTCP** to *Applications*. |
-| **Android 8+** | `SRLTCP-0.17.1.apk` | Python and Tor are built in. |
-| **Linux / from source** | `SRLTCP-0.17.1-source.zip` | `./run.sh web`. See [Installation](#installation). |
+| Platform | Download | Requirements |
+|:--|:--|:--|
+| <img src="https://img.shields.io/badge/-Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows" /> | `SRLTCP-0.17.1-windows-x64-setup.exe` | Windows 10/11, x64 |
+| <img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" /> | `SRLTCP-0.17.1-macos-arm64.dmg` | macOS 12+, Apple silicon (M1 and newer) |
+| <img src="https://img.shields.io/badge/-Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android" /> | `SRLTCP-0.17.1.apk` | Android 8+ |
+| <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.1-source.zip` | Python 3.12+ ([from source](#installation)) |
 
-The apps aren't code-signed yet. Windows SmartScreen: **More info → Run
-anyway**. macOS: *System Settings → Privacy & Security → Open Anyway*. Android:
-allow installing from your browser or file manager.
+Python and Tor are built into the Windows, macOS and Android apps: nothing else to install.
 
----
+<details>
+<summary><b>First launch: unsigned app warnings</b></summary>
 
-## How it connects
+The apps are not code-signed yet, so the first launch shows a warning:
 
+- **Windows:** SmartScreen → **More info → Run anyway**. When Windows Firewall
+  asks, allow **Private networks**.
+- **macOS:** open the disk image and drag **SRLTCP** to *Applications*. Then
+  *System Settings → Privacy & Security* → **Open Anyway**.
+- **Android:** allow installing apps from your browser or file manager.
+
+</details>
+
+## Quick start
+
+1. **Install** SRLTCP on both devices (see [Download](#download)).
+2. **Pair once.** Tap **Pair** on one device and scan the QR code with the
+   other. A link or an NFC tap works too. Both become trusted contacts and are
+   verified automatically.
+3. **Talk.** Chat, call, send files and share folders, at home or anywhere.
+   The devices find each other again by themselves on any network.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["📱 Your device"] <==>|"Direct, end-to-end encrypted<br/>(same Wi-Fi / VPN, or UDP through both NATs)"| B["💻 Your contact"]
+    A -. "Tor: find each other and<br/>swap addresses only" .-> T(("🧅 Tor"))
+    T -.-> B
 ```
-   You ───────────── direct, end-to-end encrypted ───────────── Contact
-     \                                                           /
-      \──── Tor: only to find each other and swap addresses ────/
-```
 
-1. **Same Wi-Fi or VPN?** Connect directly.
-2. **Different networks** (mobile data ↔ home, two carriers, two homes)? The
-   two devices meet over **Tor**, the doorbell. A private onion address is
-   shared only with your contacts. There they swap their current addresses
-   inside the encrypted session, then punch a **direct UDP connection** through
-   both NATs (IPv4 and IPv6), the way video calls do. Usually this takes a few
-   seconds.
-3. **No network at all?** USB **serial radio** modems (SiK, LoRa, ESP32).
+1. **Same Wi-Fi or VPN:** the devices connect directly.
+2. **Different networks** (mobile data ↔ home, two carriers, two homes):
+   - The devices meet over **Tor**, used only as a doorbell. Each device has a
+     private onion address that only its contacts know.
+   - Inside the encrypted session they swap their current addresses.
+   - Then they punch a **direct UDP connection** through both NATs, over IPv4
+     and IPv6, the way video calls do. This usually takes a few seconds.
+3. **No network at all:** USB **serial radio** modems (SiK, LoRa, ESP32).
 
 Messages, files and calls **never** go over Tor. While a contact shows
-**CONNECTING**, what you send waits and goes out over the direct connection.
-Strangers on the internet are turned away before anything is read, and no
-port is ever forwarded or opened on your router.
+**CONNECTING**, anything you send waits, then goes out over the direct
+connection. No port is ever forwarded or opened on your router, and strangers
+on the internet are turned away before anything is read.
 
-Details, every setting and troubleshooting: **[docs/NETWORKING.md](docs/NETWORKING.md)**.
-
----
+➡️ Every setting, common setups and troubleshooting: **[docs/NETWORKING.md](docs/NETWORKING.md)**
 
 ## Features
 
 | | |
-|---|---|
-| 🔒 **Quantum-safe E2EE** | X25519 + ML-KEM-768 key exchange, Ed25519 + ML-DSA-65 signatures, AES-256-GCM with replay protection, forward secrecy on every session |
-| 🛰️ **Direct across networks** | Encrypted UDP hole punching through both NATs (IPv4 and IPv6); reliable and ordered for chat and files, separate datagrams for call media; follows a phone to a new network |
+|:--|:--|
+| 🔒 **Post-quantum E2EE** | X25519 + ML-KEM-768 key exchange, Ed25519 + ML-DSA-65 signatures, AES-256-GCM with replay protection, forward secrecy on every session |
+| 🛰️ **Direct across networks** | Encrypted UDP hole punching through both NATs (IPv4 and IPv6). Reliable and ordered for chat and files, with separate datagrams for call media. Follows a phone to a new network |
 | 🧅 **Tor as the doorbell** | Find trusted contacts on any network without a server; built into the Android and desktop apps |
-| 📡 **Serial radios** | Chat, files and voice with no network: private contact beacons, a reliable link made for lossy half-duplex radios |
-| 📞 **Voice & video calls** | WebRTC inside the encrypted session, no third-party servers; voice even over a serial radio |
-| 📁 **Files, folders & sync** | Fast resumable streaming (zstd, verified SHA-256), E2EE folder sharing, two-way folder sync with conflict copies and a 30-day trash |
-| 👥 **Group chats** | Up to 32 members, end-to-end encrypted, signed by each author |
+| 📡 **Serial radios** | Chat, files and voice with no network: private contact beacons and a reliable link built for lossy half-duplex radios |
+| 📞 **Voice & video calls** | WebRTC inside the encrypted session, with no third-party servers; voice even works over a serial radio |
+| 📁 **Files, folders & sync** | Fast, resumable streaming (zstd, verified SHA-256), E2EE folder sharing, and two-way folder sync with conflict copies and a 30-day trash |
+| 👥 **Group chats** | Up to 32 members, end-to-end encrypted, each message signed by its author |
 | ✅ **Verified contacts** | 60-digit safety numbers; automatic when you pair in person (QR, link or NFC tap) |
-| 🛡️ **Private by default** | Contact requests instead of open inboxes; manual-only discovery on your own networks; disappearing messages, app lock, private notifications |
+| 🕶️ **Private by default** | Contact requests instead of an open inbox; discovery only by hand, on your own networks; disappearing messages, app lock and private notifications |
 | 💾 **Encrypted at rest** | Keys, contacts, chats, groups and settings sealed (Android Keystore / Windows DPAPI); encrypted backup and restore |
-| 🖥️ **Everywhere** | Windows and macOS tray apps, Android, and Linux/macOS/Windows from source |
+| 🖥️ **Cross-platform** | Windows and macOS tray apps, Android, and Linux, macOS or Windows from source |
 
 <details>
 <summary><b>All features</b></summary>
@@ -98,23 +131,33 @@ Details, every setting and troubleshooting: **[docs/NETWORKING.md](docs/NETWORKI
 | Feature | Description |
 |---------|-------------|
 | **Dual transports** | TCP/IP networking + USB serial (pyserial on a PC, the USB host API on Android) |
-| **P2P mode** | Direct encrypted links between peers on LAN or serial cable |
-| **Serial radios** | Only contacts connect (private beacons, nobody is discovered), chat and call audio ahead of file data, and the radio comes before the internet when you're not on the same Wi-Fi |
-| **Fast file transfer** | Windowed streaming (1 MiB chunks direct, 256 KiB over UDP, 2–24 KiB over a serial radio, sized by its measured speed), zstd, verified while streaming; speed and time left on every path; survives dropped connections and app restarts; several files at once; optional photo shrinking |
+| **Serial radios** | Only contacts connect (private beacons, nobody is discovered). Chat and call audio go ahead of file data. The radio comes before the internet when you're not on the same Wi-Fi |
+| **Fast file transfer** | Windowed streaming (1 MiB chunks direct, 256 KiB over UDP, 2–24 KiB over a serial radio, sized by its measured speed), zstd, verified while streaming. Shows speed and time left on every path. Survives dropped connections and app restarts. Several files at once, optional photo shrinking |
 | **Drag-and-drop send** | Drop files onto a contact |
-| **Web UI** | Localhost **HTTPS-only** UI (default port **9876**), protected by a private access token |
+| **Local web UI** | **HTTPS-only** on localhost (default port **9876**), protected by a private access token |
 | **Pairing** | QR code, shareable link, or **NFC tap** (Android): one scan pairs both sides |
-| **Offline delivery** | Messages queue while a contact is offline and deliver on reconnect, with ✓/✓✓ receipts |
+| **Offline delivery** | Messages queue while a contact is offline and are delivered on reconnect, with ✓/✓✓ receipts |
 | **Works over WireGuard** | Find by IP over the VPN, automatic address updates |
-| **Signed LAN discovery** | Manual only (press **Announce**). Ed25519-signed announces; never sent on mobile data or across the internet |
-| **Chat history** | Saved locally, encrypted, pruned by your retention setting; message and chat actions like in Signal |
+| **Signed LAN discovery** | Only when you press **Announce**. Announces are Ed25519-signed and never sent on mobile data or across the internet |
+| **Chat history** | Stored locally and encrypted, pruned by your retention setting; message and chat actions like in Signal |
 | **Albums** | Photos and videos sent together show as one grid |
 | **Tap to download** | Files above a size you choose wait for a tap |
-| **Ping / RTT** | Latency in ms, the same figure on both phones; serial link quality % |
-| **System stats** | CPU usage & temperature in the status bar |
-| **Desktop apps** | Runs in the system tray / menu bar so messages and calls keep coming in; optional start at login |
+| **Ping / RTT** | Latency in ms, the same figure on both devices; serial link quality % |
+| **System stats** | CPU usage and temperature in the status bar |
+| **Desktop apps** | Run in the system tray / menu bar so messages and calls keep coming in; optional start at login |
 
 </details>
+
+## Security at a glance
+
+| | |
+|:--|:--|
+| **Who can reach you** | Only contacts you have trusted. Anyone else becomes a contact request, at most |
+| **What crosses the network** | Only sealed, authenticated packets. Even the local UI is HTTPS with a private token |
+| **What servers see** | Nothing you send. Tor relays carry only the sealed setup messages; a STUN server sees your IP address (turn off *Direct internet connections* to avoid it) |
+| **Your router** | Never asked to open anything: no port forwarding, no UPnP |
+| **On the device** | Identity, contacts, chats and settings are encrypted at rest |
+| **Audits** | [SECURITY.md](SECURITY.md) (threat model, reporting) · [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md) (latest penetration test) |
 
 ---
 
@@ -722,7 +765,7 @@ pytest tests/ -v
 | `sudo bash scripts/simulate_wireguard.sh` | Two "phones" + a server on a real WireGuard VPN in network namespaces: discovery, messaging, IP change |
 | `bash scripts/sync-android-python.sh` | Copy `srltcp/` into Android project before Gradle |
 | `bash scripts/build-android.sh` | Full local APK build |
-| `bash scripts/build_desktop.sh [win\|mac]` | Desktop apps: Windows x64 installer and macOS Apple-silicon app (see [desktop/README.md](desktop/README.md)) |
+| `bash scripts/build_desktop.sh [win\|mac]` | Desktop apps: Windows x64 installer and macOS Apple-silicon app, plus a `.dmg` when built on a Mac (see [desktop/README.md](desktop/README.md)). GitHub Actions builds the `.dmg` on every push to `main` ([macOS build](.github/workflows/macos-dmg.yml)) |
 | `xvfb-run -a node desktop/tests/smoke.js` | Desktop app test: node start, pinned certificate, tray, restart, clean quit |
 
 **Releases:** bump `srltcp/__init__.py` and `android/app/build.gradle.kts`, update `srltcp/RELEASE_NOTES.md`, build the APK and the desktop apps locally, tag `vX.Y.Z`, attach the APK, the Windows installer, the macOS disk image (.dmg) and the source zip to [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases).

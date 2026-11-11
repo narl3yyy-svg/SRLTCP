@@ -7,7 +7,12 @@ shows the node's page in a window. Builds:
 | Platform | Output | Notes |
 |---|---|---|
 | Windows 10/11, x64 | `dist/SRLTCP-<version>-windows-x64-setup.exe` | NSIS installer, per user (no admin rights), Start menu and desktop shortcuts, uninstaller |
-| macOS 12+, Apple silicon | `dist/SRLTCP-<version>-macos-arm64.zip` | `SRLTCP.app`, ad-hoc signed (not notarized) |
+| macOS 12+, Apple silicon | `dist/SRLTCP-<version>-macos-arm64.dmg` (on a Mac) and `.zip` | `SRLTCP.app`, ad-hoc signed (not notarized); the disk image has a link to *Applications* for drag-and-drop install |
+
+The `.dmg` needs `hdiutil`, so it's made on a Mac: GitHub Actions builds it on
+an Apple-silicon runner on every push to `main` (and on demand: *Actions →
+macOS app (.dmg) → Run workflow*) and keeps it as a downloadable artifact
+(`.github/workflows/macos-dmg.yml`). Nothing is published automatically.
 
 Installing and using it: see *Desktop app* in the [main README](../README.md#desktop-app-windows-11-x64-and-macos-apple-silicon).
 

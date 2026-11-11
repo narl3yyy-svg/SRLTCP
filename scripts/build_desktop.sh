@@ -2,6 +2,7 @@
 # Build the SRLTCP desktop apps (on Linux, macOS or Windows/WSL):
 #   desktop/dist/SRLTCP-<version>-windows-x64-setup.exe   (Windows 10/11, x64)
 #   desktop/dist/SRLTCP-<version>-macos-arm64.zip         (macOS 12+, Apple silicon)
+#   desktop/dist/SRLTCP-<version>-macos-arm64.dmg         (same app as a disk image; built on a Mac)
 #
 #   bash scripts/build_desktop.sh            # both
 #   bash scripts/build_desktop.sh win        # only Windows
@@ -48,4 +49,17 @@ if [[ "$WHAT" == "all" || "$WHAT" == "mac" ]]; then
   rm -f "$ZIP"
   (cd dist/mac-arm64 && zip -qry "../$(basename "$ZIP")" SRLTCP.app)  # (-y: keep the frameworks' symlinks)
   echo "[desktop] $ZIP"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    # Disk image: SRLTCP.app next to a link to Applications (drag to install).
+    DMG="dist/SRLTCP-$VERSION-macos-arm64.dmg"
+    STAGE="$(mktemp -d)"
+    cp -R "$APP" "$STAGE/"
+    ln -s /Applications "$STAGE/Applications"
+    rm -f "$DMG"
+    hdiutil create -volname "SRLTCP $VERSION" -srcfolder "$STAGE" -fs HFS+ \
+      -format UDZO -imagekey zlib-level=9 -ov "$DMG" >/dev/null
+    rm -rf "$STAGE"
+    hdiutil verify "$DMG" >/dev/null
+    echo "[desktop] $DMG"
+  fi
 fi
