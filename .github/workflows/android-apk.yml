@@ -1,0 +1,101 @@
+name: Android app (.apk)
+
+# Builds the release APK, signed with the SRLTCP release key from this
+# repository's secrets, and keeps it as a downloadable build artifact.
+# Every release is signed with the same key, so phones update in place.
+# Nothing is published: releases are made by hand.
+#
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   SRLTCP_KEYSTORE_BASE64    the release .jks file, base64-encoded
+#   SRLTCP_KEYSTORE_PASSWORD  its password
+on:
+  push:
+    branches: [main]
+    paths:
+      - "srltcp/**"
+      - "android/**"
+      - "scripts/build-android.sh"
+      - "scripts/sync-android-python.sh"
+      - "pyproject.toml"
+      - ".github/workflows/android-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # SHA-256 of the SRLTCP release certificate. An APK signed with any other
+  # key can't update the installed app, so the build fails instead.
+  RELEASE_CERT_SHA256: 2de840c8245314e6374132de08b2eb771a54912a0f8c6b11f0351ef3b631f101
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Version
+        id: version
+        run: |
+          v=$(python -c 'import re; print(re.search(r"__version__ = \"([^\"]+)\"", open("srltcp/__init__.py").read()).group(1))')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Release key
+        id: key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SRLTCP_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SRLTCP_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::warning::No APK built: add the repository secrets SRLTCP_KEYSTORE_BASE64 and SRLTCP_KEYSTORE_PASSWORD (see the top of this workflow), then run it again."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/srltcp-release.jks"
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build the signed APK
+        if: steps.key.outputs.ok == 'true'
+        env:
+          SRLTCP_KEYSTORE: ${{ runner.temp }}/srltcp-release.jks
+          SRLTCP_KEYSTORE_PASSWORD: ${{ secrets.SRLTCP_KEYSTORE_PASSWORD }}
+          SRLTCP_BUILD_PYTHON: python
+        run: bash scripts/build-android.sh
+
+      - name: Check the signature
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/SRLTCP-${{ steps.version.outputs.version }}.apk"
+          SIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$SIGNER" verify --print-certs "$APK" | tee certs.txt
+          grep -q "certificate SHA-256 digest: $RELEASE_CERT_SHA256" certs.txt
+          sha256sum "$APK" | tee "$APK.sha256"
+
+      - name: Remove the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/srltcp-release.jks"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.key.outputs.ok == 'true'
+        with:
+          name: SRLTCP-${{ steps.version.outputs.version }}-apk
+          path: |
+            android/app/build/outputs/apk/release/SRLTCP-${{ steps.version.outputs.version }}.apk
+            android/app/build/outputs/apk/release/SRLTCP-${{ steps.version.outputs.version }}.apk.sha256
+          if-no-files-found: error
+          retention-days: 30

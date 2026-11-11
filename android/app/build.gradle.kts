@@ -12,8 +12,8 @@ android {
         applicationId = "com.srltcp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 125
-        versionName = "0.17.1"
+        versionCode = 126
+        versionName = "0.17.2"
 
         ndk {
             // One APK for phones (arm64). For an emulator or Chromebook add
@@ -25,8 +25,30 @@ android {
         }
     }
 
+    // Release key: every APK since 0.17.1 is signed with the same key, so
+    // a new version installs over the old one (Android refuses an update
+    // signed with another key). The key never goes into the repository: it
+    // comes from the environment (a GitHub Actions secret, or a local file).
+    //   SRLTCP_KEYSTORE           path to the .jks file
+    //   SRLTCP_KEYSTORE_PASSWORD  its password (store and key)
+    //   SRLTCP_KEY_ALIAS          key alias (default "srltcp")
+    val releaseKeystore = System.getenv("SRLTCP_KEYSTORE")?.takeIf { it.isNotBlank() }?.let { file(it) }
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("srltcp") {
+                storeFile = releaseKeystore
+                storePassword = System.getenv("SRLTCP_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("SRLTCP_KEY_ALIAS") ?: "srltcp"
+                keyPassword = System.getenv("SRLTCP_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseKeystore != null) {
+                signingConfig = signingConfigs.getByName("srltcp")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -109,6 +131,12 @@ tasks.register("renameDebugApk") {
 
 tasks.register("renameReleaseApk") {
     dependsOn("assembleRelease")
+    doFirst {
+        check(System.getenv("SRLTCP_KEYSTORE")?.isNotBlank() == true) {
+            "Set SRLTCP_KEYSTORE (and SRLTCP_KEYSTORE_PASSWORD): release APKs must be signed " +
+                "with the SRLTCP release key, or phones can't update to them."
+        }
+    }
     doLast {
         val outDir = layout.buildDirectory.dir("outputs/apk/release").get().asFile
         val version = android.defaultConfig.versionName

@@ -36,9 +36,11 @@ on the device is encrypted too.
 </table>
 
 > [!NOTE]
-> **Version 0.17.1.** A phone on mobile data and a computer at home now connect
-> directly in seconds instead of minutes, and the network settings are simpler.
-> Update every device. See the [release notes](srltcp/RELEASE_NOTES.md).
+> **Version 0.17.2.** Settings are now one tap away, next to the clock, on
+> every device. From this version on, Android updates install over the
+> installed app. In 0.17.1: a phone on mobile data and a computer at home
+> connect directly in seconds instead of minutes, with simpler network
+> settings. Update every device. See the [release notes](srltcp/RELEASE_NOTES.md).
 
 ## Contents
 
@@ -55,10 +57,10 @@ Get the latest version from **[GitHub Releases](https://github.com/narl3yyy-svg/
 
 | Platform | Download | Requirements |
 |:--|:--|:--|
-| <img src="https://img.shields.io/badge/-Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows" /> | `SRLTCP-0.17.1-windows-x64-setup.exe` | Windows 10/11, x64 |
-| <img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" /> | `SRLTCP-0.17.1-macos-arm64.dmg` | macOS 12+, Apple silicon (M1 and newer) |
-| <img src="https://img.shields.io/badge/-Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android" /> | `SRLTCP-0.17.1.apk` | Android 8+ |
-| <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.1-source.zip` | Python 3.12+ ([from source](#installation)) |
+| <img src="https://img.shields.io/badge/-Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows" /> | `SRLTCP-0.17.2-windows-x64-setup.exe` | Windows 10/11, x64 |
+| <img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" /> | `SRLTCP-0.17.2-macos-arm64.dmg` | macOS 12+, Apple silicon (M1 and newer) |
+| <img src="https://img.shields.io/badge/-Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android" /> | `SRLTCP-0.17.2.apk` | Android 8+ |
+| <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.2-source.zip` | Python 3.12+ ([from source](#installation)) |
 
 Python and Tor are built into the Windows, macOS and Android apps: nothing else to install.
 
@@ -389,18 +391,30 @@ bash scripts/sync-android-python.sh          # copy srltcp/ into the APK tree
 cd android
 rm -rf app/build .gradle build               # remove old build artifacts
 ./gradlew clean
-./gradlew assembleDebug renameDebugApk
+./gradlew assembleDebug renameDebugApk        # development build
 ```
 
-Output: `android/app/build/outputs/apk/debug/SRLTCP-0.17.1.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
+Output: `android/app/build/outputs/apk/debug/SRLTCP-<version>.apk` (one APK for phones, arm64; add `-PsrltcpAbis=arm64-v8a,x86_64` for an emulator or Chromebook)
 
-**One-command build** (sync + Gradle): `bash scripts/build-android.sh`
+**Release APK (installs as an update).** Every released APK is signed with the
+same SRLTCP release key, so a new version installs over the old one with your
+data kept. The key is never in this repository: GitHub Actions signs with it
+from the repository's secrets ([Android APK workflow](.github/workflows/android-apk.yml)),
+or locally:
+
+```bash
+SRLTCP_KEYSTORE=/path/to/srltcp-release.jks SRLTCP_KEYSTORE_PASSWORD='…' bash scripts/build-android.sh
+# -> android/app/build/outputs/apk/release/SRLTCP-<version>.apk
+```
+
+A debug build (`bash scripts/build-android.sh debug`) is signed with a
+throwaway key and can't update a released app.
 
 **Install on a connected device**
 
 ```bash
 adb uninstall com.srltcp.app                 # optional — fresh install
-adb install -r android/app/build/outputs/apk/debug/SRLTCP-0.17.1.apk
+adb install -r android/app/build/outputs/apk/release/SRLTCP-<version>.apk
 adb shell am start -n com.srltcp.app/.MainActivity
 ```
 
@@ -782,6 +796,8 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 
 - [x] Phone on mobile data ↔ computer at home: direct in seconds, whatever Tor's delay (0.17.1)
 - [x] Simpler network settings: always the exact ports, no port forwarding or router port mapping at all (0.17.1)
+- [x] Android APKs signed with one release key: updates install over the installed app (0.17.2)
+- [x] Settings next to the clock on every device (0.17.2)
 
 **Done (v0.14–0.16)**
 
@@ -884,7 +900,6 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 - [ ] Faster direct UDP: native packet processing (batching, GSO) for >30 MB/s per phone
 - [ ] Reconnect directly after both apps restart without waiting for Tor (remember the last UDP addresses)
 - [ ] Bandwidth limiting and QoS per transfer
-- [ ] Signed APK releases with a stable release key (updates install over the old app)
 - [ ] Code-signed and notarized desktop apps (no SmartScreen / Gatekeeper warning); automatic updates
 
 ---

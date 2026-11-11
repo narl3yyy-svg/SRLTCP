@@ -606,7 +606,7 @@
     const el = $("#connection-status");
     if (!el) return;
     el.textContent = online ? "" : text;
-    el.classList.toggle("hidden", online);
+    $("#sidebar-header")?.classList.toggle("hidden", online);
   }
 
   function connectWs() {
@@ -1943,7 +1943,8 @@
 
   function applyClockVisibility() {
     const show = state.settings.show_clock !== false;
-    $("#header-clock-row")?.classList.toggle("hidden", !show);
+    // (The row stays: the settings cog lives there, left of the clock.)
+    $("#header-clock")?.classList.toggle("hidden", !show);
   }
 
   function closeContactMenu() {
@@ -5338,9 +5339,6 @@
   }
 
   $("#btn-settings")?.addEventListener("click", openSettingsFromMobile);
-  $("#btn-settings-top")?.addEventListener("click", openSettingsFromMobile);
-  $("#btn-settings-chat")?.addEventListener("click", openSettingsFromMobile);
-  $("#btn-settings-corner")?.addEventListener("click", openSettingsFromMobile);
   $("#btn-close-settings")?.addEventListener("click", closeSettings);
   $("#settings-window-overlay")?.addEventListener("click", closeSettings);
   $("#btn-menu")?.addEventListener("click", toggleSidebarMobile);

@@ -13,14 +13,14 @@
 <div class="wifi-signin hidden" id="wifi-signin" role="status">This Wi-Fi needs you to sign in before anything reaches the internet. <button type="button" id="btn-wifi-signin">Sign in</button></div>
 <!-- Sidebar -->
 <aside class="sidebar" id="sidebar">
-<div class="header-clock-row hidden" id="header-clock-row">
-<time id="header-clock" class="header-clock">—</time>
-</div>
-<div class="sidebar-header">
-<div class="conn-warning hidden" id="connection-status" role="status"></div>
-<button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
+<div class="header-clock-row" id="header-clock-row">
+<button class="icon-btn clock-settings" id="btn-settings" type="button" title="Settings" aria-label="Settings">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
 </button>
+<time id="header-clock" class="header-clock hidden">—</time>
+</div>
+<div class="sidebar-header hidden" id="sidebar-header">
+<div class="conn-warning" id="connection-status" role="status"></div>
 </div>
 <div class="me-card" id="me-card">
 <div class="avatar me-avatar" id="me-avatar">?</div>
@@ -65,17 +65,11 @@
 <!-- Main chat -->
 <main class="chat" id="chat-panel">
 <div class="chat-empty" id="chat-empty">
-<button class="icon-btn corner-settings" id="btn-settings-corner" type="button" title="Settings" aria-label="Settings">
-<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-</button>
 <header class="mobile-topbar mobile-only" id="mobile-topbar">
 <button class="icon-btn" id="btn-menu" type="button" title="Contacts &amp; peers" aria-label="Open contacts">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
 </button>
 <div class="mobile-topbar-title">SRLTCP</div>
-<button class="icon-btn" id="btn-settings-top" type="button" title="Settings" aria-label="Settings">
-<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-</button>
 </header>
 <div class="chat-empty-body">
 <div class="empty-illustration">
@@ -84,7 +78,7 @@
 <h2>Welcome to SRLTCP</h2>
 <p>Select a peer from the sidebar or click <strong>Announce</strong> to discover devices on your network.</p>
 <p class="hint">All messages are end-to-end encrypted.</p>
-<p class="hint mobile-only">Select a peer below to start chatting. Settings are in the sidebar header.</p>
+<p class="hint mobile-only">Select a peer below to start chatting. Settings: the cog next to the clock.</p>
 </div>
 </div>
 <div class="chat-active hidden" id="chat-active">
@@ -110,9 +104,6 @@
 </button>
 <button class="icon-btn" id="btn-call-video" type="button" title="Video call (end-to-end encrypted)" aria-label="Video call">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m23 7-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
-</button>
-<button class="icon-btn mobile-only desktop-settings" id="btn-settings-chat" type="button" title="Settings" aria-label="Settings">
-<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
 </button>
 <button class="icon-btn" id="btn-share-folder" title="Share folder (E2EE)">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>

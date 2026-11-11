@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Build a debug APK locally with Gradle + Chaquopy (no GitHub required).
+# Build the APK locally with Gradle + Chaquopy.
+#
+#   SRLTCP_KEYSTORE=/path/srltcp-release.jks SRLTCP_KEYSTORE_PASSWORD=... bash scripts/build-android.sh
+#       -> release APK signed with the SRLTCP release key (installs as an update)
+#   bash scripts/build-android.sh debug
+#       -> debug APK (development only: phones with a release build can't update to it)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,9 +36,18 @@ if [[ ! -x ./gradlew ]]; then
   exit 1
 fi
 
-./gradlew assembleDebug renameDebugApk
-
-APK=$(ls "$ROOT"/android/app/build/outputs/apk/debug/SRLTCP-*.apk 2>/dev/null | head -1)
+if [[ "${1:-release}" == "debug" ]]; then
+  ./gradlew assembleDebug renameDebugApk
+  APK=$(ls "$ROOT"/android/app/build/outputs/apk/debug/SRLTCP-*.apk 2>/dev/null | head -1)
+else
+  if [[ -z "${SRLTCP_KEYSTORE:-}" || ! -f "$SRLTCP_KEYSTORE" || -z "${SRLTCP_KEYSTORE_PASSWORD:-}" ]]; then
+    echo "Release APKs must be signed with the SRLTCP release key: set SRLTCP_KEYSTORE" >&2
+    echo "(the .jks file) and SRLTCP_KEYSTORE_PASSWORD. For a development build: $0 debug" >&2
+    exit 1
+  fi
+  ./gradlew assembleRelease renameReleaseApk
+  APK=$(ls "$ROOT"/android/app/build/outputs/apk/release/SRLTCP-*.apk 2>/dev/null | head -1)
+fi
 echo ""
 echo "Build complete:"
 ls -lh "${APK:-$ROOT/android/app/build/outputs/apk/debug/}"

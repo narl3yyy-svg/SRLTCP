@@ -1,5 +1,28 @@
 # SRLTCP Release Notes
 
+## v0.17.2 (2026-11-11)
+
+### Android: updates install over the app
+- **From this version on, a new SRLTCP installs as an update**, keeping your
+  identity, contacts and chats. Until now each APK was signed with a
+  different throwaway build key, and Android refuses an update signed with
+  another key: you had to uninstall first. Every APK is now signed with one
+  permanent SRLTCP release key (the same one as 0.17.1, so 0.17.1 updates to
+  this version in place).
+- **Release builds.** The APK is now a release build instead of a debug
+  build. A debug build lets anyone with the phone unlocked in developer mode
+  and a USB cable inspect the app's page (and so your chats) from a
+  computer; a release build doesn't.
+
+### Settings next to the clock, on every device
+- The **settings cog is at the top, just left of the clock**, on Windows,
+  macOS, Android and in a browser. It's always there, also with the clock
+  turned off.
+- Removed from the icons in a chat's header, from the corner of the welcome
+  screen and from the phone's top bar.
+- Android: your name and ID come right below the clock, without the empty
+  space above them.
+
 ## v0.17.1 (2026-11-11)
 
 ### Home network ↔ mobile data: direct in seconds, not minutes
