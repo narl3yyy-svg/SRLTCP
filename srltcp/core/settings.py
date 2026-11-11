@@ -89,7 +89,6 @@ class AppSettings:
     web_port: int = WEB_PORT
     tcp_port: int = DEFAULT_TCP_PORT
     discovery_port: int = DISCOVERY_PORT
-    strict_ports: bool = True
     message_retention_hours: int = 168
     message_retention_preset: str = "1w"
     incoming_files_dir: str = ""
@@ -106,18 +105,9 @@ class AppSettings:
     show_clock: bool = True
     clock_source: str = "system"
     ntp_server: str = "pool.ntp.org"
-    wan_expose_port: bool = False
-    # You forward UDP 7828 (the direct-connection port) to this device on your
-    # router, with a fixed ("static") outgoing port: needed behind OPNsense /
-    # pfSense, which change ports. SRLTCP then stays on that port and offers it.
-    udp_forwarded: bool = False
     # Direct connections across networks (hole punching). Shares your public
     # address with your contacts (only them, inside the encrypted session).
     direct_internet: bool = True
-    # Ask the home router (UPnP / NAT-PMP) to forward our UDP port while on
-    # Wi-Fi: lets a phone on mobile data connect to this one directly. Off
-    # unless you switch it on: it lets packets from the internet reach the port.
-    router_port_mapping: bool = False
     # STUN servers for direct UDP connections ("host:port, ..."; empty =
     # Google's and Cloudflare's public ones). They learn your IP address.
     stun_servers: str = ""
@@ -127,7 +117,7 @@ class AppSettings:
     tor_path: str = ""
     # Quiet networks (work, school…): networks, as "10.20.0.0/16, …", where
     # SRLTCP uses none of its internet features (no Tor, no STUN, no direct
-    # connections across networks, no router port mapping). Same Wi-Fi/VPN
+    # connections across networks). Same Wi-Fi/VPN
     # contacts and the radio still work.
     quiet_networks: str = ""
     # Re-encode photos before sending (smaller, and without location data).

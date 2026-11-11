@@ -17,13 +17,7 @@
 <time id="header-clock" class="header-clock">—</time>
 </div>
 <div class="sidebar-header">
-<div class="brand">
-<div class="brand-icon">SR</div>
-<div>
-<div class="brand-title">SRLTCP</div>
-<div class="brand-sub" id="connection-status">Connecting…</div>
-</div>
-</div>
+<div class="conn-warning hidden" id="connection-status" role="status"></div>
 <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
 </button>
@@ -71,6 +65,9 @@
 <!-- Main chat -->
 <main class="chat" id="chat-panel">
 <div class="chat-empty" id="chat-empty">
+<button class="icon-btn corner-settings" id="btn-settings-corner" type="button" title="Settings" aria-label="Settings">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+</button>
 <header class="mobile-topbar mobile-only" id="mobile-topbar">
 <button class="icon-btn" id="btn-menu" type="button" title="Contacts &amp; peers" aria-label="Open contacts">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -114,7 +111,7 @@
 <button class="icon-btn" id="btn-call-video" type="button" title="Video call (end-to-end encrypted)" aria-label="Video call">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m23 7-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
 </button>
-<button class="icon-btn mobile-only" id="btn-settings-chat" type="button" title="Settings" aria-label="Settings">
+<button class="icon-btn mobile-only desktop-settings" id="btn-settings-chat" type="button" title="Settings" aria-label="Settings">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
 </button>
 <button class="icon-btn" id="btn-share-folder" title="Share folder (E2EE)">
@@ -265,7 +262,7 @@
 </fieldset>
 </div>
 <div class="settings-panel" data-panel="network">
-<p class="hint">Most people never need to change anything here. SRLTCP connects phones straight to each other — no relays, no servers in between: same Wi-Fi or VPN first, otherwise directly across the internet (IPv4 through carrier NAT, and IPv6). Tor only helps two phones on different networks find each other and swap addresses; nothing you send goes over it. SRLTCP only ever contacts your contacts: if one doesn't answer for 2 minutes it stops trying until you open their chat, send them something, change networks or restart the app — and they can still reach you (messages and calls come through).</p>
+<p class="hint">Most people never need to change anything here. SRLTCP picks the best route to your trusted contacts by itself — no relays, no servers in between, no port forwarding: same Wi-Fi or VPN first, otherwise directly across the internet (IPv4 through NAT, and IPv6). Tor only helps two phones on different networks find each other and swap addresses; nothing you send goes over it. SRLTCP only ever contacts your contacts: if one doesn't answer for 2 minutes it stops trying until you open their chat, send them something, change networks or restart the app — and they can still reach you (messages and calls come through).</p>
 <fieldset class="net-settings">
 <legend>Over the internet</legend>
 <label class="field checkbox-field">
@@ -273,11 +270,6 @@
 <span>Direct internet connections</span>
 </label>
 <small class="field-hint">Phone to phone across networks (two mobile carriers, mobile data and a home Wi-Fi): the devices connect straight to each other over UDP, the way video calls do. No port forwarding. Your public IP address is shared only with your contacts, inside the encrypted connection, and a STUN server (below) learns it too; your network sees which IP you talk to. Off = only the same Wi-Fi or VPN: contacts never see your IP.</small>
-<label class="field checkbox-field">
-<input type="checkbox" id="set-router-port-mapping" />
-<span>Open a port on my home router (UPnP / NAT-PMP)</span>
-</label>
-<small class="field-hint">Off by default. On Wi-Fi, asks your router (UPnP / NAT-PMP, as game consoles and video-call apps do) to forward this device's UDP port from the internet. Turn it on only if a contact on mobile data can't connect to you directly at home. Only your own router is asked; packets from the internet can then reach that port, which answers only your contacts' encrypted packets, and the mapping is removed when the app stops. Security software may report the UPnP traffic.</small>
 <label class="field">
 <span>STUN servers</span>
 <input type="text" id="set-stun-servers" placeholder="Default: Google and Cloudflare" autocomplete="off" spellcheck="false" />
@@ -292,7 +284,7 @@
 <label class="field">
 <span>Quiet networks (work, school…)</span>
 <input type="text" id="set-quiet-networks" placeholder="None — e.g. 10.20.0.0/16" autocomplete="off" spellcheck="false" />
-<small>While you're on one of these networks SRLTCP uses none of its internet features: no Tor, no STUN, no direct connections across networks, no router port mapping — nothing a company firewall or antivirus would flag. Contacts on the same Wi-Fi or VPN, and the radio, still work. Networks as <code>address/size</code> separated by commas.</small>
+<small>While you're on one of these networks SRLTCP uses none of its internet features: no Tor, no STUN, no direct connections across networks — nothing a company firewall or antivirus would flag. Contacts on the same Wi-Fi or VPN, and the radio, still work. Networks as <code>address/size</code> separated by commas.</small>
 <button type="button" class="action-btn small" id="btn-quiet-here">Make the network I'm on quiet</button>
 </label>
 <button type="button" class="action-btn small hidden" id="tor-new-address">New Tor address</button>
@@ -318,32 +310,18 @@
 <label class="field">
 <span>TCP peer port</span>
 <input type="number" id="set-tcp-port" min="1024" max="65535" />
-<small>Default 7825 — where contacts connect. Use the same on every device. Restart required. Direct internet connections use this port + 3.</small>
+<small>Default 7825 — where contacts connect. Use the same on every device. Restart required. Direct internet connections use UDP on this port + 3 to + 6 (7828–7831). SRLTCP always uses exactly these ports: no port forwarding or router setup is needed.</small>
 </label>
 <label class="field">
 <span>UDP discovery port</span>
 <input type="number" id="set-discovery-port" min="1024" max="65535" />
 <small>Default 7826 — finding devices on the LAN/VPN. Use the same on every device. Restart required.</small>
 </label>
-<label class="field checkbox-field">
-<input type="checkbox" id="set-strict-ports" checked />
-<span>Use exact ports (fail if busy instead of trying the next free one)</span>
-</label>
 <label class="field pc-only">
 <span>Tor program (PC only, optional)</span>
 <input type="text" id="set-tor-path" placeholder="Found automatically (Tor Browser, Tor Expert Bundle, tor on PATH) — or paste the path of tor / tor.exe or its folder" spellcheck="false" />
 <small>Full path to tor.exe if it's somewhere unusual, e.g. <code>C:\Tor\tor\tor.exe</code>.</small>
 </label>
-<label class="field checkbox-field">
-<input type="checkbox" id="set-wan-expose" />
-<span>I port-forward TCP 7825 on my router (optional; direct connections work without it)</span>
-</label>
-<small class="field-hint">Off: the TCP port only accepts connections from your own network (and VPN) and from your contacts' known addresses — strangers on the internet are turned away before anything is read.</small>
-<label class="field checkbox-field">
-<input type="checkbox" id="set-udp-forwarded" />
-<span>I forward UDP 7828 to this device (with a static outgoing port)</span>
-</label>
-<small class="field-hint">For routers that change ports, like OPNsense and pfSense, where a phone on mobile data otherwise can't connect directly (the chat stays on CONNECTING). On the router: an outbound NAT rule with "Static port" for this device's UDP 7828, and a port forward of WAN UDP 7828 to it — see docs/NETWORKING.md. SRLTCP then stays on that port and gives contacts your public address with it. Only contacts' encrypted packets are answered.</small>
 </details>
 </div>
 <div class="settings-panel" data-panel="serial">

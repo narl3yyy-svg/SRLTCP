@@ -84,12 +84,9 @@ class NodeConfig:
     bind_host: str = "0.0.0.0"
     tcp_port: int = 7825
     discovery_port: int = DISCOVERY_PORT
-    strict_ports: bool = True
+    strict_ports: bool = True  # exactly these ports (never another one if busy)
     direct_internet: bool = True  # hole punching; shares public IP with contacts
-    router_port_mapping: bool = False  # UPnP / NAT-PMP on the home router (portmap.py)
     quiet_networks: str = ""  # networks with no internet features ("10.20.0.0/16, ...")
-    accept_internet: bool = False  # any internet address may connect (you port-forward 7825)
-    udp_forwarded: bool = False  # you forward UDP 7828 here with a static port (OPNsense/pfSense)
     stun_servers: str = ""  # for direct UDP ("host:port, ..."; empty = defaults)
     tor_enabled: bool = False  # reach contacts over Tor (onion service)
     tor_path: str = ""  # tor executable on a PC (empty: find it)
@@ -271,7 +268,6 @@ class MessagingBackend(
         self._reconnect_tasks.clear()
         await self.stop_transfers()
         self._pending_handshakes.clear()
-        await self.port_mapper.close()  # (the router forwards nothing for us once we're gone)
         self.stop_udp()
         if self.tcp_transport:
             log.info(
@@ -389,8 +385,6 @@ class MessagingBackend(
             return True
         if addr.version == 4 and addr in ipaddress.ip_network("100.64.0.0/10"):
             return True  # carrier-grade NAT / Tailscale space (not the internet)
-        if getattr(self.config, "accept_internet", False):
-            return True  # "I port-forward TCP 7825" (Settings): anyone may connect
         known: list[str] = []
         for peer in self.trusted.list_peers():
             if peer.blocked:

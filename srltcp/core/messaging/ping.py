@@ -68,7 +68,6 @@ class PingMixin:
                     log.debug("Stale offer check failed: %s", exc)
                 try:
                     await self.maintain_paths()  # Tor-only sessions → direct
-                    self.kick_port_mapping()  # (renewal, new Wi-Fi; cheap when current)
                 except Exception as exc:  # noqa: BLE001 - keep the loop alive
                     log.debug("Path check failed: %s", exc)
                 if tick:
@@ -110,7 +109,6 @@ class PingMixin:
                     quiet = now_quiet
                     log.info("On a quiet network now" if quiet else "Left the quiet network")
                     await self.tor_settings_changed()
-                    await self.port_mapping_changed()
             if last and ips != last and self.tcp_transport:
                 for hash_id, link in list(self._links.items()):
                     if link.transport != "tcp":

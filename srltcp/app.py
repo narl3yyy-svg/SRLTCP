@@ -104,12 +104,9 @@ def _node_config_from_settings(settings: AppSettings, args: argparse.Namespace) 
         bind_host=args.bind,
         tcp_port=tcp_port,
         discovery_port=discovery_port,
-        strict_ports=settings.strict_ports,
+        strict_ports=True,  # the ports in Settings, never others
         direct_internet=settings.direct_internet,
-        router_port_mapping=settings.router_port_mapping,
         quiet_networks=settings.quiet_networks,
-        accept_internet=settings.wan_expose_port,
-        udp_forwarded=settings.udp_forwarded,
         stun_servers=settings.stun_servers,
         tor_enabled=settings.tor_enabled,
         tor_path=settings.tor_path,
@@ -142,9 +139,6 @@ async def run_web(args: argparse.Namespace) -> None:
     migrate_settings(settings, android=is_android())
     settings.version = __version__
 
-    if is_android():
-        settings.strict_ports = False
-
     requested_web_port = args.port or settings.web_port or WEB_PORT
     if args.name:
         settings.display_name = args.name
@@ -174,7 +168,9 @@ async def run_web(args: argparse.Namespace) -> None:
         node,
         host="127.0.0.1",
         port=requested_web_port,
-        strict=settings.strict_ports,
+        # (The local page only: on Android a previous copy of the app can
+        # still hold its port for a moment.)
+        strict=not is_android(),
     )
     web_holder["runner"] = runner
     web_holder["site"] = site
@@ -255,11 +251,9 @@ def migrate_settings(settings: AppSettings, *, android: bool) -> bool:
     if settings.setup_complete and old < (0, 3, 0) and android and settings.lan_ip:
         settings.lan_ip = ""
         changed = True
-    # 0.15: nothing announces itself automatically, and the router is only
-    # asked to open a port if you switch that on again.
-    if old < (0, 15, 0) and (settings.auto_announce or settings.router_port_mapping):
+    # 0.15: nothing announces itself automatically.
+    if old < (0, 15, 0) and settings.auto_announce:
         settings.auto_announce = False
-        settings.router_port_mapping = False
         changed = True
     return changed
 

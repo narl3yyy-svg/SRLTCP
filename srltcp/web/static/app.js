@@ -602,10 +602,11 @@
   }
 
   function setConnectionStatus(text, online = false) {
+    // Only shown while the app can't reach its own background service.
     const el = $("#connection-status");
     if (!el) return;
-    el.textContent = text;
-    el.classList.toggle("online", online);
+    el.textContent = online ? "" : text;
+    el.classList.toggle("hidden", online);
   }
 
   function connectWs() {
@@ -2990,12 +2991,10 @@
     setInputValue("set-web-port", String(settings.web_port || 9876));
     setInputValue("set-tcp-port", String(settings.tcp_port || 7825));
     setInputValue("set-discovery-port", String(settings.discovery_port || 7826));
-    setCheckbox("set-strict-ports", settings.strict_ports !== false);
     setSelectValue("set-retention", settings.message_retention_preset || "1w");
     setInputValue("set-incoming", settings.incoming_files_dir || "");
     setInputValue("set-shared", settings.shared_folder || "");
     setCheckbox("set-direct-internet", settings.direct_internet !== false);
-    setCheckbox("set-router-port-mapping", !!settings.router_port_mapping);
     setInputValue("set-quiet-networks", settings.quiet_networks || "");
     setInputValue("set-stun-servers", settings.stun_servers || "");
     setCheckbox("set-tor-enabled", settings.tor_enabled !== false);
@@ -3005,8 +3004,6 @@
     setSelectValue("set-auto-download-radio", String(settings.auto_download_radio_mb ?? 2));
     refreshPhonePrivacy();
     setInputValue("set-tor-path", settings.tor_path || "");
-    setCheckbox("set-wan-expose", !!settings.wan_expose_port);
-    setCheckbox("set-udp-forwarded", !!settings.udp_forwarded);
     setCheckbox("set-enable-serial", !!settings.enable_serial);
     loadSerialSettings(settings.serial_port || "", settings.serial_baud || 57600);
     const tzEl = $("#set-timezone");
@@ -3039,7 +3036,7 @@
       state.transportStatus = state.settings.transports;
       delete state.settings.transports;
     }
-    const portsChanged = ["web_port", "tcp_port", "discovery_port", "strict_ports"].some(
+    const portsChanged = ["web_port", "tcp_port", "discovery_port"].some(
       (k) => prev[k] !== state.settings[k]
     );
     if (portsChanged) {
@@ -5343,6 +5340,7 @@
   $("#btn-settings")?.addEventListener("click", openSettingsFromMobile);
   $("#btn-settings-top")?.addEventListener("click", openSettingsFromMobile);
   $("#btn-settings-chat")?.addEventListener("click", openSettingsFromMobile);
+  $("#btn-settings-corner")?.addEventListener("click", openSettingsFromMobile);
   $("#btn-close-settings")?.addEventListener("click", closeSettings);
   $("#settings-window-overlay")?.addEventListener("click", closeSettings);
   $("#btn-menu")?.addEventListener("click", toggleSidebarMobile);
@@ -5455,13 +5453,11 @@
       web_port: parseInt($(`#${prefix}-web-port`)?.value || "9876", 10),
       tcp_port: parseInt($("#set-tcp-port")?.value || "7825", 10),
       discovery_port: parseInt($("#set-discovery-port")?.value || "7826", 10),
-      strict_ports: $("#set-strict-ports")?.checked !== false,
       message_retention_preset: $(`#${prefix}-retention`)?.value || "1w",
       incoming_files_dir: $(`#${prefix}-incoming`)?.value.trim() || "",
       shared_folder: $(`#${prefix}-shared`)?.value.trim() || "",
       lan_ip: $(`#${prefix}-lan-ip`)?.value || "",
       direct_internet: $("#set-direct-internet")?.checked ?? true,
-      router_port_mapping: $("#set-router-port-mapping")?.checked || false,
       quiet_networks: ($("#set-quiet-networks")?.value || "").trim(),
       stun_servers: ($("#set-stun-servers")?.value || "").trim(),
       tor_enabled: $("#set-tor-enabled")?.checked ?? true,
@@ -5470,8 +5466,6 @@
       auto_download_mb: parseInt($("#set-auto-download")?.value || "2048", 10),
       auto_download_radio_mb: parseInt($("#set-auto-download-radio")?.value || "2", 10),
       tor_path: ($("#set-tor-path")?.value || "").trim(),
-      wan_expose_port: $("#set-wan-expose")?.checked || false,
-      udp_forwarded: $("#set-udp-forwarded")?.checked || false,
       handshake_protocol: "identity",
       enable_serial: $("#set-enable-serial")?.checked || false,
       serial_port: $("#set-serial-port")?.value || "",

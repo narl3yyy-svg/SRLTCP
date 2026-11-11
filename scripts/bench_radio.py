@@ -53,10 +53,8 @@ async def run(radio: str, kb: int, *, hotplug: bool = False, seed: int = 7) -> d
     android_serial._bridge = lambda: bridge  # type: ignore[assignment]
     tmp = Path(tempfile.mkdtemp())
     baud = RADIOS[radio].baud
-    a = make_node(tmp, "alice", enable_serial=True, serial_port=PORTS[0], serial_baud=baud,
-                  router_port_mapping=False)
-    b = make_node(tmp, "bob", enable_serial=True, serial_port=PORTS[1], serial_baud=baud,
-                  router_port_mapping=False)
+    a = make_node(tmp, "alice", enable_serial=True, serial_port=PORTS[0], serial_baud=baud)
+    b = make_node(tmp, "bob", enable_serial=True, serial_port=PORTS[1], serial_baud=baud)
     out: dict[str, Any] = {"radio": radio}
     await a.start()
     await b.start()

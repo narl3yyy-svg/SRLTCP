@@ -11,12 +11,12 @@ def test_settings_defaults(tmp_path: Path) -> None:
     store = SettingsStore(path=tmp_path / "settings.json")
     settings = store.load()
     assert settings.auto_announce is False  # (devices are found by hand only)
-    assert settings.router_port_mapping is False  # (only if you switch it on)
     assert settings.tor_enabled is True
     assert settings.version == "0.17.1"
     assert settings.tcp_port == 7825
     assert settings.discovery_port == 7826
-    assert settings.strict_ports is True
+    for removed in ("strict_ports", "router_port_mapping", "udp_forwarded", "wan_expose_port"):
+        assert not hasattr(settings, removed)  # (0.17.1: always exact ports, no forwarding)
     assert settings.serial_baud == 57600
     assert settings.message_retention_hours == 168
 
@@ -63,16 +63,19 @@ def test_handshake_protocol_persist(tmp_path: Path) -> None:
     assert loaded.handshake_protocol == "noise_xx"
 
 
-def test_wan_expose_port_persist(tmp_path: Path) -> None:
-    store = SettingsStore(path=tmp_path / "settings.json")
-    settings = store.load()
-    settings.wan_expose_port = True
-    store.save(settings)
-    loaded = store.load()
-    assert loaded.wan_expose_port is True
+def test_removed_network_options_in_old_files_are_ignored(tmp_path: Path) -> None:
+    import json
+
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({
+        "strict_ports": False, "router_port_mapping": True, "udp_forwarded": True,
+        "wan_expose_port": True, "tcp_port": 7825,
+    }))
+    settings = SettingsStore(path=path).load()
+    assert settings.tcp_port == 7825 and not hasattr(settings, "router_port_mapping")
 
 
-def test_upgrade_migration_unpins_ip_and_turns_off_announce_and_port_mapping() -> None:
+def test_upgrade_migration_unpins_ip_and_turns_off_announce() -> None:
     from srltcp.app import migrate_settings
     from srltcp.core.settings import AppSettings
 
@@ -83,13 +86,9 @@ def test_upgrade_migration_unpins_ip_and_turns_off_announce_and_port_mapping() -
     assert migrate_settings(old, android=True)
     assert old.lan_ip == "" and old.auto_announce is False
 
-    upgrade = AppSettings(setup_complete=True, version="0.14.9", auto_announce=True,
-                          router_port_mapping=True)
+    upgrade = AppSettings(setup_complete=True, version="0.14.9", auto_announce=True)
     assert migrate_settings(upgrade, android=False)
-    assert upgrade.auto_announce is False and upgrade.router_port_mapping is False
-    fresh = AppSettings(setup_complete=True, version="0.15.0", router_port_mapping=True)
-    assert not migrate_settings(fresh, android=False)  # (switched on again later: kept)
-    assert fresh.router_port_mapping is True
+    assert upgrade.auto_announce is False
 
     desktop = make("0.2.0", "192.168.1.20")
     assert not migrate_settings(desktop, android=False)

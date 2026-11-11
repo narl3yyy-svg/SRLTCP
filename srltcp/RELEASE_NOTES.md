@@ -1,19 +1,49 @@
 # SRLTCP Release Notes
 
-## v0.17.1 (2026-11-10)
+## v0.17.1 (2026-11-11)
 
-- **SRLTCP uses only UDP ports 7828–7831 for direct connections.** It starts
-  on 7828 and, when it needs a fresh port after a failed attempt, takes the
-  next one of the four instead of a random port. So a router or firewall
-  rule can name just these ports: on OPNsense / pfSense, the static-port
-  Source NAT rule can use *Source port 7828–7831* instead of *any*, and
-  the rest of the computer's traffic keeps the router's normal behaviour.
-  Only if all four are taken (two copies of SRLTCP on one computer) does it
-  use another port, and the log says so.
-- Fixed: after moving to a fresh port, the endpoint still reported the old
-  port number internally.
-- Check connection's router tip uses OPNsense's current menu names
-  (*Firewall → NAT → Source NAT*) and the port range.
+### Home network ↔ mobile data: direct in seconds, not minutes
+- **The bug:** a computer at home and a phone on mobile data found each other
+  over Tor at once, but stayed on **CONNECTING** for 2 minutes or more before
+  switching to **DIRECT**. The setup messages go over Tor, which takes 1–4 s
+  each way. The answering device started its own probes 1 s after answering,
+  so they reached the other side's router before that side had sent
+  anything, and the router then gave it a different port. Each attempt was
+  also only 4 s long. So every attempt failed while Tor was slow, and the
+  retries backed off to 15, 30, 60 and 120 s.
+- **The fix:** the answering device opens its own NAT, listens, and starts
+  probing only when the other side says over Tor that it has started. Both
+  keep probing for 10 s. In a test with 2.5 s of Tor delay per message, the
+  direct connection now comes up about 5 s after Tor connects. Before, it
+  hadn't connected after 4 minutes.
+- Failed attempts are retried sooner (after 3 s, then 5, 10, 20, 30 and
+  60 s). An answer lost on Tor holds up the next attempt for at most 30 s
+  instead of 120 s.
+- Both devices should update. A device on 0.17.1 still connects to older
+  versions the old way.
+
+### Simpler network settings: no port forwarding, ever
+SRLTCP picks the best route to your trusted contacts by itself. Removed from
+*Settings → Network*:
+- **Use exact ports.** SRLTCP now always uses exactly the ports in Settings
+  (TCP 7825, discovery 7826, UDP 7828–7831) and never moves to other ports.
+  If one is busy it says so.
+- **I port-forward TCP 7825.** TCP 7825 only accepts your own networks and
+  your contacts' known addresses. There is no way to open it to everyone.
+- **I forward UDP 7828 to this device.**
+- **Open a port on my home router (UPnP / NAT-PMP).** SRLTCP never asks a
+  router to open anything, so there is no UPnP or NAT-PMP traffic at all.
+
+Old settings files still load; the removed options are ignored.
+
+### Cleaner look
+- The **SRLTCP / Connected** block at the top left is gone. A short
+  *Reconnecting…* notice appears there only if the app loses its own
+  background service.
+- **Desktop app (Windows, macOS):** the settings cog moved from the sidebar to
+  the top right: in the chat header, or in the corner of the welcome screen.
+  Android keeps its cog in the sidebar.
+- The README was rewritten.
 
 ## v0.17.0 (2026-11-10)
 

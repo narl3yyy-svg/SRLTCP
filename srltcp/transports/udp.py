@@ -420,6 +420,7 @@ class UdpConnection:
         self._next_skip = SKIP_MIN + secrets.randbelow(SKIP_SPREAD)
         self._remote_rx = 0.0
         self.punch: _PunchState | None = None
+        self.superseded = False  # a newer punch round for this contact replaced this one
         # Birthday punch (one side behind a strict NAT that picks a new port
         # for every destination): that side probes from many extra sockets,
         # the other probes many random ports of its address.
@@ -1347,12 +1348,14 @@ class UdpEndpoint:
             socks = await self._open(port, strict=True)
             if socks:
                 break
-        if not socks:
-            if self.port_range():
-                first, last = self.port_range()[0], self.port_range()[-1]
-                log.warning("UDP ports %d-%d are all in use (another SRLTCP running?): "
-                            "using a random port", first, last)
-            socks = await self._open(0)
+        if not socks and self.port_range():
+            # Exactly SRLTCP's ports, never another one (Settings → Network).
+            first, last = self.port_range()[0], self.port_range()[-1]
+            log.warning("UDP ports %d-%d are all in use (another SRLTCP running?): "
+                        "direct connections across networks are off until one is free",
+                        first, last)
+        elif not socks:
+            socks = await self._open(0)  # (no port configured: tests, CLI send)
         self._socks = socks
         self.ports = {f: _port_of(t) for f, t in self._socks.items()}
         self.port = next(iter(self.ports.values()), 0)
@@ -1537,10 +1540,15 @@ class UdpEndpoint:
         *,
         delay: float = 0.0,
         hops: tuple[int, ...] = PRIME_HOPS,
+        go: asyncio.Event | None = None,
     ) -> bool:
         """Probe every candidate until one answers (authenticated) or the
-        window closes. ``delay``: the answering side waits that long after
-        priming, so its probes never reach the other NAT first. Only the
+        window closes. ``delay``: the answering side waits up to that long
+        after priming before its own probes (so they never reach the other
+        NAT before that NAT has sent anything: it would then give the other
+        side a different port), or until ``go`` is set — the leader says over
+        Tor that it has started. Meanwhile it listens (the leader's probes
+        come through our primed NAT) and re-primes every second. Only the
         contact's own addresses are probed, a few packets a second (never
         random ports: nothing that looks like a scan)."""
         usable = [
@@ -1552,16 +1560,29 @@ class UdpEndpoint:
             # Nothing of theirs we can dial (their address lookup failed), but
             # they can dial us (a forwarded port): wait for their probes.
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(conn.opened.wait(), window)
+                await asyncio.wait_for(conn.opened.wait(), window + delay)
             if not conn.opened.is_set():
                 conn._shutdown()
                 return False
+            conn._send_packet(bytes([F_PING]), eliciting=True)  # (they learn we heard them)
             return not conn._closed
         self.prime(usable, hops, conn.socks)
         if delay:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(conn.opened.wait(), delay)
-        if conn.opened.is_set():  # their probe already got through: answered by the ack
+            end = time.monotonic() + delay
+            primed = time.monotonic()
+            while not conn.opened.is_set() and not conn._closed and not (go and go.is_set()):
+                now = time.monotonic()
+                if now >= end:
+                    break
+                if now - primed >= 1.0:
+                    self.prime(usable, hops, conn.socks)  # (keep our NAT open towards them)
+                    primed = now
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(conn.opened.wait(), min(0.1, end - now))
+        if conn._closed:
+            return False
+        if conn.opened.is_set():  # their probe already got through: answer it
+            conn._send_packet(bytes([F_PING]), eliciting=True)
             return not conn._closed
         state = conn.start_probing(usable, time.monotonic() + window)
         ok = await state.done

@@ -470,3 +470,22 @@ def on_networks(nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network]) -> bo
         if any(addr.version == n.version and addr in n for n in nets):
             return True
     return False
+
+
+def home_lan_ipv4() -> list[str]:
+    """Our private IPv4 addresses on a Wi-Fi/Ethernet LAN (not mobile data, not
+    a VPN): where a home router can be."""
+    out = []
+    for iface in list_interfaces():
+        ip = str(iface.get("ip", ""))
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if (
+            addr.version == 4 and addr.is_private and not addr.is_loopback
+            and not addr.is_link_local and not is_cellular_interface(iface)
+            and not is_vpn_interface(iface) and addr not in ipaddress.ip_network("100.64.0.0/10")
+        ):
+            out.append(ip)
+    return out

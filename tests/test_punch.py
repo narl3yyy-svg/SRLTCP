@@ -360,9 +360,9 @@ async def test_tor_session_never_replaces_a_working_direct_one(tmp_path: Path) -
 
 def test_speed_advice_names_the_missing_piece(monkeypatch: Any) -> None:
     """Check connection explains why a contact on another network isn't direct."""
-    import srltcp.transports.portmap as portmap
+    import srltcp.utils.network as net_mod
 
-    monkeypatch.setattr(portmap, "home_lan_ipv4", lambda: [])  # (a phone on mobile data)
+    monkeypatch.setattr(net_mod, "home_lan_ipv4", lambda: [])  # (a phone on mobile data)
     peer = "a" * 32
     node = _Node(me="f" * 32, trusted={peer})
     node.config = SimpleNamespace(direct_internet=True)  # type: ignore[attr-defined]
@@ -378,7 +378,7 @@ def test_speed_advice_names_the_missing_piece(monkeypatch: Any) -> None:
     assert "block" in sp["reason"] and sp["their_ipv6"] and any("APN" in t for t in sp["tips"])
     # A PC at home behind a router that changes ports (OPNsense / pfSense):
     # the router fix, not tips for phones on mobile data.
-    monkeypatch.setattr(portmap, "home_lan_ipv4", lambda: ["10.0.60.5"])
+    monkeypatch.setattr(net_mod, "home_lan_ipv4", lambda: ["10.0.60.5"])
     node.udp = SimpleNamespace(  # type: ignore[assignment]
         symmetric=True, mapped={}, ports={}, stun_dns_blocked=False, mapped_at=0.0,
     )
@@ -564,29 +564,6 @@ async def test_a_dead_wifi_path_is_not_offered_again_at_once(tmp_path: Path) -> 
     assert not node._dead_path_until
 
 
-def test_a_forwarded_udp_port_is_offered_and_kept(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """Behind OPNsense / pfSense (a new port per destination) you forward UDP
-    7828 with a static port: SRLTCP offers public-IP:7828 and stays on it."""
-    import socket
-
-    from tests.test_e2e_nodes import make_node
-
-    node = make_node(tmp_path, "alice")
-
-    class FakeUdp:
-        mapped = {socket.AF_INET: ("68.108.133.82", 29503)}  # (the router changed the port)
-        ports = {socket.AF_INET: 7828}
-
-    node.udp = FakeUdp()  # type: ignore[assignment]
-    node.config.router_port_mapping = False
-    assert ("68.108.133.82", 7828) not in node.udp_candidates()
-    assert not node.fixed_udp_port()
-    node.config.udp_forwarded = True
-    cands = node.udp_candidates()
-    assert cands[0] == ("68.108.133.82", 7828) and ("68.108.133.82", 29503) in cands
-    assert node.fixed_udp_port()  # (no moving to a fresh port after a failed round)
-
-
 @pytest.mark.parametrize("phone_leads", [True, False])
 async def test_a_phone_without_a_public_address_reaches_a_forwarded_home(
     tmp_path: Path, monkeypatch: Any, phone_leads: bool
@@ -648,41 +625,17 @@ async def test_a_phone_without_a_public_address_reaches_a_forwarded_home(
         await b.stop()
 
 
-def test_port_mapping_without_a_router_answer_doesnt_pin_the_port() -> None:
-    """*Open a port on my home router* on, but the router has no UPnP /
-    NAT-PMP (OPNsense without the plugin) or we're on mobile data: no mapping
-    exists, so SRLTCP keeps moving to a fresh port after a failed round."""
-    import socket
-
-    from srltcp.transports.portmap import Mapping
-
-    node = _Node(me="f" * 32, trusted=set())
-    node.config = SimpleNamespace(direct_internet=True, router_port_mapping=True)  # type: ignore[attr-defined]
-    node.udp = SimpleNamespace(ports={socket.AF_INET: 7828}, mapped={})  # type: ignore[assignment]
-    assert node.port_mapping_enabled() and node.port_mapper.mapping is None
-    assert not node.fixed_udp_port()
-    async def release() -> None:
-        return None
-
-    node.port_mapper.mapping = Mapping("NAT-PMP", ("203.0.113.9", 7828), 7828, 0, 0.0, release)
-    assert node.fixed_udp_port()  # (a real forwarding: stay on it)
-    node.config.router_port_mapping = False  # type: ignore[attr-defined]
-    node.config.udp_forwarded = True  # type: ignore[attr-defined]
-    assert node.fixed_udp_port()
-
-
 def test_check_connection_shows_the_nat_type_and_router_fix_first(monkeypatch: Any) -> None:
     """Every device (the phone too) sees whether its NAT is easy or hard; a
-    PC behind OPNsense gets the router's own fix first, and the port-mapping
-    switch is called useless when the router doesn't answer it."""
+    PC behind OPNsense gets the router's own fix (IPv6 or a static port)."""
     import socket
 
-    import srltcp.transports.portmap as portmap
+    import srltcp.utils.network as net_mod
 
-    monkeypatch.setattr(portmap, "home_lan_ipv4", lambda: ["10.0.60.5"])
+    monkeypatch.setattr(net_mod, "home_lan_ipv4", lambda: ["10.0.60.5"])
     peer = "a" * 32
     node = _Node(me="f" * 32, trusted={peer})
-    node.config = SimpleNamespace(direct_internet=True, router_port_mapping=False)  # type: ignore[attr-defined]
+    node.config = SimpleNamespace(direct_internet=True)  # type: ignore[attr-defined]
     node.public_candidates = lambda: [("198.51.100.7", 7828)]  # type: ignore[method-assign]
     node._peer_udp[peer] = [("203.0.113.4", 40001)]
     node._punch_failures[peer] = 3
@@ -692,12 +645,8 @@ def test_check_connection_shows_the_nat_type_and_router_fix_first(monkeypatch: A
         stun_answers={socket.AF_INET: 3},
     )
     sp = node._speed_advice(peer, "tor")
-    assert sp["nat"] == "hard" and "Static port" in sp["tips"][0]
-    assert any("IPv6" in t for t in sp["tips"][1:2])
-    assert any("Open a port on my home router" in t for t in sp["tips"][2:])  # (later)
-    node.config.router_port_mapping = True  # type: ignore[attr-defined]
-    sp = node._speed_advice(peer, "tor")
-    assert any("turn it off" in t for t in sp["tips"])
+    assert sp["nat"] == "hard" and "Static port" in sp["tips"][0] and "IPv6" in sp["tips"][0]
+    assert not any("forward" in t.lower() or "UPnP" in t for t in sp["tips"])
     node.udp.symmetric = False
     assert node._speed_advice(peer, "tor")["nat"] == "easy"
     node.udp.stun_answers = {socket.AF_INET: 1}
@@ -732,7 +681,3 @@ async def test_check_connection_rechecks_a_hard_nat_from_a_fresh_port() -> None:
     assert calls == ["rotate"]
     await node.recheck_nat()  # easy now, checked long ago: just ask STUN again
     assert calls == ["rotate", "refresh"]
-    node.config.udp_forwarded = True  # type: ignore[attr-defined]
-    node.udp.symmetric = True  # type: ignore[attr-defined]
-    await node.recheck_nat()  # a forwarded port is never left behind
-    assert calls[-1] == "refresh"

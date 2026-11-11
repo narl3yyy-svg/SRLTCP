@@ -85,9 +85,7 @@ def test_internet_strangers_are_refused_contacts_addresses_allowed(tmp_path: Pat
                                  alt_hosts=["81.2.69.160", "2a00:1450:4001:80b::1"]))
     assert node._inbound_allowed("81.2.69.160")
     assert node._inbound_allowed("2a00:1450:4001:80b::abcd")  # (same /64: a privacy address)
-    assert not node._inbound_allowed("81.2.69.161")
-    node.config.accept_internet = True  # "I port-forward TCP 7825"
-    assert node._inbound_allowed("81.2.69.161")
+    assert not node._inbound_allowed("81.2.69.161")  # (strangers: never, nothing to switch on)
 
 
 def test_a_contact_that_doesnt_answer_is_left_alone_until_touched(  # type: ignore[no-untyped-def]
@@ -122,15 +120,14 @@ def test_quiet_networks_pause_tor_and_the_internet_features(  # type: ignore[no-
 ) -> None:
     import srltcp.utils.network as net
 
-    node = make_node(tmp_path, "alice", tor_enabled=True, router_port_mapping=True)
+    node = make_node(tmp_path, "alice", tor_enabled=True)
     node.tcp_transport = object()  # type: ignore[assignment]  (Tor needs the TCP side)
     monkeypatch.setattr(net, "list_interfaces",
                         lambda **_k: [{"ip": "10.20.3.4", "netmask": "255.255.0.0"}])
-    assert node.tor_enabled() and node.direct_internet_enabled() and node.port_mapping_enabled()
+    assert node.tor_enabled() and node.direct_internet_enabled()
     node.config.quiet_networks = "192.168.0.0/16, 10.20.0.0/16"
     assert node.on_quiet_network()
     assert not node.tor_enabled() and not node.direct_internet_enabled()
-    assert not node.port_mapping_enabled()
     assert node.tor_status()["quiet"] is True
     assert net.current_networks() == ["10.20.0.0/16"]
     node.config.quiet_networks = "192.168.0.0/16, not a network"

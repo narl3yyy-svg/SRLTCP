@@ -38,7 +38,6 @@ from typing import TYPE_CHECKING, Any
 
 from srltcp.core.protocol.messages import MessageType, decode_payload, encode_payload
 from srltcp.core.trusted import MAX_ALT_HOSTS
-from srltcp.transports.portmap import PortMapper
 from srltcp.transports.udp import (
     STUN_SERVERS,
     UdpConnection,
@@ -55,15 +54,25 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-PUNCH_WINDOW = 8.0  # seconds both sides keep dialing
-UDP_PUNCH_WINDOW = 4.0  # seconds both sides keep probing over UDP (it works within 1-2 s or not)
-UDP_RETRY_SOON = 4.0  # after a failed UDP round with a lower priming hop limit left
+PUNCH_WINDOW = 8.0  # seconds both sides keep dialing (TCP over IPv6)
+# Seconds each side keeps probing over UDP once it starts. Messages over Tor
+# take 1-4 s each way, so the windows must be long enough to overlap
+# whatever Tor's delay is (a few small packets a second; it stops at once
+# when it works).
+UDP_PUNCH_WINDOW = 10.0
+# The answering side waits (listening, its NAT primed) until the leader says
+# over Tor that it has started probing ("g"), at most this long. Probing
+# earlier would reach the leader's router before the leader has sent
+# anything, and many routers then give the leader a different port: the
+# round fails, and so did every round while Tor was slow.
+UDP_GO_WAIT = 12.0
+UDP_RETRY_SOON = 3.0  # after a failed UDP round with a lower priming hop limit left
 STUN_FRESH = 20.0  # re-ask STUN before a round if the answer is older (carrier NATs forget)
 PUNCH_ATTEMPT_TIMEOUT = 1.5
-PUNCH_FOLLOWER_DELAY = 1.0  # the answering side starts dialing a moment later
-PUNCH_ANSWER_EVERY = 6.0  # a contact can start at most one round this often (each is small)
-PUNCH_RETRY_EVERY = 120.0  # while only Tor connects us
-PUNCH_BACKOFF = (15.0, 30.0, 60.0, 120.0)  # after 1, 2, 3, 4+ failed rounds
+PUNCH_FOLLOWER_DELAY = 1.0  # (contacts on older versions: the answering side starts a moment later)
+PUNCH_ANSWER_EVERY = 3.0  # a contact can start at most one round this often (each is small)
+OFFER_TIMEOUT = 30.0  # an offer whose answer got lost (Tor) doesn't hold up the next round
+PUNCH_BACKOFF = (5.0, 10.0, 20.0, 30.0, 60.0)  # after 1, 2, 3, 4, 5+ failed rounds
 MAX_CANDIDATES = 6
 
 
@@ -169,10 +178,11 @@ class PunchMixin:
         self._udp_offers: dict[str, tuple[bytes, bytes, float]] = {}  # our secret, id, when
         self._prime_max: dict[str, int] = {}  # highest priming hop limit per contact
         self._punch_asked: dict[str, float] = {}
+        self._punch_go: dict[str, asyncio.Event] = {}  # follower: the leader started probing
+        self._punch_conn: dict[str, UdpConnection] = {}  # follower: this round's connection
         # Recent punch rounds per contact, for the connection report:
         # (when, IPv4 tried, IPv6 tried, outcome). No addresses.
         self._punch_log: dict[str, list[tuple[float, bool, bool, str]]] = {}
-        self.port_mapper = PortMapper()
 
     def _prime_hops(self: MessagingBackend, hash_id: str) -> tuple[int, ...]:
         return tuple(range(2, self._prime_max.get(hash_id, 4) + 1))
@@ -196,39 +206,8 @@ class PunchMixin:
         if not endpoint.families:
             return
         self.udp = endpoint
-        self.kick_port_mapping()
         if self.direct_internet_enabled():
             spawn(self._refresh_udp())
-
-    def port_mapping_enabled(self: MessagingBackend) -> bool:
-        return self.direct_internet_enabled() and bool(
-            getattr(self.config, "router_port_mapping", False)
-        )
-
-    async def _ensure_port_mapping(self: MessagingBackend) -> None:
-        """Keep the home router's forwarding of our UDP port current (made
-        on a new Wi-Fi, renewed, moved after a port change, removed when
-        turned off); contacts learn a new address at once."""
-        import socket
-
-        udp = self.udp
-        if udp is None or not self.port_mapping_enabled():
-            await self.port_mapper.close()
-            return
-        before = self.port_mapper.external
-        await self.port_mapper.ensure(udp.ports.get(socket.AF_INET, 0))
-        if self.port_mapper.external != before:
-            await self.addresses_changed()
-
-    def kick_port_mapping(self: MessagingBackend) -> None:
-        """:meth:`_ensure_port_mapping` in the background (finding the router
-        can take a few seconds)."""
-        task = self.__dict__.get("_portmap_task")
-        if task is None or task.done():
-            self.__dict__["_portmap_task"] = asyncio.create_task(self._ensure_port_mapping())
-
-    async def port_mapping_changed(self: MessagingBackend) -> None:
-        await self._ensure_port_mapping()
 
     def stop_udp(self: MessagingBackend) -> None:
         if self.udp is not None:
@@ -261,23 +240,8 @@ class PunchMixin:
         from srltcp.utils.network import global_ipv6_addresses
 
         out: list[tuple[str, int]] = []
-        forwarded = self.port_mapper.external
-        mapping = self.port_mapper.mapping
-        if (
-            forwarded and mapping and self.port_mapping_enabled()
-            and mapping.internal_port == udp.ports.get(socket.AF_INET)
-            and _public_address(*forwarded)
-        ):
-            out.append(forwarded)  # the home router forwards it: reachable from any port
         mapped4 = udp.mapped.get(socket.AF_INET)
-        port4 = udp.ports.get(socket.AF_INET)
-        if (
-            getattr(self.config, "udp_forwarded", False) and mapped4 and port4
-            and _public_address(mapped4[0], port4) and (mapped4[0], port4) not in out
-        ):
-            # You forward this port on your router: reachable from any port.
-            out.append((mapped4[0], port4))
-        if mapped4 and _public_address(*mapped4) and mapped4 not in out:
+        if mapped4 and _public_address(*mapped4):
             out.append(mapped4)
         # IPv6 has no NAT: our own global addresses, never one built from the
         # hardware (MAC) address — global_ipv6_addresses() leaves those out
@@ -293,7 +257,7 @@ class PunchMixin:
 
     def on_quiet_network(self: MessagingBackend) -> bool:
         """On a network you marked quiet (work, school…): no internet features
-        (Tor, STUN, direct connections across networks, router port mapping)."""
+        (Tor, STUN, direct connections across networks)."""
         from srltcp.utils.network import on_networks, parse_networks
 
         return on_networks(parse_networks(str(getattr(self.config, "quiet_networks", "") or "")))
@@ -306,23 +270,13 @@ class PunchMixin:
     ) -> list[tuple[str, int]]:
         """Their UDP addresses we can send to: the families we have a socket
         for, whether or not STUN told us our own public address (a phone whose
-        lookup failed can still reach a home's forwarded IPv4 port)."""
+        lookup failed can still be reached by them: one side dialing is enough)."""
         import socket
 
         families = {":" in host for host, _port in self.udp_candidates()}
         if self.udp is not None:
             families |= {fam == socket.AF_INET6 for fam in self.udp.ports}
         return [c for c in theirs if (":" in c[0]) in families]
-
-    def fixed_udp_port(self: MessagingBackend) -> bool:
-        """The router forwards our UDP port (you set it up, or UPnP / NAT-PMP
-        made a mapping): stay on it. Moving to a fresh port after a failed
-        round would leave the forwarding behind. With *Open a port on my home
-        router* on but no mapping made (the router has no UPnP / NAT-PMP, or
-        we're on mobile data) there's nothing to leave behind: keep moving."""
-        if getattr(self.config, "udp_forwarded", False):
-            return True
-        return self.port_mapping_enabled() and self.port_mapper.mapping is not None
 
     def punch_port(self: MessagingBackend) -> int:
         if not self.direct_internet_enabled() or not self.tcp_transport:
@@ -436,8 +390,7 @@ class PunchMixin:
         if now < self._punch_next.get(hash_id, 0.0) or hash_id in self._punching:
             return
         await self._refresh_udp(if_older=STUN_FRESH)
-        await self._ensure_port_mapping()
-        self._punch_next[hash_id] = now + PUNCH_RETRY_EVERY
+        self._punch_next[hash_id] = now + OFFER_TIMEOUT  # (until the answer comes)
         mine = self.public_candidates()
         mine_udp = self.udp_candidates()
         tcp_ok = bool(mine) and bool(_same_family(self._peer_public.get(hash_id, []), mine))
@@ -445,7 +398,7 @@ class PunchMixin:
         # Offer UDP whenever we can send UDP: the answer brings their
         # addresses (they may have changed since last time). Even with no
         # public address of our own (our STUN lookup failed), we can still
-        # dial theirs, e.g. a home with a forwarded port. Older versions
+        # dial theirs. Older versions
         # ignore the offer.
         udp_ok = self.udp is not None and bool(self.udp.ports) and (
             not theirs_udp or bool(self._udp_reachable(theirs_udp))
@@ -457,7 +410,10 @@ class PunchMixin:
         if udp_ok:
             secret, my_id = secrets.token_bytes(32), secrets.token_bytes(8)
             self._udp_offers[hash_id] = (secret, my_id, now)
-            udp_fields = {"w": [list(c) for c in mine_udp], "k": secret.hex(), "i": my_id.hex()}
+            # "go": we tell them over Tor when we start probing (see UDP_GO_WAIT).
+            udp_fields = {
+                "w": [list(c) for c in mine_udp], "k": secret.hex(), "i": my_id.hex(), "go": 1,
+            }
         await self._send_punch(hash_id, "o", mine, udp_fields)
 
     def ask_for_punch(self: MessagingBackend, hash_id: str) -> None:
@@ -498,6 +454,11 @@ class PunchMixin:
             if self._me_hash() < hash_id:  # we lead: start a round (rate-limited there)
                 self.request_direct_upgrade(hash_id, punch=True)
             return
+        if phase == "g":
+            go = self._punch_go.get(hash_id)
+            if go is not None and self._me_hash() > hash_id:  # (only the leader says go)
+                go.set()
+            return
         if phase == "o":
             if self._me_hash() < hash_id:
                 return  # offers come from the lower hash only
@@ -505,6 +466,16 @@ class PunchMixin:
             if now - self._punch_answered.get(hash_id, -PUNCH_ANSWER_EVERY) < PUNCH_ANSWER_EVERY:
                 return  # rounds are rare; a flood of offers gets no extra dialing
             self._punch_answered[hash_id] = now
+            # A new round replaces one we may still be waiting in (its answer
+            # or go got lost): the leader only probes the new connection.
+            old = self._punch_conn.pop(hash_id, None)
+            if old is not None:
+                old.superseded = True
+                old._shutdown()
+                for _ in range(40):
+                    if hash_id not in self._punching:
+                        break
+                    await asyncio.sleep(0.05)
             mine = self.public_candidates()
             theirs = _same_family(theirs, mine)
             conn, udp_targets, udp_fields = await self._udp_answer(hash_id, data)
@@ -514,15 +485,20 @@ class PunchMixin:
                 await self._prime(theirs)
             await self._send_punch(hash_id, "a", mine, udp_fields)
             if (mine and theirs) or conn:
+                go = None
+                if conn is not None:
+                    self._punch_conn[hash_id] = conn
+                    if data.get("go") == 1:
+                        go = self._punch_go[hash_id] = asyncio.Event()
                 spawn(self._punch(
                     hash_id, theirs if mine else [], leader=False,
-                    udp_conn=conn, udp_targets=udp_targets,
+                    udp_conn=conn, udp_targets=udp_targets, go=go,
                 ))
         elif phase == "a":
             offered = self._punch_offered.pop(hash_id, 0.0)
             theirs = _same_family(theirs, self.public_candidates())
             conn, udp_targets = self._udp_lead(hash_id, data)
-            if (theirs or conn) and time.monotonic() - offered < 15.0:
+            if (theirs or conn) and time.monotonic() - offered < OFFER_TIMEOUT:
                 spawn(self._punch(
                     hash_id, theirs, leader=True, udp_conn=conn, udp_targets=udp_targets,
                 ))
@@ -543,7 +519,6 @@ class PunchMixin:
         if their_key is None or their_id is None or self.udp is None:
             return None, [], {}
         await self._refresh_udp(if_older=STUN_FRESH)
-        await self._ensure_port_mapping()
         mine = self.udp_candidates()
         targets = self._udp_reachable(theirs)
         # One side dialing is enough: we dial them, or they dial us (they
@@ -577,7 +552,7 @@ class PunchMixin:
         # (No target of theirs: they dial us, if we offered addresses.)
         if not (targets or self.udp_candidates()):
             return None, []
-        if their_key is None or their_id is None or time.monotonic() - when > 15:
+        if their_key is None or their_id is None or time.monotonic() - when > OFFER_TIMEOUT:
             return None, []
         l2f, f2l = derive_keys(combine_secrets(secret, their_key), self._me_hash(), hash_id)
         conn = self.udp.new_connection(their_id, send_key=l2f, recv_key=f2l, my_id=my_id)
@@ -594,6 +569,7 @@ class PunchMixin:
         leader: bool,
         udp_conn: UdpConnection | None = None,
         udp_targets: list[tuple[str, int]] | None = None,
+        go: asyncio.Event | None = None,
     ) -> None:
         port = self.punch_port()
         if hash_id in self._punching or not self.tcp_transport or not port:
@@ -606,16 +582,24 @@ class PunchMixin:
             peer_id: str | None = None
             if udp_conn:
                 # UDP first: it gets through carrier NATs far more often than TCP.
+                if leader:
+                    # Our probes start now (priming first): the follower may
+                    # start its own (see UDP_GO_WAIT).
+                    spawn(self._send_punch(hash_id, "g", []))
+                    delay = 0.0
+                else:
+                    delay = UDP_GO_WAIT if go is not None else PUNCH_FOLLOWER_DELAY
                 if self.udp and await self.udp.punch(
                     udp_conn, udp_targets or [], UDP_PUNCH_WINDOW,
-                    delay=0.0 if leader else PUNCH_FOLLOWER_DELAY,
-                    hops=self._prime_hops(hash_id),
+                    delay=delay, hops=self._prime_hops(hash_id), go=go,
                 ):
                     peer_id = await self.tcp_transport.adopt_udp(udp_conn)
                     log.info("Direct UDP connection to %s via %s", hash_id[:8], udp_conn.address)
                     self._note_round(hash_id, udp_targets or [], "direct")
                 else:
                     udp_conn._shutdown()
+                    if udp_conn.superseded:
+                        return  # (a new round from the leader took over)
                     self._note_round(hash_id, udp_targets or [], "no answer")
                     # Maybe our priming packets reached their router (a short
                     # path, e.g. the same ISP): try again soon, lower hop limit,
@@ -625,7 +609,7 @@ class PunchMixin:
                     if current > 2:
                         self._prime_max[hash_id] = current - 1
                         retry_soon = True
-                        if self.udp and not self.fixed_udp_port():
+                        if self.udp:
                             await self.udp.rotate()
             if not peer_id and targets and not retry_soon:
                 # (Not while a UDP retry is coming: it nearly always works
@@ -664,6 +648,11 @@ class PunchMixin:
                 await self.tcp_transport.disconnect(peer_id)
         finally:
             self._punching.discard(hash_id)
+            if not leader:
+                if self._punch_conn.get(hash_id) is udp_conn:
+                    self._punch_conn.pop(hash_id, None)
+                if go is not None and self._punch_go.get(hash_id) is go:
+                    self._punch_go.pop(hash_id, None)
 
     def _note_round(
         self: MessagingBackend, hash_id: str, targets: list[tuple[str, int]], outcome: str
@@ -744,14 +733,14 @@ class PunchMixin:
         symmetric = bool(self.udp and self.udp.symmetric)
         nat = self._nat_kind()
         tips: list[str] = []
-        from srltcp.transports.portmap import home_lan_ipv4
+        from srltcp.utils.network import home_lan_ipv4
 
         on_lan = bool(home_lan_ipv4())
         if path in ("direct", "direct (udp)"):
             reason = "Direct connection: full speed."
         elif not self.direct_internet_enabled():
             reason = ("Direct internet connections are off on this device "
-                      "(Settings → Network → Try direct internet connections).")
+                      "(Settings → Network → Direct internet connections).")
         elif not mine:
             reason = ("This device couldn't find its public address (the STUN servers didn't "
                       "answer: blocked on this network?), so it can't connect directly.")
@@ -760,10 +749,8 @@ class PunchMixin:
                             "(AdGuard Home, Pi-hole, NextDNS, a phone's Private DNS) is likely "
                             "blocking them. Allow stun.l.google.com, stun1.l.google.com and "
                             "stun.cloudflare.com in it.")
-            tips.append("If your contact is on a home Wi-Fi, they can turn on Settings → Network → "
-                        "Open a port on my home router: then this device doesn't need an address "
-                        "of its own. Also check for a VPN, firewall or security app on this "
-                        "device that blocks UDP.")
+            tips.append("Check for a VPN, firewall or security app on this device that "
+                        "blocks UDP.")
         elif not theirs:
             reason = ("Your contact's device hasn't shared a public address (an older version, "
                       "direct connections turned off, or STUN blocked on their network).")
@@ -776,17 +763,11 @@ class PunchMixin:
                 reason += (" This network's router gives a different port for every "
                            "destination (\"symmetric\" NAT), so your contact's packets "
                            "don't get in.")
-                tips.insert(0, "On OPNsense / pfSense: Firewall → NAT → Source NAT "
-                               "(\"Outbound\" on older versions), mode Hybrid; add a rule: "
-                               "Interface WAN, IPv4, "
-                               "Protocol UDP, Source this device (/32), Source port 7828-7831 "
-                               "(SRLTCP's ports), Destination any, Translation WAN / interface "
-                               "address, \"Static port\" ticked (Endpoint Independent off). Save, "
-                               "Apply, then press Check connection again: it must say \"NAT here: "
-                               "easy\". Nothing is opened to the internet. See docs/NETWORKING.md.")
-                tips.insert(1, "Or give this device's network IPv6 (OPNsense: Interfaces → "
-                               "this VLAN → IPv6 Configuration Type: Track Interface): IPv6 has "
-                               "no NAT, and a phone on 5G usually has IPv6.")
+                tips.append("Give this device's network IPv6 (IPv6 has no NAT, and a phone on "
+                            "5G usually has IPv6), or set the router to keep the source port "
+                            "for this device (OPNsense / pfSense: a \"Static port\" outbound "
+                            "NAT rule; nothing is opened to the internet). See "
+                            "docs/NETWORKING.md.")
             elif symmetric:
                 reason += (" This network gives a different port for every destination "
                            "(\"symmetric\" carrier NAT), which direct connections can't "
@@ -797,21 +778,6 @@ class PunchMixin:
                             "often works.")
         else:
             reason = "Both devices have public addresses: a direct connection is being tried."
-        mapping_tip = ("On the device at home (on Wi-Fi), turn on Settings → Network → Open a "
-                       "port on my home router: home Wi-Fi and mobile data usually need it.")
-        if (
-            failed and on_lan and self.port_mapping_enabled()
-            and self.port_mapper.mapping is None
-        ):
-            # (OPNsense without the UPnP plugin: it only logs our NAT-PMP requests.)
-            tips.append("Open a port on my home router is on, but this router doesn't offer "
-                        "UPnP / NAT-PMP: turn it off (its firewall only logs the requests) "
-                        "and use the router setting above instead.")
-        elif failed and not self.port_mapping_enabled() and not self.on_quiet_network():
-            if symmetric and on_lan:
-                tips.append(mapping_tip)  # (after the router's own fix: the better one)
-            else:
-                tips.insert(0, mapping_tip)
         if path == "tor" and failed:
             tips.append("Turn on Wi-Fi on one of the phones (any home or public Wi-Fi that "
                         "allows normal internet use): most Wi-Fi routers can be crossed.")
@@ -847,7 +813,7 @@ class PunchMixin:
         if udp is None or not self.direct_internet_enabled():
             return
         before = self.udp_candidates()
-        if udp.symmetric and not self.fixed_udp_port():
+        if udp.symmetric:
             await udp.rotate()
         elif time.monotonic() - udp.mapped_at > 5.0:
             await udp.refresh_mapping()
@@ -883,17 +849,6 @@ class PunchMixin:
             out.append("This network blocks the UDP that direct connections use (or the STUN "
                        "servers that find your public address).")
         return out
-
-    def _port_mapping_state(self: MessagingBackend) -> str:
-        if not self.port_mapping_enabled():
-            return "off"
-        if self.port_mapper.external:
-            return f"on ({self.port_mapper.method})"
-        if self.port_mapper.mapping:
-            return f"{self.port_mapper.method}, but the router has no public address (double NAT)"
-        from srltcp.transports.portmap import home_lan_ipv4
-
-        return "router doesn't offer UPnP / NAT-PMP" if home_lan_ipv4() else "not on Wi-Fi"
 
     def connection_report(self: MessagingBackend, hash_id: str, path: str) -> str:
         """Plain-text summary for troubleshooting a direct connection: what
@@ -931,7 +886,6 @@ class PunchMixin:
             f"SRLTCP {__version__} connection report",
             f"Path now: {path or 'not connected'}",
             f"Direct internet connections: {'on' if self.direct_internet_enabled() else 'off'}",
-            f"Home router port mapping: {self._port_mapping_state()}",
             f"Tor (doorbell): {self.tor_status().get('state', 'off')}",
             f"This device, IPv4 public address: {nat(socket.AF_INET)}",
             f"This device, IPv6: {nat(socket.AF_INET6)}",
@@ -939,9 +893,7 @@ class PunchMixin:
             + ("blocked or no answer (a DNS filter such as AdGuard Home or Pi-hole?)"
                " — built-in addresses used"
                if udp and getattr(udp, "stun_dns_blocked", False) else "ok"),
-            "This device offers: " + (families(mine) or "nothing (no public address found)")
-            + (" (UDP 7828 forwarded / allowed in: on)"
-               if getattr(self.config, "udp_forwarded", False) else ""),
+            "This device offers: " + (families(mine) or "nothing (no public address found)"),
             "Contact offers: "
             + (families(theirs) or "nothing yet (not connected over Tor, or their STUN failed)"),
             f"Failed rounds in a row: {self._punch_failures.get(hash_id, 0)}",

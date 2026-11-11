@@ -139,22 +139,20 @@ standard technique video-call apps use (ICE/STUN, RFC 8445/5389).
    impostor can't take it over) and replaces the Tor session. What waited goes
    out at once.
 
-**Home Wi-Fi and mobile data.** Many carriers give a new public port for
-every destination, so the port a mobile phone learnt from STUN isn't the one
-its packets come from, and most home routers only let in replies from the
-exact address and port the phone inside sent to: neither side's packets get
-through, while two carriers connect fine. So a phone on a Wi-Fi asks its own
-router to forward the direct-connection port (**UPnP IGD** or **NAT-PMP**,
-the way video-call and game apps do) and offers that address first. The
-mobile phone's packets then get in from whatever port its carrier picked,
-the first authenticated one fixes the path, and the home phone answers it.
-Only routers on your own Wi-Fi are asked; the mapping points only at the
-phone's UDP socket (which drops anything that isn't an authenticated packet
-from a contact it's connecting to), expires by itself and is removed when the
-app stops. **Off by default since 0.15** (it lets packets from the internet
-reach the port, and security software reports the UPnP traffic): turn on
-*Settings → Network → Open a port on my home router* if a contact on mobile
-data can't reach you at home.
+**Home Wi-Fi and mobile data.** Nothing to set up: no port forwarding, no
+UPnP, no router changes. SRLTCP never asks a router to open anything (the
+UPnP / NAT-PMP option and the "I forward this port" options were removed in
+0.17.1). The two devices punch through their own NATs from the inside, the
+same way video calls do.
+
+**Tor's delay doesn't matter (0.17.1).** The setup messages travel over Tor,
+which takes 1–4 s each way. The answering device first opens its own NAT
+(priming), then **listens** until the leader says over Tor that it has started
+probing, and only then sends its own probes. Probing earlier would reach the
+leader's router before the leader had sent anything, and many routers then
+give the leader a different port. Before 0.17.1 this made every attempt fail
+while Tor was slow, so a phone and a home computer often stayed on CONNECTING
+for 2 minutes or more. Each side now keeps probing for 10 s.
 
 **No scanning.** SRLTCP only ever sends to addresses a contact gave it, a few
 packets at a time. (0.13.9–0.14.9 had a "birthday punch" for a strict NAT on
@@ -162,9 +160,11 @@ one side that probed thousands of random ports of the contact's address;
 security software rightly reads that as a port scan, so it was removed in
 0.15.)
 
-A round that fails is retried after 4 s from a fresh UDP port (routers can
-hold stale state for the old pair of ports for ~30 s), then after 15, 30, 60
-and 120 s, and at once whenever either phone's network changes.
+A round that fails is retried after 3 s from the next of SRLTCP's UDP ports
+(7828–7831; routers can hold stale state for the old pair of ports for
+~30 s), then after 5, 10, 20, 30 and 60 s, and at once whenever either
+phone's network changes. An offer whose answer got lost on Tor holds up the
+next round for at most 30 s.
 
 **On the wire**, every UDP packet is encrypted and authenticated (AES-256-GCM)
 with keys only the two contacts know; packets that don't decrypt are dropped
@@ -204,8 +204,8 @@ works:
   the phones on Wi-Fi (most home and public Wi-Fi routers are "easy"), or IPv6
   on both (most US and EU carriers offer it on mobile data; on Android check
   *Settings → Network → SIM → Access Point Names → APN protocol: IPv4/IPv6*).
-- **A strict NAT on one side** without router port mapping: turn on *Open a
-  port on my home router* on the phone at home, or use IPv6.
+- **A strict NAT on one side and a router that only lets in exact replies**
+  on the other: IPv6 on both, or Wi-Fi on the phone.
 - **A Wi-Fi that keeps devices apart** (plane, hotel, guest Wi-Fi) for two
   phones on that same Wi-Fi, or both behind one public address (Starlink).
 - **Networks that block UDP** (some corporate and guest networks).
@@ -231,10 +231,9 @@ routers and a VPN phone with a home-Wi-Fi phone.
 | Setting | What it does | Default |
 |---|---|---|
 | **Direct internet connections** | Phone-to-phone UDP across networks, described above. Shares your public IP address **only with your contacts** (and a STUN server), inside the encrypted session. Off: only the same Wi-Fi or VPN; contacts never see your IP. | On |
-| **Open a port on my home router** | On Wi-Fi, asks your router (UPnP / NAT-PMP) to forward the direct-connection UDP port to this phone, so a contact on mobile data gets through. Only your own router is asked; removed when the app stops. | Off |
 | **STUN servers** | Who tells this phone its public IPv4 address. Leave it empty: the defaults (`stun.l.google.com:19302`, `stun.cloudflare.com:3478`) work everywhere. To use others: `host:port`, separated by commas (at most 4), e.g. `stun.nextcloud.com:443`. DNS servers such as 8.8.8.8 are not STUN servers and are refused. | Google, Cloudflare |
 | **Find contacts on other networks (Tor)** | The doorbell, described above: only to find each other and set up the direct connection. | On |
-| **Quiet networks** | Networks (`10.20.0.0/16, …`) where SRLTCP uses **none** of the above: no Tor, no STUN, no direct connections across networks, no router port mapping. For work or school networks whose firewall or antivirus would flag them. *Make the network I'm on quiet* fills it in. Same-Wi-Fi/VPN contacts and the radio still work there. | None |
+| **Quiet networks** | Networks (`10.20.0.0/16, …`) where SRLTCP uses **none** of the above: no Tor, no STUN, no direct connections across networks. For work or school networks whose firewall or antivirus would flag them. *Make the network I'm on quiet* fills it in. Same-Wi-Fi/VPN contacts and the radio still work there. | None |
 
 ### Same Wi-Fi / VPN
 
@@ -249,12 +248,15 @@ routers and a VPN phone with a home-Wi-Fi phone.
 | Setting | What it does | Default |
 |---|---|---|
 | **Web UI port** | The local, token-protected HTTPS page the app shows. Only reachable from the device itself. | 9876 |
-| **TCP peer port** | Where contacts connect to you. Must be the same on all your devices. Direct connections across networks use this port + 3. | 7825 |
+| **TCP peer port** | Where contacts connect to you. Must be the same on all your devices. Direct connections across networks use UDP on this port + 3 to + 6 (7828–7831). | 7825 |
 | **UDP discovery port** | Used to find devices on the LAN/VPN. Same on all your devices. | 7826 |
-| **Use exact ports** | If a port is busy, fail instead of quietly using the next one. | On |
 | **Tor program** | PC only: full path to `tor.exe` if SRLTCP can't find Tor Browser's. | Empty (auto) |
-| **I forward UDP 7828 to this device** | For routers that change ports (OPNsense, pfSense): you forward UDP 7828 here with a static outgoing port (see *Home router: OPNsense / pfSense*). SRLTCP stays on 7828 and offers your public address with it. | Off |
-| **I port-forward TCP 7825** | Optional manual setup; direct connections work without it. Off: TCP 7825 accepts connections only from your own networks (private and VPN ranges) and your contacts' known addresses. | Off |
+
+SRLTCP always uses **exactly** the ports above. If one is busy (another copy
+of SRLTCP), it says so instead of quietly moving elsewhere. TCP 7825 accepts
+connections only from your own networks (private and VPN ranges) and your
+contacts' known addresses: strangers on the internet are turned away before
+anything is read. There is nothing to forward and nothing to open.
 
 ## Ports at a glance
 
@@ -262,7 +264,7 @@ routers and a VPN phone with a home-Wi-Fi phone.
 |---|---|---|---|
 | 7825 | TCP | Each device (peer connections) | Only inside your LAN/VPN firewall, never on the router |
 | 7826 | UDP | Each device (LAN/VPN discovery, only when you press Announce) | Same as above |
-| 7828–7831 | UDP | Each device (direct connections between networks; it starts on 7828 and moves to the next one after a failed attempt, never outside this range unless all four are taken) | No (on Wi-Fi the app asks the router itself, UPnP / NAT-PMP). It only answers authenticated packets from contacts it's connecting to |
+| 7828–7831 | UDP | Each device (direct connections between networks; it starts on 7828 and moves to the next one after a failed attempt, never outside this range) | No, never forwarded. It only answers authenticated packets from contacts it's connecting to |
 | — | Tor | Each device (onion service) | No. Tor only dials out, and the onion listener is bound to 127.0.0.1 |
 | 9876 | TCP | Each device (local web UI, 127.0.0.1 only) | No |
 
@@ -291,7 +293,7 @@ traffic is and what 0.15 changed:
 | An unknown public IP on UDP 7828 | A contact (or STUN server) during a direct-connection setup | No scanning: only addresses a contact gave; nothing on quiet networks |
 | Thousands of UDP probes | The old "birthday punch" | **Removed** |
 | Broadcasts on UDP 7826 every 5 s | Old automatic discovery | **Removed**: only when you press Announce |
-| UPnP / SSDP to the router | Router port mapping | **Off** by default |
+| UPnP / SSDP / NAT-PMP to the router | Router port mapping | **Removed** in 0.17.1 |
 | Dials to a contact that's away | Reconnecting | Stops after 2 minutes until you open their chat, send them something, change networks or restart |
 
 **Reaching contacts.** When a contact can't be reached for 2 minutes, SRLTCP
@@ -302,7 +304,7 @@ Tor doorbell stay up, so when *they* message or call you, it comes through.
 
 **Who may connect.** TCP 7825 accepts connections only from private
 (LAN/VPN), carrier-NAT and link-local addresses, and from contacts' known
-addresses (or their IPv6 /64), unless *I port-forward TCP 7825* is on.
+addresses (or their IPv6 /64). There is no setting to open it wider.
 Until a connection has proven who it is (the signed handshake), it may send
 at most 64 KiB per frame, at most 4 such connections per address and 64 in
 all, it must finish within 15 s, strangers get at most 20 handshakes a
@@ -312,79 +314,22 @@ closed after 5 minutes.
 ## Home router: OPNsense / pfSense
 
 OPNsense and pfSense give every new connection a **random outgoing port**
-("symmetric" or hard NAT), unlike most home routers, which keep the port. A
-phone on mobile data is usually behind a hard NAT too, and two hard NATs
-can't be crossed directly: the chat stays on **CONNECTING** while you're away
-from home. Signs: *Check connection* says this network gives a different port
-for every destination, or the log shows a public port that isn't 7828
-(`UDP address for direct connections: 68.x.x.x:29503`). Fix it once on the
-router, either way:
+("symmetric" or hard NAT), unlike most home routers, which keep the port.
+*Check connection* then says *symmetric NAT here*. Nothing is forwarded or
+opened in any of these fixes:
 
-**Outgoing only (no port forward):** if the other side's network keeps one
-port per connection (most mobile carriers here did; your firewall log shows
-their packets arriving from the same port again and again), the static-port
-rule from step A.1 alone is enough: use **Source port 7828–7831** in it
-(SRLTCP's own ports, since 0.17.0; *any* works too but covers all of the
-computer's UDP). Leave *Endpoint Independent* off. NAT
-rules only apply to new connections; since 0.17.0 *Check connection*
-measures the NAT again from a fresh port, so it shows the change at once
-(before that, delete the computer's old entries under *Firewall →
-Diagnostics → States* and restart SRLTCP). *Check connection* on the
-computer must then say *NAT here: easy*, no longer *symmetric NAT here*.
-The outbound NAT mode has to be **Hybrid** (in *Automatic* mode your own
-rules are ignored). Turn **Open a port on my home router** off on that
-computer unless you installed the UPnP plugin (B).
-
-**A. Static port + port forward (no UPnP):**
-1. *Firewall → NAT → Outbound*: mode **Hybrid outbound NAT**, then add a rule:
-   Interface **WAN**, TCP/IP version **IPv4**, Protocol **UDP**, Source
-   address = the computer running SRLTCP (single host, e.g. `10.0.30.20/32`),
-   Source port **7828**, Translation **Interface address**, tick **Static
-   port**. Save, Apply. (SRLTCP's public port is now 7828, as STUN shows.)
-2. *Firewall → NAT → Port Forward*: add Interface **WAN**, Protocol **UDP**,
-   Destination **WAN address**, port **7828** → Redirect target IP = that
-   computer, port **7828**, with the associated filter rule. Save, Apply.
-3. Give that computer a fixed address (DHCP static mapping). Only SRLTCP's
-   encrypted packets are answered on 7828; anything else gets no reply.
-4. In SRLTCP on that computer: *Settings → Network → More network options →
-   **I forward UDP 7828 to this device***. SRLTCP then stays on port 7828
-   (it normally moves to a fresh port after a failed attempt, which would
-   leave the forward behind) and gives contacts your public address with
-   port 7828, which the router lets in from any port.
-   The phone doesn't even need to know its own public address (its STUN
-   lookup may fail on mobile data): it sends to yours, and the computer
-   answers (0.16.7).
-
-**B. UPnP / NAT-PMP:** *System → Firmware → Plugins*: install **os-upnp**;
-*Services → Universal Plug and Play*: enable it and NAT-PMP, external
-interface WAN, internal interface the computer's LAN/VLAN, and allow only
-that computer (an ACL entry like `allow 7828-7828 10.0.30.20/32 7828-7828`).
-Then in SRLTCP on that computer: *Settings → Network → Open a port on my
-home router* (SRLTCP then also stays on its port).
-
-**C. IPv6, no port forwarding:** IPv6 has no NAT, so the changing-port
-problem doesn't exist there; a phone on 5G usually has IPv6.
-0. The computer's network needs IPv6 first: *Interfaces → (its LAN/VLAN) →
-   IPv6 Configuration Type: Track Interface*, parent WAN (your ISP's prefix
-   delegation), and router advertisements on. *Check connection* on the
-   computer then says *IPv6 here: yes*. Often that's all: both devices send
-   at once, so the firewall takes the phone's packets as replies. Only if
-   OPNsense's log shows *blocked … UDP 7828* over IPv6, add steps 1 and 2.
-1. *Firewall → Rules → WAN*: add Action **Pass**, TCP/IP version **IPv6**,
-   Protocol **UDP**, Destination the computer's IPv6 address (or the LAN/VLAN
-   net), Destination port **7828**. Save, Apply. (A pass rule, not a port
-   forward: nothing is translated.)
-2. In SRLTCP on that computer: tick **I forward UDP 7828 to this device**, so
-   it stays on port 7828 (it otherwise moves to a fresh port after a failed
-   attempt, which the rule wouldn't match).
-
-**D. Your own VPN:** a phone that keeps a WireGuard tunnel to home (Android:
-*Always-on VPN*, `AllowedIPs` = your home networks) reaches the computer as on
-the same network: no NAT, no extra rules.
-
-If *Open a port on my home router* is on but the router has no UPnP / NAT-PMP
-(OPNsense without the plugin), its firewall logs SRLTCP's NAT-PMP requests to
-port **5351**: turn the setting off.
+- **IPv6 (best).** IPv6 has no NAT, and a phone on 5G usually has IPv6. Give
+  the computer's network IPv6: *Interfaces → (its LAN/VLAN) → IPv6
+  Configuration Type: Track Interface*, parent WAN, router advertisements
+  on. *Check connection* then says *IPv6 here: yes*.
+- **Keep the source port (outgoing rule only).** *Firewall → NAT → Source NAT*
+  (*Outbound* on older versions), mode **Hybrid**, add a rule: Interface WAN,
+  IPv4, Protocol UDP, Source = this computer (/32), Source port **7828–7831**,
+  Translation = interface address, **Static port** ticked. This changes only
+  how SRLTCP's own outgoing packets are translated; nothing is let in.
+  *Check connection* must then say *NAT here: easy*.
+- **Your own VPN.** A phone with an always-on WireGuard tunnel to home reaches
+  the computer as if on the same network.
 
 ## Troubleshooting
 
@@ -392,10 +337,10 @@ port **5351**: turn the setting off.
 |---|---|
 | Not sure why a contact won't connect | *Edit contact* → **Check connection**, then **Copy connection report**. |
 | Different networks never connect | Tor on and showing "ready" on both devices (Settings → Network), and paired once. |
-| A computer or phone at home and a phone on mobile data never connect directly | Turn on **Open a port on my home router** on the device at home (off by default since 0.15). Mobile carriers change ports per destination, and home routers drop packets that don't come from the exact port they expect. |
+| A computer or phone at home and a phone on mobile data take minutes to connect | Update both devices to 0.17.1 or newer: earlier versions failed every attempt while Tor was slow (see *Tor's delay doesn't matter*). |
 | Log shows `TCP connect … failed: [WinError 5] Access is denied` | A firewall or security app on this computer blocks SRLTCP (Python) from that address. SRLTCP rests such addresses for 5 minutes instead of retrying. Allow Python in the firewall if the contact is on your network. |
-| Header stays on **CONNECTING** | The devices found each other over Tor (so Tor works) but can't connect directly. *Edit contact → Check connection* says why. Most common, in this order: (1) a device at home with **Open a port on my home router** off — turn it on there; (2) a **DNS filter** (AdGuard Home, Pi-hole, NextDNS, the phone's *Private DNS*) blocking the STUN servers — the report says *STUN server names (DNS): blocked*; allow them (below); (3) hard NAT on both carriers — one device on Wi-Fi, or IPv6 on both. |
-| Home router is **OPNsense / pfSense** and a phone on mobile data never connects | The router randomizes ports (hard NAT; *Check connection* says *symmetric NAT here*): see *Home router: OPNsense / pfSense* above. Outgoing only: Hybrid outbound NAT with a static-port rule (source port any). Or a port forward, the UPnP plugin, or IPv6 on the computer's network. |
+| Header stays on **CONNECTING** | The devices found each other over Tor (so Tor works) but can't connect directly. *Edit contact → Check connection* says why. Most common, in this order: (1) one device still on a version before 0.17.1; (2) a **DNS filter** (AdGuard Home, Pi-hole, NextDNS, the phone's *Private DNS*) blocking the STUN servers — the report says *STUN server names (DNS): blocked*; allow them (below); (3) hard NAT on both carriers — one device on Wi-Fi, or IPv6 on both. |
+| Home router is **OPNsense / pfSense** and a phone on mobile data never connects | The router randomizes ports (hard NAT; *Check connection* says *symmetric NAT here*): see *Home router: OPNsense / pfSense* above (IPv6, or a static-port outgoing rule; nothing forwarded). |
 | Windows PC: *Public address here: no* although the network lets UDP out | Before 0.16.8 a Windows bug stopped SRLTCP's UDP socket from reading after one network error: update to 0.16.8 or newer. |
 | Using **AdGuard Home** / Pi-hole | Open its *Query log*, search for `stun`; if `stun.l.google.com`, `stun1.l.google.com` or `stun.cloudflare.com` show as *Blocked*, click *Unblock* (or add the allow rules `@@\|\|stun.l.google.com^`, `@@\|\|stun1.l.google.com^`, `@@\|\|stun.cloudflare.com^` under *Filters → Custom filtering rules*). Since 0.16.4 SRLTCP falls back to built-in STUN addresses when DNS blocks them, but allowing them keeps it working if those addresses change. Tor isn't affected by DNS filters. |
 | Tor stays at "connecting…" | The network may block Tor. On a PC, check the clock is correct. |

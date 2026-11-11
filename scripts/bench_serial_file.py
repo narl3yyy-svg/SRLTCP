@@ -123,10 +123,8 @@ async def run(size_kb: int, baud: int, loss: float) -> dict[str, Any]:
     bridge = RadioBridge(baud, loss)
     android_serial._bridge = lambda: bridge  # type: ignore[assignment]
     tmp = Path(tempfile.mkdtemp())
-    a = make_node(tmp, "alice", enable_serial=True, serial_port=PORTS[0], serial_baud=baud,
-                  router_port_mapping=False)
-    b = make_node(tmp, "bob", enable_serial=True, serial_port=PORTS[1], serial_baud=baud,
-                  router_port_mapping=False)
+    a = make_node(tmp, "alice", enable_serial=True, serial_port=PORTS[0], serial_baud=baud)
+    b = make_node(tmp, "bob", enable_serial=True, serial_port=PORTS[1], serial_baud=baud)
     await a.start()
     await b.start()
     try:

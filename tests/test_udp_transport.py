@@ -555,7 +555,8 @@ async def test_udp_stays_within_its_port_range() -> None:
         ep.stop()
 
 
-async def test_udp_range_all_taken_falls_back_to_any_port() -> None:
+async def test_udp_range_all_taken_never_uses_another_port() -> None:
+    """Exactly SRLTCP's ports (7828-7831), never others: all taken -> no UDP."""
     base = _free_udp_range(udp.UDP_PORTS)
     blockers = []
     for i in range(udp.UDP_PORTS):
@@ -565,7 +566,7 @@ async def test_udp_range_all_taken_falls_back_to_any_port() -> None:
     ep = UdpEndpoint(base, stun_servers=())
     try:
         await ep.start()
-        assert ep.port and ep.port not in ep.port_range()  # (still works)
+        assert not ep.port and not ep.families
     finally:
         ep.stop()
         for s in blockers:

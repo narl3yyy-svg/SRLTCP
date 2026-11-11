@@ -158,12 +158,8 @@ class SRLTCPNode:
         self.config.enable_serial = settings.enable_serial
         self.config.serial_port = settings.serial_port
         self.config.serial_baud = settings.serial_baud
-        direct_changed = (
-            self.config.direct_internet != settings.direct_internet
-            or self.config.router_port_mapping != settings.router_port_mapping
-        )
+        direct_changed = self.config.direct_internet != settings.direct_internet
         self.config.direct_internet = settings.direct_internet
-        self.config.router_port_mapping = settings.router_port_mapping
         tor_changed = (
             self.config.tor_enabled != settings.tor_enabled
             or self.config.tor_path != settings.tor_path
@@ -171,9 +167,6 @@ class SRLTCPNode:
         )
         direct_changed = direct_changed or self.config.quiet_networks != settings.quiet_networks
         self.config.quiet_networks = settings.quiet_networks
-        self.config.accept_internet = settings.wan_expose_port
-        direct_changed = direct_changed or self.config.udp_forwarded != settings.udp_forwarded
-        self.config.udp_forwarded = settings.udp_forwarded
         self.config.tor_enabled = settings.tor_enabled
         self.config.tor_path = settings.tor_path
         incoming = str(settings.resolved_incoming_dir())
@@ -186,7 +179,6 @@ class SRLTCPNode:
                 self.backend.identity_store.save(identity)
         await self.backend.apply_serial_transport()
         if direct_changed:
-            await self.backend.port_mapping_changed()
             await self.backend.addresses_changed()
         if tor_changed:
             await self.backend.tor_settings_changed()

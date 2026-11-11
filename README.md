@@ -1,49 +1,120 @@
+<div align="center">
+
 # SRLTCP
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+### Private, direct, end-to-end encrypted messaging, with no servers in between
+
+Chat · voice & video calls · files · folder sharing & sync · group chats
+
+[![Release](https://img.shields.io/github/v/release/narl3yyy-svg/SRLTCP?label=release&color=3EF58E)](https://github.com/narl3yyy-svg/SRLTCP/releases/latest)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Android%20%7C%20Linux-informational)
+![Crypto](https://img.shields.io/badge/crypto-quantum--safe-8A2BE2)
 
-**SRLTCP** (Serial + Relay-Less TCP) is a fast, secure, peer-to-peer messenger for chat, voice and video calls, files and folder sharing. It runs over **TCP/IP** and **USB Serial**, connects directly on the same Wi-Fi, LAN or VPN, and reaches contacts on other networks **directly, phone to phone**, over UDP (IPv4 through carrier NAT, and IPv6), found through **Tor**: **no relays, no servers in between**. Every session is end-to-end encrypted with quantum-safe (post-quantum hybrid) cryptography, and your data is encrypted on the device.
+**[Download](#download)** · **[How it connects](#how-it-connects)** · **[Security](#security-model)** · **[Networking guide](docs/NETWORKING.md)** · **[Release notes](srltcp/RELEASE_NOTES.md)**
 
-**Current version:** 0.17.1 — update every device: 0.9 and later use a quantum-safe handshake (v6) and don't connect to 0.8.x or older; folder sync needs 0.10 on both sides.
+</div>
+
+---
+
+**SRLTCP** (Serial + Relay-Less TCP) connects your devices **straight to each
+other**: same Wi-Fi, VPN, across the internet, or over a USB serial radio with
+no network at all. Only people you have added as trusted contacts can reach
+you. Every session is end-to-end encrypted with **quantum-safe** cryptography,
+and everything on the device is encrypted at rest.
+
+> **No relays. No servers. No port forwarding. No accounts.**
+> SRLTCP picks the best route to each trusted contact by itself.
+
+**Current version: 0.17.1.** Update every device. A phone on mobile data and a
+computer at home now go direct in seconds instead of minutes, and the network
+settings are simpler. See the [release notes](srltcp/RELEASE_NOTES.md).
+
+---
+
+## Download
+
+Get the latest version from **[Releases](https://github.com/narl3yyy-svg/SRLTCP/releases/latest)**:
+
+| Platform | File | Notes |
+|---|---|---|
+| **Windows 10/11** (x64) | `SRLTCP-0.17.1-windows-x64-setup.exe` | Installer, no admin rights needed. Python and Tor are built in. |
+| **macOS 12+** (Apple silicon: M1 and newer) | `SRLTCP-0.17.1-macos-arm64.dmg` | Open it, drag **SRLTCP** to *Applications*. |
+| **Android 8+** | `SRLTCP-0.17.1.apk` | Python and Tor are built in. |
+| **Linux / from source** | `SRLTCP-0.17.1-source.zip` | `./run.sh web`. See [Installation](#installation). |
+
+The apps aren't code-signed yet. Windows SmartScreen: **More info → Run
+anyway**. macOS: *System Settings → Privacy & Security → Open Anyway*. Android:
+allow installing from your browser or file manager.
+
+---
+
+## How it connects
+
+```
+   You ───────────── direct, end-to-end encrypted ───────────── Contact
+     \                                                           /
+      \──── Tor: only to find each other and swap addresses ────/
+```
+
+1. **Same Wi-Fi or VPN?** Connect directly.
+2. **Different networks** (mobile data ↔ home, two carriers, two homes)? The
+   two devices meet over **Tor**, the doorbell. A private onion address is
+   shared only with your contacts. There they swap their current addresses
+   inside the encrypted session, then punch a **direct UDP connection** through
+   both NATs (IPv4 and IPv6), the way video calls do. Usually this takes a few
+   seconds.
+3. **No network at all?** USB **serial radio** modems (SiK, LoRa, ESP32).
+
+Messages, files and calls **never** go over Tor. While a contact shows
+**CONNECTING**, what you send waits and goes out over the direct connection.
+Strangers on the internet are turned away before anything is read, and no
+port is ever forwarded or opened on your router.
+
+Details, every setting and troubleshooting: **[docs/NETWORKING.md](docs/NETWORKING.md)**.
 
 ---
 
 ## Features
 
+| | |
+|---|---|
+| 🔒 **Quantum-safe E2EE** | X25519 + ML-KEM-768 key exchange, Ed25519 + ML-DSA-65 signatures, AES-256-GCM with replay protection, forward secrecy on every session |
+| 🛰️ **Direct across networks** | Encrypted UDP hole punching through both NATs (IPv4 and IPv6); reliable and ordered for chat and files, separate datagrams for call media; follows a phone to a new network |
+| 🧅 **Tor as the doorbell** | Find trusted contacts on any network without a server; built into the Android and desktop apps |
+| 📡 **Serial radios** | Chat, files and voice with no network: private contact beacons, a reliable link made for lossy half-duplex radios |
+| 📞 **Voice & video calls** | WebRTC inside the encrypted session, no third-party servers; voice even over a serial radio |
+| 📁 **Files, folders & sync** | Fast resumable streaming (zstd, verified SHA-256), E2EE folder sharing, two-way folder sync with conflict copies and a 30-day trash |
+| 👥 **Group chats** | Up to 32 members, end-to-end encrypted, signed by each author |
+| ✅ **Verified contacts** | 60-digit safety numbers; automatic when you pair in person (QR, link or NFC tap) |
+| 🛡️ **Private by default** | Contact requests instead of open inboxes; manual-only discovery on your own networks; disappearing messages, app lock, private notifications |
+| 💾 **Encrypted at rest** | Keys, contacts, chats, groups and settings sealed (Android Keystore / Windows DPAPI); encrypted backup and restore |
+| 🖥️ **Everywhere** | Windows and macOS tray apps, Android, and Linux/macOS/Windows from source |
+
+<details>
+<summary><b>All features</b></summary>
+
 | Feature | Description |
 |---------|-------------|
 | **Dual transports** | TCP/IP networking + USB serial (pyserial on a PC, the USB host API on Android) |
 | **P2P mode** | Direct encrypted links between peers on LAN or serial cable |
-| **Serial radios** | Chat, files and voice calls with no network at all, over a pair of serial radio modems (SiK, LoRa or ESP32 bridges): only contacts connect (private beacons, nobody is discovered), a reliable link made for lossy half-duplex radios, chat and call audio ahead of file data, and the radio comes before the internet when you're not on the same Wi-Fi |
-| **Tor as the doorbell (no server needed)** | Find trusted contacts on any network without a server or port forwarding: each device publishes a private onion service that only its contacts can use, used only to swap addresses and set up the direct connection. Chat, files and calls never go over Tor. Built into the Android and desktop apps; `run.bat` / `run.sh` download it once |
-| **Direct across networks** | Full speed between two mobile carriers, a phone and a home Wi-Fi, two homes: the devices punch a direct, encrypted **UDP** connection through both NATs (like video calls do), with Tor only as the meeting point, no server or port forwarding. Reliable and ordered for chat and files, separate datagrams for call audio/video; follows a phone to a new network. Addresses are exchanged only inside the encrypted session; when a network doesn't allow it, messages wait |
-| **Quantum-safe encryption** | Every session: X25519 + ML-KEM-768 key exchange, Ed25519 + ML-DSA-65 signatures, AES-256-GCM with replay protection |
-| **Verified contacts** | 60-digit safety numbers over both identity keys; automatic when you pair in person (QR or NFC) |
-| **Encrypted on the device** | Keys, contacts, chats, groups and settings sealed at rest (Android Keystore / Windows DPAPI); encrypted backup and restore |
-| **Privacy options** | Disappearing messages, app lock and private lock-screen notifications (all off by default) |
+| **Serial radios** | Only contacts connect (private beacons, nobody is discovered), chat and call audio ahead of file data, and the radio comes before the internet when you're not on the same Wi-Fi |
 | **Fast file transfer** | Windowed streaming (1 MiB chunks direct, 256 KiB over UDP, 2–24 KiB over a serial radio, sized by its measured speed), zstd, verified while streaming; speed and time left on every path; survives dropped connections and app restarts; several files at once; optional photo shrinking |
-| **Folder sharing** | E2EE peer shares + optional token-based HTTP API |
-| **Folder sync** | Keep a folder the same on your device and a contact's: two-way, incremental, conflicts kept as copies, deletes go to a 30-day trash |
-| **Drag-and-drop send** | Drop files onto a contact in the Web UI |
-| **Optional port forwarding** | Forward TCP 7825 if you like; never required (direct UDP/IPv6, found via Tor, covers other networks) |
-| **Web UI** | Localhost **HTTPS-only** chat UI (default port **9876**), protected by a private access token |
-| **Settings** | First-run wizard + persistent config (folders, retention, LAN IP) |
-| **System stats** | CPU usage & temperature in the web UI status bar |
-| **Pairing** | QR code, shareable link, or **NFC tap** (Android) — one scan pairs both sides |
-| **Group chats** | End-to-end encrypted groups of up to 32; members who aren't each other's contacts still talk (the creator passes messages on, signed by their author so they can't be faked) |
-| **Voice & video calls** | WebRTC; signalling and media both travel inside the encrypted SRLTCP session (through a small forwarder on the phone itself), so calls work wherever chat works — no third-party servers. Over a serial radio: voice at ~8 kbit/s, each voice packet one radio packet ahead of everything else |
+| **Drag-and-drop send** | Drop files onto a contact |
+| **Web UI** | Localhost **HTTPS-only** UI (default port **9876**), protected by a private access token |
+| **Pairing** | QR code, shareable link, or **NFC tap** (Android): one scan pairs both sides |
 | **Offline delivery** | Messages queue while a contact is offline and deliver on reconnect, with ✓/✓✓ receipts |
 | **Works over WireGuard** | Find by IP over the VPN, automatic address updates |
-| **Signed LAN discovery** | Manual only (press **Announce**; nothing is announced or scanned by itself). Ed25519-signed UDP announces — spoofed peers rejected. Discovery stays on **your own networks** (the Wi-Fi/LAN you're on and your VPN): never sent on mobile data or across the internet, and announces, Find by IP and contact requests from other networks are ignored, so nobody elsewhere can find you |
-| **Contact requests** | Unknown peers can't message you; they appear as "wants to chat" until you accept |
-| **Chat history** | Saved locally, encrypted, pruned by your retention setting; long-press a message (Copy, Save, Save all for a group of photos, Select, Info, Delete; on a PC you can also drag over text with the mouse) or a chat (Delete chat, optionally with the files received in it), like in Signal |
-| **Albums** | Photos and videos sent together show as one grid, like Signal |
-| **Tap to download** | Received files above a size you choose (default 2 GB, 2 MB over a serial radio) wait for a tap instead of downloading by themselves |
-| **Trusted peers** | Trust-before-message security model |
-| **Ping / RTT** | Latency in ms: the median of the last 5 round trips, averaged with the contact's own figure so both phones show the same number; pings travel encrypted. Serial link quality % (RTT-based estimate, not RF RSSI) |
-| **Desktop apps** | **Windows 11 (x64)** installer and **macOS (Apple silicon)** app: Python and Tor built in, runs in the system tray / menu bar so messages and calls keep coming in, optional start at login |
-| **Cross-platform** | Windows and macOS desktop apps, Android (Chaquopy APK), and from source on Linux, macOS and Windows (`run.sh` / `run.bat`) |
+| **Signed LAN discovery** | Manual only (press **Announce**). Ed25519-signed announces; never sent on mobile data or across the internet |
+| **Chat history** | Saved locally, encrypted, pruned by your retention setting; message and chat actions like in Signal |
+| **Albums** | Photos and videos sent together show as one grid |
+| **Tap to download** | Files above a size you choose wait for a tap |
+| **Ping / RTT** | Latency in ms, the same figure on both phones; serial link quality % |
+| **System stats** | CPU usage & temperature in the status bar |
+| **Desktop apps** | Runs in the system tray / menu bar so messages and calls keep coming in; optional start at login |
+
+</details>
 
 ---
 
@@ -124,16 +195,14 @@ Identities are stored, encrypted, in `~/.srltcp/identities/` (or `%APPDATA%\SRLT
 
 **File transfer flow:** upload to local staging → (queued while the contact is unreachable) → `FILE_OFFER` (encrypted JSON) → `FILE_ACCEPT` → encrypted `FILE_CHUNK` stream, confirmed by `FILE_ACK` (a sliding window: the sender keeps a limited amount unconfirmed and resends from the last confirmed byte after a lost piece, a path change or a re-key) → `FILE_COMPLETE` with the SHA-256, computed while streaming → the receiver, which hashed while writing, answers with a final `FILE_ACK` (verified or not). The receiver writes strictly in order to a hidden partial file (`.name.srltcp-part`, which the gallery and other apps skip) in your incoming folder and gives it its real name only after the SHA-256 check, so nothing half-received or damaged ever shows up; a cancelled or damaged download is deleted. Either side can cancel (`FILE_REJECT`). Files never go over Tor: while the contact is only reachable there, the transfer waits (paused) and both devices set up a direct path, then it resumes by itself.
 
-**Port forwarding:** if you forward **TCP 7825** to your node, traffic after the handshake is still end-to-end encrypted; an observer on the internet can see connection timing, packet sizes and your public IP.
-
 ### Security software alerts (work networks)
 
 SRLTCP only talks to your contacts, plus Tor and STUN to find them — nobody can get into your computer through it (TCP 7825 turns away strangers from the internet before reading anything). Antivirus or company firewalls may still notice that traffic: *"Tor address blocked"* is the Tor doorbell, and an "unknown IP" on UDP 7828 is a contact or STUN server. Since 0.15:
 
-- **Quiet networks** (*Settings → Network → Quiet networks*, or *Make the network I'm on quiet*): on those networks SRLTCP uses no Tor, STUN, direct internet connections or router port mapping at all. Contacts on the same Wi-Fi/VPN still work.
+- **Quiet networks** (*Settings → Network → Quiet networks*, or *Make the network I'm on quiet*): on those networks SRLTCP uses no Tor, STUN or direct internet connections at all. Contacts on the same Wi-Fi/VPN still work.
 - **No automatic discovery:** devices are found only when you press **Announce** or *Find by IP*.
 - **No scanning:** the "birthday punch" (thousands of probes to random ports) was removed.
-- **Router port mapping (UPnP) is off** unless you turn it on.
+- **No router port mapping:** SRLTCP never asks a router to open a port (UPnP / NAT-PMP was removed in 0.17.1).
 - **Contacts that don't answer** for 2 minutes aren't dialed again until you open their chat, send them something, change networks or restart the app. They can still reach you: their messages and calls come through.
 
 ### What is not encrypted
@@ -168,11 +237,10 @@ On first launch, the web UI shows a setup wizard (or *Restore a backup* when mov
 | Incoming files folder | Where received files are saved |
 | Shared folder | Default folder for browse/share |
 | LAN IP | Pinned interface for discovery & announce |
-| Quiet networks | Networks (work, school) where Tor, STUN, direct internet connections and router port mapping are all paused |
+| Quiet networks | Networks (work, school) where Tor, STUN and direct internet connections are all paused |
 | Tor | *Find contacts on other networks (Tor)*, on by default: only to set up direct connections |
 | Direct internet connections | Phone-to-phone over UDP (IPv4 and IPv6), on by default |
 | Privacy | Disappearing messages, app lock, private notifications, backup / restore |
-| Port forwarding | Advanced: acknowledge you forward TCP **7825** (never required) |
 | Timezone | Region for the status clock (time shown at top of sidebar) |
 | Show clock | Toggle live clock in the UI |
 
@@ -189,7 +257,7 @@ The easiest way on a computer: download from [Releases](https://github.com/narl3
 | | File | Install |
 |---|---|---|
 | **Windows 10/11, x64** | `SRLTCP-X.Y.Z-windows-x64-setup.exe` | Run it and follow the steps (no admin rights needed; installs for your user). The first time, Windows SmartScreen may say *Windows protected your PC* because the installer isn't code-signed: **More info → Run anyway**. When Windows Firewall asks about *python.exe*, allow **Private networks** (contacts on your Wi-Fi/VPN connect to it). |
-| **macOS 12+, Apple silicon (M1 and later)** | `SRLTCP-X.Y.Z-macos-arm64.zip` | Open the zip and drag **SRLTCP** into *Applications*. The app isn't notarized by Apple, so the first time macOS says it can't check it: open *System Settings → Privacy & Security*, scroll down and click **Open Anyway** (or in Terminal: `xattr -dr com.apple.quarantine /Applications/SRLTCP.app`). Allow the camera and microphone when you start your first call. |
+| **macOS 12+, Apple silicon (M1 and later)** | `SRLTCP-X.Y.Z-macos-arm64.dmg` | Open the disk image and drag **SRLTCP** into *Applications*. The app isn't notarized by Apple, so the first time macOS says it can't check it: open *System Settings → Privacy & Security*, scroll down and click **Open Anyway** (or in Terminal: `xattr -dr com.apple.quarantine /Applications/SRLTCP.app`). Allow the camera and microphone when you start your first call. |
 
 How it works:
 
@@ -351,7 +419,7 @@ After that, addresses look after themselves: when a contact's IP changes (new Wi
 
 Mobile carriers put phones behind carrier-grade NAT: a phone on mobile data usually has **no IPv4 address another phone can connect to**. SRLTCP still connects them **directly over UDP** in most cases (below): they meet over **Tor** (built in, no setup), swap addresses inside the encrypted session and punch through both NATs, and Tor never carries your messages, files or calls: they wait for the direct connection. There are no relays and no servers in between.
 
-**Direct without port forwarding (UDP).** With *Settings → Network → Try direct internet connections* on (default), two phones on different networks (two mobile carriers, mobile data and a home Wi-Fi, two homes) connect straight to each other: each learns its public address from a STUN server, they swap addresses and key shares inside the session they already have over Tor, and both send UDP packets to each other at once, which opens both NATs (hole punching). The connection is encrypted per packet with keys only the two of you have, the signed quantum-safe handshake runs inside it, and it carries chat, files and calls at the full speed of both connections (the header shows **DIRECT**). In our simulation (two carrier NATs, TCP between them blocked, packet loss) the phones were direct after about 10 s. Speed follows BBR (like YouTube/QUIC on mobile), so random radio losses don't slow it down: on an emulated LTE path with a 140 ms round trip and 1 % loss a file moves at about 2.1 of the link's 2.5 MB/s (before 0.12.1: 0.1 MB/s), and chat goes out ahead of file data. "Symmetric" carrier NAT (a new port for every destination) on *both* sides can't be crossed by any direct technique: messages wait until one phone is on Wi-Fi or both have IPv6, and *Check connection* (with its copyable report) says so. SRLTCP never scans: it only sends to addresses a contact gave it. With *Open a port on my home router* on (UPnP / NAT-PMP, like video-call and game apps; **off by default**), a phone on a home Wi-Fi asks its router to forward the direct-connection port, so a phone on mobile data, whose carrier changes ports per destination, can still get in. Phones on a VPN and the home Wi-Fi also connect directly (LAN/VPN addresses are shared inside the session). This shares your public IP address with your contacts (and the STUN server); turn it off to connect only on the same Wi-Fi or VPN. Details: [docs/NETWORKING.md](docs/NETWORKING.md#direct-connections-across-networks-hole-punching).
+**Direct without port forwarding (UDP).** With *Settings → Network → Direct internet connections* on (default), two phones on different networks (two mobile carriers, mobile data and a home Wi-Fi, two homes) connect straight to each other: each learns its public address from a STUN server, they swap addresses and key shares inside the session they already have over Tor, and both send UDP packets to each other at once, which opens both NATs (hole punching). The connection is encrypted per packet with keys only the two of you have, the signed quantum-safe handshake runs inside it, and it carries chat, files and calls at the full speed of both connections (the header shows **DIRECT**). In our simulation (two carrier NATs, TCP between them blocked, packet loss) the phones were direct after about 10 s. Speed follows BBR (like YouTube/QUIC on mobile), so random radio losses don't slow it down: on an emulated LTE path with a 140 ms round trip and 1 % loss a file moves at about 2.1 of the link's 2.5 MB/s (before 0.12.1: 0.1 MB/s), and chat goes out ahead of file data. "Symmetric" carrier NAT (a new port for every destination) on *both* sides can't be crossed by any direct technique: messages wait until one phone is on Wi-Fi or both have IPv6, and *Check connection* (with its copyable report) says so. SRLTCP never scans: it only sends to addresses a contact gave it, and never asks a router to open a port. Phones on a VPN and the home Wi-Fi also connect directly (LAN/VPN addresses are shared inside the session). This shares your public IP address with your contacts (and the STUN server); turn it off to connect only on the same Wi-Fi or VPN. Details: [docs/NETWORKING.md](docs/NETWORKING.md#direct-connections-across-networks-hole-punching).
 
 **No server, no port forwarding: Tor as the doorbell.** With *Settings → Network → Find contacts on other networks (Tor)* on (default) on both devices, they find each other from any network through the Tor network: phone on mobile data, PC on a VPN, a friend's Wi-Fi. Each device publishes a private onion service; its address goes only to trusted contacts (inside the encrypted connection), and only trusted contacts can connect through it. Tor is **only the doorbell**: over it the two devices swap their current addresses and keys and set up a direct UDP or IPv6 connection (the badge shows CONNECTING, then DIRECT, usually within seconds). Messages, files and calls never go over Tor; they wait and go out at full speed the moment the direct connection is up. Tor is built into the Android app and the desktop apps; from source, `run.bat web` / `./run.sh web` offer to download it the first time (or install [Tor Browser](https://www.torproject.org/download/): SRLTCP starts its own copy of Tor by itself). Tested on a private Tor network (`scripts/tor_testnet.sh` + `scripts/simulate_tor.py`).
 
@@ -597,19 +665,11 @@ curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" -X POST https://127.0.0.1:9876/
 curl -k -H "Authorization: Bearer $SRLTCP_TOKEN" "https://127.0.0.1:9876/api/share/<session_id>/list?token=<token>"
 ```
 
-### Port forwarding (optional, advanced)
+### No port forwarding
 
-You don't need it: direct UDP/IPv6 (set up via Tor) connects contacts on different networks by itself. If you forward **TCP 7825** on your router anyway (*Settings → Network → More network options → I port-forward TCP 7825*), contacts reach you there with the same end-to-end encrypted handshake as on the LAN. Internet addresses saved per contact by earlier versions are still used. Only forward 7825, never the web UI port (9876), which stays on localhost.
-
-| Risk | Mitigation |
-|------|------------|
-| Connecting to the wrong host | The handshake proves the contact's keys; a wrong host can't complete it. Verify contacts (shield next to the name) |
-| Private IP as an internet endpoint | Rejected — LAN addresses are reached on the LAN |
-| Localhost / loopback endpoint | Rejected |
-| DNS rebinding to a private IP | Resolved address must be public |
-| Connection storms | Outbound dials are rate-limited (1/s per endpoint) |
-| Web UI exposed to the internet | **Do not** forward 9876; the UI is localhost-only by design |
-| Untrusted inbound traffic | Only trusted contacts complete a session; others become contact requests at most |
+SRLTCP never needs a port forwarded, and has no setting for it. TCP 7825
+accepts connections only from your own networks (LAN/VPN) and your contacts'
+known addresses. Never forward the web UI port (9876): it stays on localhost.
 
 ---
 
@@ -665,7 +725,7 @@ pytest tests/ -v
 | `bash scripts/build_desktop.sh [win\|mac]` | Desktop apps: Windows x64 installer and macOS Apple-silicon app (see [desktop/README.md](desktop/README.md)) |
 | `xvfb-run -a node desktop/tests/smoke.js` | Desktop app test: node start, pinned certificate, tray, restart, clean quit |
 
-**Releases:** bump `srltcp/__init__.py` and `android/app/build.gradle.kts`, update `srltcp/RELEASE_NOTES.md`, build the APK and the desktop apps locally, tag `vX.Y.Z`, attach the APK, the Windows installer, the macOS zip and the source zip to [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases).
+**Releases:** bump `srltcp/__init__.py` and `android/app/build.gradle.kts`, update `srltcp/RELEASE_NOTES.md`, build the APK and the desktop apps locally, tag `vX.Y.Z`, attach the APK, the Windows installer, the macOS disk image (.dmg) and the source zip to [GitHub Releases](https://github.com/narl3yyy-svg/SRLTCP/releases).
 
 ---
 
@@ -674,6 +734,11 @@ pytest tests/ -v
 Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the version badge in the app status bar for in-app release notes.
 
 ## Roadmap
+
+**Done (v0.17)**
+
+- [x] Phone on mobile data ↔ computer at home: direct in seconds, whatever Tor's delay (0.17.1)
+- [x] Simpler network settings: always the exact ports, no port forwarding or router port mapping at all (0.17.1)
 
 **Done (v0.14–0.16)**
 
@@ -687,7 +752,6 @@ Full history: [srltcp/RELEASE_NOTES.md](srltcp/RELEASE_NOTES.md). Click the vers
 
 - [x] Direct UDP between networks (QUIC-style reliable, encrypted transport in pure Python; STUN + hole punching; BBR; Tor only as the meeting point)
 - [x] No relays and no servers at all (0.13.0); group chats over direct links
-- [x] Home router port mapping (UPnP / NAT-PMP) so mobile data reaches a phone on Wi-Fi
 - [x] USB serial adapters on Android (USB host API), Automatic adapter choice
 - [x] Serial radios: reliable link for lossy half-duplex radios, private contact beacons (nobody discovered over the air), radio before the internet
 - [x] Voice calls over a serial radio (low-bitrate Opus as unacknowledged radio datagrams); file speed and time left on every path
