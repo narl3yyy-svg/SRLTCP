@@ -23,9 +23,12 @@ concurrency:
 
 jobs:
   dmg:
-    runs-on: macos-14  # Apple silicon (arm64)
+    runs-on: macos-latest  # Apple silicon (arm64)
     timeout-minutes: 45
     steps:
+      - name: Runner is Apple silicon
+        run: test "$(uname -m)" = arm64 && sw_vers
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
