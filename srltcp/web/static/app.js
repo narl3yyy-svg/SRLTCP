@@ -2635,28 +2635,119 @@
       }
     });
 
-    const messages = $("#messages");
-    if (messages) {
-      messages.addEventListener("dragover", (e) => {
+    // Drop files or images anywhere in the open chat (header, messages, the
+    // message box): they go to that contact. A drop anywhere else does
+    // nothing (never opens the file in place of the app).
+    const chat = $("#chat-active");
+    const chatOverlay = $("#chat-drop-overlay");
+    let chatDragDepth = 0;
+    const hideChatOverlay = () => {
+      chatDragDepth = 0;
+      chatOverlay?.classList.add("hidden");
+    };
+    if (chat) {
+      chat.addEventListener("dragenter", (e) => {
         if (!e.dataTransfer?.types?.includes("Files") || !state.selectedPeer) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
+        chatDragDepth += 1;
+        const label = $("#chat-drop-label");
+        if (label) {
+          label.textContent = state.selectedGroup
+            ? "Files can't be sent to groups yet"
+            : `Drop to send to ${state.selectedName || "this contact"}`;
+        }
+        chatOverlay?.classList.remove("hidden");
       });
-      messages.addEventListener("drop", async (e) => {
-        if (!state.selectedPeer || !e.dataTransfer?.files?.length) return;
+      chat.addEventListener("dragover", (e) => {
+        if (!e.dataTransfer?.types?.includes("Files") || !state.selectedPeer) return;
         e.preventDefault();
+        e.dataTransfer.dropEffect = state.selectedGroup ? "none" : "copy";
+      });
+      chat.addEventListener("dragleave", (e) => {
+        if (!e.dataTransfer?.types?.includes("Files")) return;
+        chatDragDepth = Math.max(0, chatDragDepth - 1);
+        if (!chatDragDepth) chatOverlay?.classList.add("hidden");
+      });
+      chat.addEventListener("drop", async (e) => {
+        if (!e.dataTransfer?.types?.includes("Files")) return;
+        e.preventDefault();
+        hideChatOverlay();
+        if (!state.selectedPeer || !e.dataTransfer.files?.length) return;
         try {
-          await sendDroppedFiles(
-            e.dataTransfer.files,
-            state.selectedPeer,
-            state.selectedName
-          );
+          await sendFiles(e.dataTransfer.files);
         } catch (err) {
-          console.warn("message drop failed:", err);
+          console.warn("chat drop failed:", err);
           toast("File drop send failed", "error");
         }
       });
     }
+    document.addEventListener("dragover", (e) => {
+      if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+    });
+    document.addEventListener("drop", (e) => {
+      if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+      hideChatOverlay();
+    });
+    window.addEventListener("dragend", hideChatOverlay);
+  }
+
+  /** Files or an image on the clipboard (Ctrl+V / Cmd+V in the chat):
+   *  a screenshot gets a readable name instead of "image.png". */
+  function filesFromClipboard(e) {
+    const data = e.clipboardData;
+    if (!data) return [];
+    const files = [...(data.files || [])];
+    if (!files.length) {
+      for (const item of data.items || []) {
+        if (item.kind === "file") {
+          const f = item.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+    }
+    const d = new Date();  // (local time, like a screenshot's own name)
+    const two = (n) => String(n).padStart(2, "0");
+    const stamp = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} `
+      + `${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())}`;
+    return files.map((f, i) => {
+      const generic = !f.name || /^image\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name);
+      if (!generic || !f.type.startsWith("image/")) return f;
+      const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg").split("+")[0];
+      const name = `Pasted image ${stamp}${files.length > 1 ? ` (${i + 1})` : ""}.${ext}`;
+      try {
+        return new File([f], name, { type: f.type, lastModified: Date.now() });
+      } catch (_) {
+        return f;
+      }
+    });
+  }
+
+  function setupPasteToSend() {
+    document.addEventListener("paste", async (e) => {
+      if (!state.selectedPeer || $("#chat-active")?.classList.contains("hidden")) return;
+      // Only in the chat itself (the message box or the conversation), never
+      // in other fields (search, settings, dialogs).
+      const t = e.target;
+      const inChat = t === document.body || t === $("#msg-input")
+        || !!(t instanceof Element && t.closest("#messages"));
+      if (!inChat) return;
+      const files = filesFromClipboard(e);
+      if (!files.length) return;  // (text: pasted as usual)
+      e.preventDefault();
+      if (state.selectedGroup) {
+        toast("Files can't be sent to groups yet");
+        return;
+      }
+      const name = state.selectedName || "this contact";
+      const what = files.length === 1 ? `“${files[0].name}”` : `${files.length} files`;
+      if (!(await ask(`Send ${what} to ${name}?`, { ok: "Send" }))) return;
+      try {
+        await sendFiles(files);
+      } catch (err) {
+        console.warn("paste send failed:", err);
+        toast("Could not send the pasted file", "error");
+      }
+    });
   }
 
   async function loadShareGrants() {
@@ -4041,6 +4132,7 @@
   $("#msg-info-close")?.addEventListener("click", () => closeModal($("#msg-info-modal")));
   setupModalClose($("#msg-info-modal"));
   setupAsk();
+  setupPasteToSend();
   setupChatSearch();
   // A chat photo or video whose file is gone from this device (deleted from
   // Downloads, or removed by a cleaner app): say so instead of showing a

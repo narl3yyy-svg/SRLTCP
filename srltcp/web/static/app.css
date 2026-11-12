@@ -2063,3 +2063,29 @@ html, body { touch-action: pan-x pan-y; }
 mark.search-hit { background: rgba(245, 166, 35, 0.35); color: inherit; border-radius: 3px; padding: 0 1px; }
 mark.search-hit.current { background: #f5a623; color: #0c0e14; }
 .bubble-row.search-current .bubble { box-shadow: 0 0 0 2px #f5a623; }
+
+/* Drag files into the open chat */
+.chat-active { position: relative; }
+.chat-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 14, 20, 0.78);
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  pointer-events: none;  /* (the chat underneath still gets the drop) */
+}
+.chat-drop-overlay.hidden { display: none; }
+.chat-drop-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--text);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.chat-drop-card svg { width: 44px; height: 44px; color: var(--accent); }

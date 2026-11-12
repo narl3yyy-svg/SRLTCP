@@ -1,5 +1,21 @@
 # SRLTCP Release Notes
 
+## v0.17.7 (2026-11-12)
+
+### Paste and drop files into a chat
+- **Paste an image** (a screenshot, an image copied in a browser or an
+  editor) with **Ctrl+V** on Windows / Linux or **⌘V** on a Mac, in the
+  message box of an open chat. SRLTCP asks *Send … to …?* and sends it.
+  A screenshot gets a readable name like *Pasted image 2026-11-12
+  10-15-03.png* instead of *image.png*. Files copied in Explorer or Finder
+  work the same way. Pasting text is unchanged.
+- **Drag files or images anywhere into the open chat**: the conversation,
+  the message box or the header. *Drop to send to …* shows while you drag,
+  and the files go to that contact. (Before, only the conversation area
+  took a drop, and dropping on the message box did nothing.)
+- Dropping a file anywhere else never opens it in place of the app.
+- Group chats say *Files can't be sent to groups yet*, as before.
+
 ## v0.17.6 (2026-11-12)
 
 ### Only verified contacts can call you or send you files (optional)

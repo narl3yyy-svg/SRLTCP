@@ -36,10 +36,10 @@ on the device is encrypted too.
 </table>
 
 > [!NOTE]
-> **Version 0.17.6.** New privacy option: only verified contacts can call
-> you or send you files. Plus search inside any chat, files and folders from
-> the message box, and photos that stay viewable after a restart. Update
-> every device. See the [release notes](srltcp/RELEASE_NOTES.md).
+> **Version 0.17.7.** Paste a screenshot with Ctrl+V / ⌘V, or drag files
+> anywhere into a chat, to send them. Also: verified-contacts-only option,
+> search inside chats, and photos that stay viewable after a restart.
+> Update every device. See the [release notes](srltcp/RELEASE_NOTES.md).
 
 ## Contents
 
@@ -56,10 +56,10 @@ Get the latest version from **[GitHub Releases](https://github.com/narl3yyy-svg/
 
 | Platform | Download | Requirements |
 |:--|:--|:--|
-| <img src="https://img.shields.io/badge/-Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows" /> | `SRLTCP-0.17.6-windows-x64-setup.exe` | Windows 10/11, x64 |
-| <img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" /> | `SRLTCP-0.17.6-macos-arm64.dmg` | macOS 12+, Apple silicon (M1 and newer) |
-| <img src="https://img.shields.io/badge/-Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android" /> | `SRLTCP-0.17.6.apk` | Android 8+ |
-| <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.6-source.zip` | Python 3.12+ ([from source](#installation)) |
+| <img src="https://img.shields.io/badge/-Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows" /> | `SRLTCP-0.17.7-windows-x64-setup.exe` | Windows 10/11, x64 |
+| <img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" /> | `SRLTCP-0.17.7-macos-arm64.dmg` | macOS 12+, Apple silicon (M1 and newer) |
+| <img src="https://img.shields.io/badge/-Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android" /> | `SRLTCP-0.17.7.apk` | Android 8+ |
+| <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.7-source.zip` | Python 3.12+ ([from source](#installation)) |
 
 Python and Tor are built into the Windows, macOS and Android apps: nothing else to install.
 
@@ -135,7 +135,7 @@ on the internet are turned away before anything is read.
 | **Dual transports** | TCP/IP networking + USB serial (pyserial on a PC, the USB host API on Android) |
 | **Serial radios** | Only contacts connect (private beacons, nobody is discovered). Chat and call audio go ahead of file data. The radio comes before the internet when you're not on the same Wi-Fi |
 | **Fast file transfer** | Windowed streaming (1 MiB chunks direct, 256 KiB over UDP, 2–24 KiB over a serial radio, sized by its measured speed), zstd, verified while streaming. Shows speed and time left on every path. Survives dropped connections and app restarts. Several files at once, optional photo shrinking |
-| **Drag-and-drop send** | Drop files onto a contact |
+| **Drag, drop and paste** | Drop files anywhere in a chat (or onto a contact), or paste an image with Ctrl+V / ⌘V |
 | **Local web UI** | **HTTPS-only** on localhost (default port **9876**), protected by a private access token |
 | **Pairing** | QR code, shareable link, or **NFC tap** (Android): one scan pairs both sides |
 | **Offline delivery** | Messages queue while a contact is offline and are delivered on reconnect, with ✓/✓✓ receipts |
