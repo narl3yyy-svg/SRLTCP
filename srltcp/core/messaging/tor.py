@@ -176,6 +176,21 @@ def _tor_in(folder: Path) -> Path | None:
     return None
 
 
+def _tor_start_advice(output: str, tor_dir: Path) -> str:
+    """Plain words for the usual reasons Tor stops at start (from its output)."""
+    low = output.lower()
+    if "another tor process is running with the same data directory" in low:
+        return ("another Tor is already using SRLTCP's Tor folder (" + str(tor_dir) + "): an "
+                "older SRLTCP, or ./run.sh web, is probably still running. Quit it (or "
+                "restart the computer), then restart SRLTCP")
+    if ("not owned by this user" in low or "permission denied" in low
+            or "operation not permitted" in low):
+        return ("SRLTCP's Tor folder (" + str(tor_dir) + ") can't be used by your user (it "
+                "may have been made with sudo). Fix it with: sudo chown -R \"$USER\" "
+                + str(tor_dir.parent) + " — then restart SRLTCP")
+    return ""
+
+
 def _tor_log_tail(path: Path, lines: int = 12) -> str:
     """The last lines Tor (or the system, starting it) wrote, without the
     routine bootstrap chatter; "" if there's nothing."""
@@ -392,7 +407,7 @@ class TorMixin:
                 log.info("Tor not available: %s", exc)
                 return
             except Exception as exc:  # noqa: BLE001 - keep trying
-                self._tor_state, self._tor_detail = "error", str(exc)[:200]
+                self._tor_state, self._tor_detail = "error", str(exc)[:400]
                 self._tor_failures += 1
                 log.warning("Tor: %s", exc)
             await self._tor_shutdown()
@@ -447,9 +462,10 @@ class TorMixin:
                     if why:
                         log.warning("Tor exited at start (code %s). Its last lines:\n%s",
                                     self._tor_proc.returncode, why)
-                    final = why.splitlines()[-1] if why else ""
+                    final = _tor_start_advice(why, tor_dir) or (
+                        why.splitlines()[-1][-200:] if why else "")
                     raise RuntimeError("tor exited at start" + (
-                        f": {final[-200:]}" if final else " — see the log"))
+                        f": {final}" if final else " — see the log"))
                 await asyncio.sleep(0.2)
             else:
                 raise RuntimeError("Tor did not start in time")

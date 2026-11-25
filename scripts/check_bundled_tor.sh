@@ -31,8 +31,9 @@ echo "== $TOR --version"
 "$TOR" -f "$(native "$WORK/torrc")" --ignore-missing-torrc > "$WORK/tor.log" 2>&1 &
 PID=$!
 ok=0
+PORT=""
 for _ in $(seq 1 100); do  # up to 20 s
-  if [ -s "$WORK/control.port" ]; then ok=1; break; fi
+  if [ -s "$WORK/control.port" ]; then ok=1; PORT="$(cat "$WORK/control.port")"; break; fi
   if ! kill -0 "$PID" 2>/dev/null; then break; fi
   sleep 0.2
 done
@@ -41,7 +42,7 @@ wait "$PID" 2>/dev/null
 echo "== tor output"
 tail -n 25 "$WORK/tor.log"
 if [ "$ok" = 1 ]; then
-  echo "bundled Tor started: $(cat "$WORK/control.port")"
+  echo "bundled Tor started: $PORT"  # (Tor removes the file again when it stops)
   exit 0
 fi
 echo "::error::The bundled Tor did not start (it exited or never opened its control port)."

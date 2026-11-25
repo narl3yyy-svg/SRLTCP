@@ -220,3 +220,15 @@ async def test_tor_that_stops_at_start_says_why(tmp_path, monkeypatch) -> None: 
         await node._tor_start_once()
     assert "exited at start" in str(err.value)
     assert "Library not loaded" in str(err.value)
+
+
+def test_usual_reasons_tor_stops_at_start_are_explained(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from srltcp.core.messaging.tor import _tor_start_advice
+
+    d = tmp_path / ".srltcp" / "tor"
+    busy = _tor_start_advice(
+        "[warn] It looks like another Tor process is running with the same data directory.", d)
+    assert "already using" in busy and str(d) in busy
+    owner = _tor_start_advice("[warn] Directory /x/data is not owned by this user (root)", d)
+    assert "chown" in owner and str(d.parent) in owner
+    assert _tor_start_advice("[notice] Bootstrapped 5%", d) == ""

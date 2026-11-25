@@ -1,5 +1,26 @@
 # SRLTCP Release Notes
 
+## v0.17.11 (2026-11-25)
+
+### Tor problems explain themselves
+- **The bug:** when Tor stopped right after starting, *Settings → Network*
+  only said *Tor: problem — tor exited at start — see the log*, but Tor's own
+  output was thrown away, so the log never said why. (Seen with the macOS
+  app: no onion address, no contacts on other networks.)
+- **The fix:** Tor's output now goes to *tor.log* in SRLTCP's Tor folder
+  (*~/.srltcp/tor/* on macOS and Linux, *%APPDATA%\SRLTCP\tor\* on
+  Windows). If Tor stops at start, Settings shows its reason, and the app's
+  log has its last lines.
+- The two usual reasons are explained in plain words, with what to do:
+  - another Tor is already using SRLTCP's Tor folder (an older SRLTCP, or
+    *./run.sh web*, still running): quit it or restart the computer;
+  - the folder belongs to another user (made with *sudo*): the exact
+    command to give it back.
+- Every Windows and macOS build now starts its bundled Tor before the
+  installer is saved (on macOS also as a downloaded, quarantined app), so a
+  Tor that can't start never reaches you. The 0.17.10 macOS Tor passed this
+  check, so on your Mac the new message in Settings will name the reason.
+
 ## v0.17.10 (2026-11-25)
 
 ### Desktop app: the new layout after an update
