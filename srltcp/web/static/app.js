@@ -933,6 +933,32 @@
     return ` · now ↑ ${formatSpeed(up) || "0 B/s"} ↓ ${formatSpeed(down) || "0 B/s"}`;
   }
 
+  /** The radios hear each other but no session forms: say why (the radio
+   *  only connects contacts, and the same Wi-Fi/LAN comes first). */
+  function radioQuietReason(serial) {
+    const names = (list) => list.join(", ");
+    const onLan = serial.radio_on_lan || [];
+    const noKey = serial.radio_no_key || [];
+    if (serial.contacts === 0) {
+      return "Hearing another radio, but you have no contacts: the radio only connects contacts. "
+        + "Pair with that device first (Pair, or Add Contact).";
+    }
+    if (serial.radio_calls > 0) {
+      return "Hearing the other radio — connecting… (only a device that is one of your contacts connects)";
+    }
+    if (onLan.length) {
+      return `Hearing the other radio. Not needed now: ${names(onLan)} ${onLan.length === 1 ? "is" : "are"} `
+        + "connected over your Wi-Fi/LAN, which comes first. The radio takes over by itself when that "
+        + "connection goes (to try it, turn Wi-Fi/Ethernet off on one device).";
+    }
+    if (noKey.length) {
+      return `Hearing the other radio, but ${names(noKey)} ${noKey.length === 1 ? "hasn't" : "haven't"} `
+        + "connected with you even once yet, so the radio can't recognise them. Connect once "
+        + "(Wi-Fi, VPN or internet), or pair in person, then the radio works.";
+    }
+    return "Hearing the other radio — your contacts are connected another way already.";
+  }
+
   function renderSerialLink(serial) {
     const el = $("#serial-link-status");
     if (!el) return;
@@ -950,7 +976,7 @@
       peers.length
         ? `Connected over the radio: ${peers.join(", ")}`
         : link.packets_in
-          ? "Hearing the other radio — connecting…"
+          ? radioQuietReason(serial)
           : "Port open — nothing heard from the other radio yet",
       `Sent ${kb(link.bytes_out || 0)} · received ${kb(link.bytes_in || 0)} · ${link.packets_in || 0} good / ${link.bad_packets || 0} bad packets · ${link.resent || 0} resent`
         + (ago !== null ? ` · last heard ${ago}s ago` : "")
@@ -2122,7 +2148,7 @@
     const status = state.transportStatus?.[transport];
     if (btn?.disabled || status && !status.active) {
       const hint = transport === "serial"
-        ? "Serial port not open — enable serial in settings and check /dev permissions"
+        ? "Serial port not open — check Settings → Serial (serial on, the right port, the same baud rate on both)"
         : "TCP transport unavailable — restart the node";
       toast(hint);
       return;
@@ -2137,7 +2163,17 @@
       return;
     }
     const bursts = data.bursts || 3;
-    toast(`Announced on ${transport.toUpperCase()} (${bursts}× burst)`);
+    if (transport === "serial") {
+      // The radio never shows new devices (privacy): it only calls contacts.
+      const contacts = (state.trusted || []).filter((p) => !p.blocked).length;
+      toast(contacts
+        ? "Radio beacon sent: your contacts in range answer and connect by themselves. "
+          + "(The radio never shows new devices: only contacts connect over it.)"
+        : "Radio beacon sent, but you have no contacts yet: the radio only connects contacts. "
+          + "Pair first (Pair, or Add Contact with their hash ID), then the two connect over the radio by themselves.");
+    } else {
+      toast(`Announced on ${transport.toUpperCase()} (${bursts}× burst)`);
+    }
     logActivity(`Announced on ${transport}`);
     setTimeout(loadPeers, 800);
     setTimeout(loadPeers, 2000);
@@ -3512,11 +3548,11 @@
       serialBtn.disabled = !serialActive;
       const serialErr = transportStatus.serial?.error;
       serialBtn.title = serialActive
-        ? "Announce on serial/RF"
+        ? "Send a private radio beacon: contacts in range answer and connect (nobody new is shown)"
         : serialErr
           ? serialErr
           : ids.serial
-            ? "Serial port not open — Arch uses group uucp (not dialout)"
+            ? "Serial port not open — see Settings → Serial"
             : "Enable serial in settings first";
     }
 

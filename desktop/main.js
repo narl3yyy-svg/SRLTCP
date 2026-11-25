@@ -333,9 +333,18 @@ function createWindow() {
 
 function loadPage() {
   if (!win || !info) return;
-  win.loadURL(`${origin()}/?token=${encodeURIComponent(info.token)}`).catch((e) => {
-    log(`Page didn't load: ${e.message}`);
-  });
+  // Drop the HTTP cache first: the window only shows the node's own local
+  // page, and a copy cached by an older version (before the page was sent
+  // as no-store) would show the old layout with the new code after an
+  // update. (Only the HTTP cache: unread counts and other page storage stay.)
+  session.defaultSession.clearCache()
+    .catch((e) => log(`Couldn't clear the page cache: ${e.message}`))
+    .finally(() => {
+      if (!win || win.isDestroyed() || !info) return;
+      win.loadURL(`${origin()}/?token=${encodeURIComponent(info.token)}`).catch((e) => {
+        log(`Page didn't load: ${e.message}`);
+      });
+    });
 }
 
 function openExternal(url) {

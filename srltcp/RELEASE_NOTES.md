@@ -1,5 +1,35 @@
 # SRLTCP Release Notes
 
+## v0.17.10 (2026-11-25)
+
+### Desktop app: the new layout after an update
+- **The bug:** after updating, the Windows (and macOS) app could keep
+  showing an old copy of its page: *SR / SRLTCP* at the top left, no clock,
+  the settings cog in the old place, *Search conversations…*. Before 0.17.2
+  the page wasn't marked "don't keep a copy", so the app's built-in browser
+  kept one and went on showing it. (0.17.2 fixed this for Android only.)
+- **The fix:** the desktop app clears its page cache every time it opens the
+  page, so an update always shows the current layout. Your settings, chats
+  and unread counts aren't affected.
+
+### The serial radio says what it does
+- **The radio only connects contacts.** For privacy, nobody is ever shown or
+  discovered over the radio (anyone with a radio in range could otherwise see
+  your name and ID): a device only sends private beacons that its contacts
+  can read, and a contact in range answers and connects by itself.
+- *Announce Serial* used to say *Announced on SERIAL (3× burst)*, which
+  suggested new devices would appear. It now says a radio beacon was sent and
+  that contacts in range connect by themselves; with no contacts yet, it says
+  to pair first (*Pair*, or *Add Contact*).
+- **"Hearing the other radio — connecting…" forever now says why.** The radio
+  is the fallback: a contact already connected over the same Wi-Fi/LAN stays
+  on it (that comes first), and the radio takes over by itself when that
+  connection goes. Settings → Serial now names the reason: no contacts yet
+  (pair first), the contact is connected over your Wi-Fi/LAN (not needed
+  now), or the contact was added by ID and never connected once (the radio
+  can't recognise it yet: connect once, or pair in person).
+- Serial hints no longer mention Linux groups or */dev* on Windows and macOS.
+
 ## v0.17.9 (2026-11-25)
 
 ### Windows app starts again

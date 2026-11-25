@@ -392,3 +392,29 @@ async def test_cancelling_a_radio_transfer_frees_the_link(
     assert await wait_for(
         lambda: any(m["text"] == "after the cancel" for m in b.get_messages()), timeout=15)
     assert time.monotonic() - sent_at < 10
+
+
+def test_settings_say_why_the_radio_stays_quiet(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Two radios that hear each other but never connect: Settings → Serial
+    says why (no contacts / never connected once / already on the LAN)."""
+    from types import SimpleNamespace
+
+    from srltcp.core.trusted import TrustedPeer
+    from tests.test_e2e_nodes import make_node
+
+    a = make_node(tmp_path, "alice")
+    reasons = a._radio_reasons()
+    assert reasons["contacts"] == 0 and reasons["radio_calls"] == 0
+    # Added by ID only, never connected: no key to be recognised by.
+    a.trusted.add(TrustedPeer(hash_id="b" * 32, name="Bob"))
+    assert a._radio_reasons()["radio_no_key"] == ["Bob"]
+    # Paired (key known), not connected: the beacons call them.
+    cat = make_node(tmp_path, "cat").identity_store.load_or_create("Cat", "tcp")
+    a.trusted.add(TrustedPeer(hash_id=cat.hash_id, name="Cat", public_key=cat.public_bytes().hex()))
+    assert a._radio_reasons()["radio_calls"] == 1
+    # Connected over the same Wi-Fi/LAN: that comes first, the radio waits.
+    lan = SimpleNamespace(up=True, transport="tcp", transport_peer_id="p1")
+    monkeypatch.setattr(a, "get_link", lambda h: lan if h == cat.hash_id else None)
+    monkeypatch.setattr(a, "_tcp_peer_on_lan", lambda pid: True)
+    reasons = a._radio_reasons()
+    assert reasons["radio_on_lan"] == ["Cat"] and reasons["radio_calls"] == 0

@@ -1315,9 +1315,34 @@ class MessagingBackend(
                     for link in self._links.values()
                     if link.transport == "serial" and link.up
                 ],
+                # Why the radio may stay quiet (Settings → Serial says so):
+                **self._radio_reasons(),
             }
         status["tor"] = self.tor_status()
         return status
+
+    def _radio_reasons(self) -> dict[str, Any]:
+        """Who the radio calls, and why the others aren't called: only contacts
+        connect over it; one already on the same Wi-Fi/LAN stays there (that
+        comes first); one never connected even once has no key to be
+        recognised by yet."""
+        contacts = [p for p in self.trusted.list_peers() if not p.blocked]
+        on_lan, no_key, callable_ = [], [], 0
+        for peer in contacts:
+            link = self.get_link(peer.hash_id)
+            name = peer.name or peer.hash_id[:8]
+            if link and link.up and link.transport == "tcp" and self._beats_radio(link):
+                on_lan.append(name)
+            elif not peer.public_key:
+                no_key.append(name)
+            elif not (link and link.up and link.transport == "serial"):
+                callable_ += 1
+        return {
+            "contacts": len(contacts),
+            "radio_calls": callable_,  # contacts the beacons name now
+            "radio_on_lan": on_lan[:8],  # connected over the same Wi-Fi/LAN instead
+            "radio_no_key": no_key[:8],  # added by ID, never connected yet
+        }
 
     def _history_enabled(self) -> bool:
         return self.config.message_retention_hours > 0
