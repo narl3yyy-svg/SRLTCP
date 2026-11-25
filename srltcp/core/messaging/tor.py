@@ -176,6 +176,17 @@ def _tor_in(folder: Path) -> Path | None:
     return None
 
 
+def _tor_log_tail(path: Path, lines: int = 12) -> str:
+    """The last lines Tor (or the system, starting it) wrote, without the
+    routine bootstrap chatter; "" if there's nothing."""
+    try:
+        text = path.read_bytes()[-8192:].decode("utf-8", "replace")
+    except OSError:
+        return ""
+    keep = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return "\n".join(keep[-lines:])
+
+
 def _tor_binary(configured: str = "") -> str | None:
     """Find a tor executable: the setting (the file, or a folder holding it),
     PATH, then where Tor Browser / the Tor Expert Bundle usually end up."""
@@ -432,7 +443,13 @@ class TorMixin:
                 if port_file.exists() and port_file.read_text().strip():
                     break
                 if self._tor_proc and self._tor_proc.returncode is not None:
-                    raise RuntimeError("tor exited at start — see the log")
+                    why = _tor_log_tail(tor_dir / "tor.log")
+                    if why:
+                        log.warning("Tor exited at start (code %s). Its last lines:\n%s",
+                                    self._tor_proc.returncode, why)
+                    final = why.splitlines()[-1] if why else ""
+                    raise RuntimeError("tor exited at start" + (
+                        f": {final[-200:]}" if final else " — see the log"))
                 await asyncio.sleep(0.2)
             else:
                 raise RuntimeError("Tor did not start in time")
@@ -575,12 +592,17 @@ class TorMixin:
             env["LD_LIBRARY_PATH"] = os.pathsep.join(
                 x for x in (str(Path(binary).parent), env.get("LD_LIBRARY_PATH", "")) if x)
             kwargs["env"] = env
-        self._tor_proc = await asyncio.create_subprocess_exec(
-            binary, "-f", str(torrc), "--ignore-missing-torrc",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-            **kwargs,
-        )
+        # Tor's own output (and the system's, e.g. a library that can't be
+        # loaded) goes to tor.log: if it stops at start, the reason is there.
+        out = open(tor_dir / "tor.log", "wb")  # noqa: SIM115 - the child keeps it
+        try:
+            self._tor_proc = await asyncio.create_subprocess_exec(
+                binary, "-f", str(torrc), "--ignore-missing-torrc",
+                stdout=out, stderr=asyncio.subprocess.STDOUT,
+                **kwargs,
+            )
+        finally:
+            out.close()  # (the child has its own copy)
 
     def _tor_start_android(self: MessagingBackend) -> str:
         """Bundled Tor (tor-android): write its torrc, start TorService (bound,

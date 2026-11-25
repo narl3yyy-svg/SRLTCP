@@ -189,3 +189,34 @@ def test_tor_downloaded_by_run_sh_is_found_on_mac_and_linux(  # type: ignore[no-
     assert tor._tor_binary("") == str(bundled)
     monkeypatch.setattr(sys, "platform", "linux")
     assert tor._tor_binary("") == str(bundled)
+
+
+async def test_tor_that_stops_at_start_says_why(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Tor's own output used to go nowhere, so "tor exited at start — see the
+    log" had nothing in the log. Now its last line is in the error (and the
+    log), e.g. a library macOS refused to load."""
+    import os
+    import sys
+
+    import pytest
+
+    if sys.platform == "win32":
+        pytest.skip("uses a shell script as a stand-in for tor")
+    from tests.test_e2e_nodes import make_node
+
+    fake = tmp_path / "tor"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "echo 'dyld[123]: Library not loaded: @rpath/libevent-2.1.7.dylib' >&2\n"
+        "exit 6\n"
+    )
+    os.chmod(fake, 0o755)
+    monkeypatch.setenv("SRLTCP_TOR_BINARY", str(fake))
+    node = make_node(tmp_path, "alice")
+    monkeypatch.setattr(node, "_tor_on_android", lambda: False)
+    monkeypatch.setattr(node, "_tor_dir", lambda: tmp_path / "tor-data")
+    (tmp_path / "tor-data").mkdir()
+    with pytest.raises(RuntimeError) as err:
+        await node._tor_start_once()
+    assert "exited at start" in str(err.value)
+    assert "Library not loaded" in str(err.value)

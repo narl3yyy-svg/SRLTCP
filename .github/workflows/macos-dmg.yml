@@ -10,6 +10,7 @@ on:
       - "srltcp/**"
       - "desktop/**"
       - "scripts/build_desktop.sh"
+      - "scripts/check_bundled_tor.sh"
       - "pyproject.toml"
       - ".github/workflows/macos-dmg.yml"
   workflow_dispatch:
@@ -67,6 +68,14 @@ jobs:
           # like threading in 0.17.8's Windows build, fails here, not on your PC):
           "$PY" -I -B -c "import threading, asyncio, ssl, ctypes, json, zipfile; import cryptography, aiohttp, zstandard; import srltcp.app, srltcp.web.server, srltcp.core.messaging.backend; print('imports ok')"
           test -x "$APP/Contents/Resources/backend/tor/tor/tor"
+          # The bundled Tor must start (0.17.10 on a Mac: "tor exited at start").
+          bash scripts/check_bundled_tor.sh "$APP/Contents/Resources/backend/tor/tor/tor"
+          # …also as you get it: a downloaded app is quarantined by macOS.
+          Q="$(mktemp -d)/SRLTCP.app"
+          ditto "$APP" "$Q"
+          xattr -w -r com.apple.quarantine "0081;$(printf %x "$(date +%s)");Safari;" "$Q"
+          echo "== quarantined copy (as downloaded)"
+          bash scripts/check_bundled_tor.sh "$Q/Contents/Resources/backend/tor/tor/tor"
           hdiutil attach -nobrowse -readonly -mountpoint /tmp/srltcp-dmg "$DMG"
           test -d /tmp/srltcp-dmg/SRLTCP.app && test -L /tmp/srltcp-dmg/Applications
           hdiutil detach /tmp/srltcp-dmg
