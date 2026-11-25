@@ -192,6 +192,11 @@ def install_tor(target: str, dest: Path) -> None:
 
 
 def main(argv: list[str]) -> int:
+    # (A Windows console's default code page can't print "→": UTF-8 out.)
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
     targets = argv or ["win-x64", "mac-arm64"]
     for target in targets:
         if target not in PYTHON:

@@ -50,6 +50,7 @@ jobs:
       - name: Build the installer
         env:
           PYTHON: python
+          PYTHONUTF8: "1"  # (the Windows console code page can't print every character)
         run: bash scripts/build_desktop.sh win
 
       - name: Check the installer
