@@ -3100,8 +3100,11 @@
           hintEl.textContent = `You are in '${group.group}' but this session has not picked it up — restart via ./run.sh web or log out/in.`;
         } else if (group.group && !group.in_session && !group.in_account) {
           hintEl.textContent = `Add your user to '${group.group}' (Arch: uucp, Debian/Ubuntu: dialout), log out/in, then restart SRLTCP.`;
-        } else if (ports.length && ports.every((p) => !p.accessible)) {
-          hintEl.textContent = `Serial device(s) detected but not readable — check ${group.group || "uucp/dialout"} group permissions.`;
+        } else if (ports.length && ports.every((p) => !p.accessible) && group.group) {
+          // (Linux only: Windows and macOS have no serial device groups.)
+          hintEl.textContent = `Serial device(s) detected but not readable — check ${group.group} group permissions.`;
+        } else if (serialErr && $("#set-enable-serial")?.checked) {
+          hintEl.textContent = serialErr;
         } else {
           hintEl.textContent = "Both sides need serial on with the same baud rate. Only contacts connect over the radio.";
         }

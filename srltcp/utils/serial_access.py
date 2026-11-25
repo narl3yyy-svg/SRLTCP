@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import sys
 import types
 
 _grp: types.ModuleType | None
@@ -52,7 +53,14 @@ def format_serial_permission_help(port: str, error: Exception | str | None = Non
     status = serial_group_status()
     system = platform.system()
     lines = [f"Cannot open {port}"]
-    if "Permission denied" in err or "Errno 13" in err:
+    if system == "Windows" and ("Access is denied" in err or "PermissionError" in err):
+        # Windows has no per-user serial permissions: "Access is denied" means
+        # another program has the port open (only one may at a time).
+        lines.append(
+            "another program is using it (Arduino IDE, PuTTY, a terminal, or SRLTCP "
+            "running twice): close it, then save Settings again"
+        )
+    elif "Permission denied" in err or "Errno 13" in err:
         if status.get("needs_relogin") and group:
             lines.append(
                 f"You are in '{group}' but this session has not picked it up — "
@@ -75,6 +83,14 @@ def format_serial_permission_help(port: str, error: Exception | str | None = Non
 
 def user_can_access_serial(port: str) -> bool:
     """Best-effort check whether the current user can open the device."""
-    if not port or not os.path.exists(port):
+    if not port:
+        return False
+    if sys.platform == "win32":
+        # COM ports aren't files (os.path.exists("COM30") is always False),
+        # and Windows has no per-user serial permissions: any user may open a
+        # port unless another program already has it open, which only shows
+        # when opening it (see format_serial_permission_help).
+        return True
+    if not os.path.exists(port):
         return False
     return os.access(port, os.R_OK | os.W_OK)

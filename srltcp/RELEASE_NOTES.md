@@ -1,5 +1,21 @@
 # SRLTCP Release Notes
 
+## v0.17.8 (2026-11-25)
+
+### Windows: serial ports no longer say "no permission"
+- **The bug:** in the Windows app, *Settings → Serial* showed every port as
+  *— no permission* with the hint *check uucp/dialout group permissions*,
+  even while the radio was connected and working. The check was made for
+  Linux, where a serial port is a file such as */dev/ttyUSB0* with group
+  permissions; a Windows port is named *COM30* and isn't a file, so the check
+  always failed there. Only the label was wrong: opening the port and the
+  radio link were never affected.
+- **The fix:** Windows has no per-user serial permissions, so COM ports are
+  shown normally. The Linux group hint only appears on Linux.
+- If a port really can't be opened on Windows (another program such as the
+  Arduino IDE or PuTTY has it open, as Windows allows only one at a time),
+  Settings now says exactly that instead of a Linux tip.
+
 ## v0.17.7 (2026-11-12)
 
 ### Paste and drop files into a chat
