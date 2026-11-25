@@ -114,10 +114,15 @@ def install_python(target: str, dest: Path) -> Path:
     for extra in ("tcl", "share", "include"):
         if (python_dir / extra).is_dir():
             shutil.rmtree(python_dir / extra)
+    # Tcl/Tk (python/lib/tcl8.6, thread2.8, libtcl…) exist only in the macOS
+    # and Linux builds. Never on Windows: there python/Lib is the standard
+    # library, and on Windows (case-insensitive) "lib" IS "Lib", so these
+    # patterns would delete threading.py itself (0.17.8's Windows app).
     lib_dir = python_dir / "lib"
-    for pattern in ("libt[ck]l*", "tk*", "tcl*", "itcl*", "thread*", "pkgconfig"):
-        for tk in lib_dir.glob(pattern):
-            shutil.rmtree(tk) if tk.is_dir() else tk.unlink()
+    if not target.startswith("win") and lib_dir.resolve() != lib.resolve():
+        for pattern in ("libt[ck]l*", "tk*", "tcl*", "itcl*", "thread*", "pkgconfig"):
+            for tk in lib_dir.glob(pattern):
+                shutil.rmtree(tk) if tk.is_dir() else tk.unlink()
     for cfg in lib.glob("config-*"):
         shutil.rmtree(cfg)
     # pip and setuptools: the app installs nothing at run time.

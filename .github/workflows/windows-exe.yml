@@ -63,7 +63,10 @@ jobs:
           echo "installer: $size bytes"
           test "$size" -gt 50000000  # (a broken build is tiny; a real one ~130 MB)
           PY="desktop/dist/win-unpacked/resources/backend/python/python.exe"
-          "$PY" -I -c "import srltcp, sys; assert srltcp.__version__ == '$v', srltcp.__version__; print('backend', srltcp.__version__, sys.platform)"
+          "$PY" -I -B -c "import srltcp, sys; assert srltcp.__version__ == '$v', srltcp.__version__; print('backend', srltcp.__version__, sys.platform)"
+          # The app's real imports, as at startup (a stripped-out stdlib module,
+          # like threading in 0.17.8's Windows build, fails here, not on your PC):
+          "$PY" -I -B -c "import threading, asyncio, ssl, ctypes, json, zipfile; import cryptography, aiohttp, zstandard; import srltcp.app, srltcp.web.server, srltcp.core.messaging.backend; print('imports ok')"
           test -f desktop/dist/win-unpacked/resources/backend/tor/tor/tor.exe
           sha256sum "$EXE" | tee "$EXE.sha256"
 

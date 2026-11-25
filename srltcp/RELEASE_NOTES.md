@@ -1,5 +1,23 @@
 # SRLTCP Release Notes
 
+## v0.17.9 (2026-11-25)
+
+### Windows app starts again
+- **The bug:** the 0.17.8 Windows app stopped at once with *The SRLTCP node
+  stopped while starting* (*No module named 'threading'*). Its installer was
+  the first built on a Windows machine, and a cleanup step meant to remove
+  the unused Tcl/Tk toolkit from Python (in *python/lib* on macOS and Linux)
+  also matched Python's own standard library there, because Windows ignores
+  letter case (*lib* is *Lib*). It deleted *threading.py*. The macOS app and
+  the Android app weren't affected.
+- **The fix:** that cleanup no longer runs for Windows, and refuses to touch
+  the standard library on any system.
+- Every Windows and macOS build now starts the bundled Python and imports
+  what the app needs at startup before the installer is saved, so a missing
+  module stops the build instead of reaching you.
+- Includes 0.17.8's fix: serial ports on Windows no longer say *no
+  permission*.
+
 ## v0.17.8 (2026-11-25)
 
 ### Windows: serial ports no longer say "no permission"
