@@ -14,6 +14,9 @@ an Apple-silicon runner on every push to `main` (and on demand: *Actions →
 macOS app (.dmg) → Run workflow*) and keeps it as a downloadable artifact
 (`.github/workflows/macos-dmg.yml`). Nothing is published automatically.
 
+The Windows installer is built the same way, natively on a Windows runner
+(`.github/workflows/windows-exe.yml`), so no Wine is needed.
+
 Installing and using it: see *Desktop app* in the [main README](../README.md#desktop-app-windows-11-x64-and-macos-apple-silicon).
 
 ## How it works

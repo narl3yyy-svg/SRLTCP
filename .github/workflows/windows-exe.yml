@@ -1,0 +1,76 @@
+name: Windows app (.exe)
+
+# Builds the Windows x64 installer natively on GitHub's Windows runners (no
+# Wine) and keeps it as a downloadable build artifact. Nothing is published:
+# releases are made by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "srltcp/**"
+      - "desktop/**"
+      - "scripts/build_desktop.sh"
+      - "pyproject.toml"
+      - ".github/workflows/windows-exe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-exe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exe:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Version
+        id: version
+        run: |
+          v=$(python -c 'import re; print(re.search(r"__version__ = \"([^\"]+)\"", open("srltcp/__init__.py").read()).group(1))')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build the installer
+        env:
+          PYTHON: python
+        run: bash scripts/build_desktop.sh win
+
+      - name: Check the installer
+        run: |
+          set -euo pipefail
+          v="${{ steps.version.outputs.version }}"
+          EXE="desktop/dist/SRLTCP-$v-windows-x64-setup.exe"
+          test -f "$EXE"
+          size=$(stat -c %s "$EXE")
+          echo "installer: $size bytes"
+          test "$size" -gt 50000000  # (a broken build is tiny; a real one ~130 MB)
+          PY="desktop/dist/win-unpacked/resources/backend/python/python.exe"
+          "$PY" -I -c "import srltcp, sys; assert srltcp.__version__ == '$v', srltcp.__version__; print('backend', srltcp.__version__, sys.platform)"
+          test -f desktop/dist/win-unpacked/resources/backend/tor/tor/tor.exe
+          sha256sum "$EXE" | tee "$EXE.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SRLTCP-${{ steps.version.outputs.version }}-windows-x64-setup
+          path: |
+            desktop/dist/SRLTCP-${{ steps.version.outputs.version }}-windows-x64-setup.exe
+            desktop/dist/SRLTCP-${{ steps.version.outputs.version }}-windows-x64-setup.exe.sha256
+          if-no-files-found: error
+          retention-days: 30
