@@ -4,6 +4,7 @@
   "version": "0.17.11",
   "description": "SRLTCP desktop app: peer-to-peer, quantum-safe messenger (tray / menu bar app)",
   "main": "main.js",
+  "desktopName": "srltcp-desktop.desktop",
   "author": "SRLTCP Contributors",
   "license": "GPL-3.0-only",
   "homepage": "https://github.com/narl3yyy-svg/SRLTCP",
@@ -97,7 +98,7 @@
           ]
         }
       ],
-      "icon": "build/icon.png",
+      "icon": "build/icons",
       "category": "Network",
       "maintainer": "narl3yyy-svg <283486160+narl3yyy-svg@users.noreply.github.com>",
       "vendor": "SRLTCP Contributors",
@@ -116,7 +117,8 @@
           "to": "backend"
         }
       ],
-      "artifactName": "SRLTCP-${version}-linux-amd64.${ext}"
+      "artifactName": "SRLTCP-${version}-linux-amd64.${ext}",
+      "syncDesktopName": true
     },
     "publish": null,
     "deb": {

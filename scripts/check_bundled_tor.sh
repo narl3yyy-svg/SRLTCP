@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start a desktop app's bundled Tor the way SRLTCP does, and check it comes up
 # (writes its control port file) instead of exiting at start. Used by the
-# macOS and Windows build workflows; prints Tor's own output on failure.
+# macOS, Windows and Linux build workflows; prints Tor's own output on failure.
 #
 #   bash scripts/check_bundled_tor.sh path/to/tor[.exe]
 set -uo pipefail
@@ -13,6 +13,11 @@ chmod 700 "$DATA" 2>/dev/null || true
 native() {  # Tor on Windows wants Windows paths
   if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
 }
+# On Linux the Tor Expert Bundle keeps tor's own libraries (libevent,
+# OpenSSL) next to it without a run path; SRLTCP points LD_LIBRARY_PATH there.
+if [ "$(uname -s)" = Linux ] && ls "$(dirname "$TOR")"/libevent* >/dev/null 2>&1; then
+  export LD_LIBRARY_PATH="$(cd "$(dirname "$TOR")" && pwd)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 cat > "$WORK/torrc" <<EOF
 DataDirectory $(native "$DATA")
 SocksPort 127.0.0.1:auto
