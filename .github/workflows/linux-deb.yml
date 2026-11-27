@@ -1,0 +1,78 @@
+name: Linux app (.deb)
+
+# Builds the Ubuntu / Kubuntu / Debian x64 package on GitHub's Ubuntu runners
+# and keeps it as a downloadable build artifact. Nothing is published:
+# releases are made by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "srltcp/**"
+      - "desktop/**"
+      - "scripts/build_desktop.sh"
+      - "scripts/check_bundled_tor.sh"
+      - "pyproject.toml"
+      - ".github/workflows/linux-deb.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-deb-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Version
+        id: version
+        run: |
+          v=$(python -c 'import re; print(re.search(r"__version__ = \"([^\"]+)\"", open("srltcp/__init__.py").read()).group(1))')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build the package
+        env:
+          PYTHON: python
+        run: bash scripts/build_desktop.sh linux
+
+      - name: Check the package
+        run: |
+          set -euo pipefail
+          v="${{ steps.version.outputs.version }}"
+          DEB="desktop/dist/SRLTCP-$v-linux-amd64.deb"
+          test -f "$DEB"
+          dpkg-deb --info "$DEB"
+          test "$(dpkg-deb --field "$DEB" Architecture)" = amd64
+          size=$(stat -c %s "$DEB")
+          echo "package: $size bytes"
+          test "$size" -gt 50000000  # (a broken build is tiny)
+          sudo apt-get install -y "./$DEB"
+          PY=/opt/SRLTCP/resources/backend/python/bin/python3
+          "$PY" -I -B -c "import srltcp, sys; assert srltcp.__version__ == '$v', srltcp.__version__; print('backend', srltcp.__version__, sys.platform)"
+          "$PY" -I -B -c "import threading, asyncio, ssl, ctypes, json, zipfile; import cryptography, aiohttp, zstandard, serial; import srltcp.app, srltcp.web.server, srltcp.core.messaging.backend; print('imports ok')"
+          bash scripts/check_bundled_tor.sh /opt/SRLTCP/resources/backend/tor/tor/tor
+          sha256sum "$DEB" | tee "$DEB.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SRLTCP-${{ steps.version.outputs.version }}-linux-amd64
+          path: |
+            desktop/dist/SRLTCP-${{ steps.version.outputs.version }}-linux-amd64.deb
+            desktop/dist/SRLTCP-${{ steps.version.outputs.version }}-linux-amd64.deb.sha256
+          if-no-files-found: error
+          retention-days: 30

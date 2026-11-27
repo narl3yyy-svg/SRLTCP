@@ -12,7 +12,7 @@
     "start": "electron .",
     "dist:win": "electron-builder --win --x64",
     "dist:mac": "electron-builder --mac --arm64",
-    "dist:linux": "electron-builder --linux --x64"
+    "dist:linux": "electron-builder --linux deb --x64"
   },
   "devDependencies": {
     "electron": "44.9.2",
@@ -91,7 +91,7 @@
     "linux": {
       "target": [
         {
-          "target": "dir",
+          "target": "deb",
           "arch": [
             "x64"
           ]
@@ -99,14 +99,43 @@
       ],
       "icon": "build/icon.png",
       "category": "Network",
+      "maintainer": "narl3yyy-svg <283486160+narl3yyy-svg@users.noreply.github.com>",
+      "vendor": "SRLTCP Contributors",
+      "synopsis": "Peer-to-peer, quantum-safe messenger and file transfer",
+      "description": "SRLTCP: fast, secure peer-to-peer messaging, calls and file transfer over Serial (USB) and TCP/IP. Bundles its own Python and Tor.",
+      "desktop": {
+        "entry": {
+          "Name": "SRLTCP",
+          "GenericName": "Secure Messenger",
+          "Keywords": "chat;messenger;p2p;file transfer;serial;tor;"
+        }
+      },
       "extraResources": [
         {
           "from": "backend/linux-x64",
           "to": "backend"
         }
-      ]
+      ],
+      "artifactName": "SRLTCP-${version}-linux-amd64.${ext}"
     },
-    "publish": null
+    "publish": null,
+    "deb": {
+      "packageName": "srltcp",
+      "priority": "optional",
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libasound2",
+        "libgbm1"
+      ]
+    }
   },
   "repository": {
     "type": "git",

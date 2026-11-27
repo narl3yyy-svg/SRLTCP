@@ -1,4 +1,4 @@
-# SRLTCP desktop app (Windows, macOS)
+# SRLTCP desktop app (Windows, macOS, Linux)
 
 A small tray / menu-bar app around SRLTCP: it runs the SRLTCP node (the same
 program as `run.bat web` / `./run.sh web`) with its own Python and Tor, and
@@ -8,6 +8,7 @@ shows the node's page in a window. Builds:
 |---|---|---|
 | Windows 10/11, x64 | `dist/SRLTCP-<version>-windows-x64-setup.exe` | NSIS installer, per user (no admin rights), Start menu and desktop shortcuts, uninstaller |
 | macOS 12+, Apple silicon | `dist/SRLTCP-<version>-macos-arm64.dmg` (on a Mac) and `.zip` | `SRLTCP.app`, ad-hoc signed (not notarized); the disk image has a link to *Applications* for drag-and-drop install |
+| Ubuntu / Kubuntu / Debian, x64 | `dist/SRLTCP-<version>-linux-amd64.deb` (on Linux) | Installs to `/opt/SRLTCP` with a menu entry and `srltcp-desktop` command; `sudo apt install ./SRLTCP-<version>-linux-amd64.deb` |
 
 The `.dmg` needs `hdiutil`, so it's made on a Mac: GitHub Actions builds it on
 an Apple-silicon runner on every push to `main` (and on demand: *Actions →
@@ -15,7 +16,8 @@ macOS app (.dmg) → Run workflow*) and keeps it as a downloadable artifact
 (`.github/workflows/macos-dmg.yml`). Nothing is published automatically.
 
 The Windows installer is built the same way, natively on a Windows runner
-(`.github/workflows/windows-exe.yml`), so no Wine is needed.
+(`.github/workflows/windows-exe.yml`), so no Wine is needed, and the Linux
+`.deb` on an Ubuntu runner (`.github/workflows/linux-deb.yml`).
 
 Installing and using it: see *Desktop app* in the [main README](../README.md#desktop-app-windows-11-x64-and-macos-apple-silicon).
 
@@ -45,7 +47,7 @@ Installing and using it: see *Desktop app* in the [main README](../README.md#des
 ## Building
 
 ```bash
-bash scripts/build_desktop.sh          # both; or: win / mac
+bash scripts/build_desktop.sh          # Windows and macOS; or: win / mac / linux
 ```
 
 Needs Node.js 20+ and Python 3.12. It runs on Linux, macOS or Windows:

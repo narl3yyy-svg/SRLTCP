@@ -59,9 +59,10 @@ Get the latest version from **[GitHub Releases](https://github.com/narl3yyy-svg/
 | <img src="https://img.shields.io/badge/-Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows" /> | `SRLTCP-0.17.11-windows-x64-setup.exe` | Windows 10/11, x64 |
 | <img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" /> | `SRLTCP-0.17.11-macos-arm64.dmg` | macOS 12+, Apple silicon (M1 and newer) |
 | <img src="https://img.shields.io/badge/-Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android" /> | `SRLTCP-0.17.11.apk` | Android 8+ |
+| <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.11-linux-amd64.deb` | Ubuntu 22.04+ / Kubuntu / Debian 12+, x64 ([install](#desktop-app-linux-ubuntu--kubuntu--debian-x64)) |
 | <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.11-source.zip` | Python 3.12+ ([from source](#installation)) |
 
-Python and Tor are built into the Windows, macOS and Android apps: nothing else to install.
+Python and Tor are built into the Windows, macOS, Linux (.deb) and Android apps: nothing else to install.
 
 <details>
 <summary><b>First launch: unsigned app warnings</b></summary>
@@ -72,6 +73,8 @@ The apps are not code-signed yet, so the first launch shows a warning:
   asks, allow **Private networks**.
 - **macOS:** open the disk image and drag **SRLTCP** to *Applications*. Then
   *System Settings → Privacy & Security* → **Open Anyway**.
+- **Linux (.deb):** install with `sudo apt install ./SRLTCP-X.Y.Z-linux-amd64.deb`
+  (see [below](#desktop-app-linux-ubuntu--kubuntu--debian-x64)).
 - **Android:** allow installing apps from your browser or file manager.
 
 </details>
@@ -315,6 +318,41 @@ How it works:
 - **Private and pinned:** the window only shows SRLTCP's own page. It trusts exactly the certificate the SRLTCP process made (its SHA-256), only on 127.0.0.1. Links to other sites open in your browser. Camera, microphone and notifications are allowed for SRLTCP's page only.
 
 Building the apps yourself: [desktop/README.md](desktop/README.md).
+
+### Desktop app: Linux (Ubuntu / Kubuntu / Debian, x64)
+
+The same desktop app as a `.deb` package for 64-bit (x86_64 / amd64) Ubuntu 22.04 or newer, Kubuntu, Linux Mint, Debian 12 or newer and other Debian-based systems. Python 3.12, SRLTCP and Tor are inside the package: nothing else to install from source.
+
+1. Download `SRLTCP-X.Y.Z-linux-amd64.deb` from [Releases](https://github.com/narl3yyy-svg/SRLTCP/releases/latest).
+2. Install it from a terminal in the folder you downloaded it to (`apt` also installs the few system libraries the app needs):
+
+   ```bash
+   cd ~/Downloads
+   sudo apt install ./SRLTCP-*-linux-amd64.deb
+   ```
+
+   (Keep the `./`: it tells `apt` it's a file, not a package name.) On Kubuntu you can instead double-click the file and install it with **Discover**; `apt` gives clearer messages if something goes wrong.
+3. Start **SRLTCP** from the application menu (*Internet* / *Network*), or run `srltcp-desktop` in a terminal.
+
+Like on Windows and macOS, closing the window keeps SRLTCP running in the **system tray** (on Kubuntu/KDE Plasma, next to the clock; on GNOME/Ubuntu the tray needs the *AppIndicator* extension, which Ubuntu has on by default). *Quit SRLTCP* in the tray icon's menu stops it. The app uses the same data folder as `./run.sh` (`~/.srltcp`), so your identity, contacts and chats carry over; don't run both at once.
+
+**USB serial** links need your user in the `dialout` group (once, then log out and back in):
+
+```bash
+sudo usermod -aG dialout $USER
+```
+
+**Updating:** install the newer `.deb` the same way; your data is kept.
+
+**Uninstalling:**
+
+```bash
+sudo apt remove srltcp
+```
+
+This removes the app but keeps your data in `~/.srltcp` (and the app's window settings in `~/.config/SRLTCP Desktop`). To delete those too: `rm -rf ~/.srltcp "$HOME/.config/SRLTCP Desktop"` — that deletes your identity and chats for good, so make a backup first if you might want them.
+
+**Checking the download (optional):** `sha256sum SRLTCP-*-linux-amd64.deb` and compare with the checksum on the release page.
 
 ### From source: macOS (Apple silicon) and Linux
 
