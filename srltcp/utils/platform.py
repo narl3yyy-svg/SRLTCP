@@ -46,7 +46,8 @@ def resolve_serial_port(saved: str) -> str:
     """The adapter to open. Android: the saved one while it's plugged in;
     otherwise ("Automatic", or the saved one is gone) the adapter plugged in
     most recently, so a new radio is used as soon as it's plugged in. PC:
-    the saved port, else the default one."""
+    the saved port while it's there; "Automatic" (or the saved one is gone
+    and another USB adapter is plugged in) the USB adapter that's there."""
     if is_android():
         from srltcp.transports.android_serial import list_ports
 
@@ -55,18 +56,38 @@ def resolve_serial_port(saved: str) -> str:
             return saved
         newest = max(ports, key=lambda p: int(p.get("attached") or 0), default=None)
         return str(newest["device"]) if newest else ""
-    return saved or default_serial_port()
+    if not saved:
+        return default_serial_port()
+    if not saved.startswith("/dev/") or os.path.exists(saved):
+        return saved
+    # The saved device file is gone (Linux renames a replugged radio, e.g.
+    # /dev/ttyACM0 → /dev/ttyACM1): use the USB adapter that's plugged in, if
+    # any; else the saved one, whose error then says why it can't open.
+    usb = usb_serial_ports()
+    return usb[0] if usb else saved
+
+
+def usb_serial_ports() -> list[str]:
+    """USB serial adapters plugged into this computer (not Android). Only USB
+    ones: built-in UART slots (/dev/ttyS0…31 on Linux, listed even with
+    nothing connected), COM1 and Bluetooth ports are never a radio."""
+    try:
+        from serial.tools import list_ports
+
+        found = list(list_ports.comports())
+    except Exception:  # (pyserial missing, or a broken udev / registry entry)
+        return []
+    return sorted(p.device for p in found if p.device and p.vid is not None)
 
 
 def default_serial_port() -> str:
+    """"Automatic": the USB serial adapter that's plugged in, "" if none.
+    Linux: /dev/ttyUSB* (FTDI, CH340, CP210x) or /dev/ttyACM* (USB CDC:
+    ESP32-S3/C3, RP2040, Arduino); macOS: /dev/cu.usb*; Windows: COM<n>."""
     if is_android():
         from srltcp.transports.android_serial import list_ports
 
         ports = list_ports()
         return str(ports[0]["device"]) if ports else ""
-    system = platform.system()
-    if system == "Windows":
-        return "COM3"
-    if system == "Darwin":
-        return "/dev/tty.usbserial"
-    return "/dev/ttyUSB0"
+    usb = usb_serial_ports()
+    return usb[0] if usb else ""

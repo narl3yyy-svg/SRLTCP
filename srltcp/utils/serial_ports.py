@@ -35,6 +35,8 @@ def list_serial_ports() -> list[dict[str, str | bool | int]]:
         device = port.device or ""
         if not device:
             continue
+        if port.vid is None and (port.description or "n/a") == "n/a":
+            continue  # (Linux's empty built-in UART slots, /dev/ttyS0…31)
         label = port.description or device
         if port.manufacturer:
             label = f"{label} ({port.manufacturer})"

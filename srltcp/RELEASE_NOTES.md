@@ -1,5 +1,24 @@
 # SRLTCP Release Notes
 
+## v0.17.12 (2026-11-27)
+
+### USB radios found automatically on Linux, macOS and Windows
+- **The bug:** with *Settings → Serial → Automatic*, a computer always
+  tried one fixed name: */dev/ttyUSB0* on Linux (*/dev/tty.usbserial* on
+  macOS, *COM3* on Windows). Radios that show up under another name never
+  opened: an ESP32-S3/C3, RP2040 or Arduino board is */dev/ttyACM0* on
+  Linux, so Settings said *Cannot open /dev/ttyUSB0 — No such file or
+  directory* with the radio plugged in.
+- **The fix:** *Automatic* uses the USB serial adapter that's actually
+  plugged in (*/dev/ttyUSB\** or */dev/ttyACM\** on Linux, */dev/cu.usb\** on
+  macOS, *COM\<n\>* on Windows). With none plugged in, Settings says *No
+  serial adapter connected*, and the radio opens as soon as it's plugged in.
+- A saved port that's gone (Linux renamed a replugged radio from
+  */dev/ttyACM0* to */dev/ttyACM1*) moves to the radio that's plugged in.
+- The port list in Settings no longer shows Linux's 32 empty built-in
+  serial slots (*/dev/ttyS0…31*).
+- Linux desktop app (.deb): app icon in the menu and taskbar.
+
 ## v0.17.11 (2026-11-25)
 
 ### Tor problems explain themselves

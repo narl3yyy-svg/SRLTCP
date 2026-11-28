@@ -36,7 +36,7 @@ on the device is encrypted too.
 </table>
 
 > [!NOTE]
-> **Version 0.17.11.** Paste a screenshot with Ctrl+V / ⌘V, or drag files
+> **Version 0.17.12.** Paste a screenshot with Ctrl+V / ⌘V, or drag files
 > anywhere into a chat, to send them. Also: verified-contacts-only option,
 > search inside chats, and photos that stay viewable after a restart.
 > Update every device. See the [release notes](srltcp/RELEASE_NOTES.md).
@@ -56,11 +56,11 @@ Get the latest version from **[GitHub Releases](https://github.com/narl3yyy-svg/
 
 | Platform | Download | Requirements |
 |:--|:--|:--|
-| <img src="https://img.shields.io/badge/-Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows" /> | `SRLTCP-0.17.11-windows-x64-setup.exe` | Windows 10/11, x64 |
-| <img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" /> | `SRLTCP-0.17.11-macos-arm64.dmg` | macOS 12+, Apple silicon (M1 and newer) |
-| <img src="https://img.shields.io/badge/-Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android" /> | `SRLTCP-0.17.11.apk` | Android 8+ |
-| <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.11-linux-amd64.deb` | Ubuntu 22.04+ / Kubuntu / Debian 12+, x64 ([install](#desktop-app-linux-ubuntu--kubuntu--debian-x64)) |
-| <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.11-source.zip` | Python 3.12+ ([from source](#installation)) |
+| <img src="https://img.shields.io/badge/-Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows" /> | `SRLTCP-0.17.12-windows-x64-setup.exe` | Windows 10/11, x64 |
+| <img src="https://img.shields.io/badge/-macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" /> | `SRLTCP-0.17.12-macos-arm64.dmg` | macOS 12+, Apple silicon (M1 and newer) |
+| <img src="https://img.shields.io/badge/-Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android" /> | `SRLTCP-0.17.12.apk` | Android 8+ |
+| <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.12-linux-amd64.deb` | Ubuntu 22.04+ / Kubuntu / Debian 12+, x64 ([install](#desktop-app-linux-ubuntu--kubuntu--debian-x64)) |
+| <img src="https://img.shields.io/badge/-Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" /> | `SRLTCP-0.17.12-source.zip` | Python 3.12+ ([from source](#installation)) |
 
 Python and Tor are built into the Windows, macOS, Linux (.deb) and Android apps: nothing else to install.
 
@@ -611,7 +611,7 @@ telemetry radios, LoRa or ESP32 serial bridges), no network at all.
   once). A file that was moving carries on over the new path. When one phone
   leaves the radio, the other notices within seconds (its radio check gets
   no answer) and both continue over the internet.
-- **PC:** `./run.sh web --serial --serial-port /dev/ttyUSB0` (or `COM3`).
+- **PC:** `./run.sh web --serial` finds the USB radio itself (`/dev/ttyUSB*` or `/dev/ttyACM*` on Linux, `COMn` on Windows). To pick one: `./run.sh web --serial --serial-port /dev/ttyACM0` (or `COM3`).
 - Contacts are the **same contacts** as over Wi-Fi, and **only contacts**:
   nobody is discovered over the radio. Phones send private *beacons* that
   only the contacts they name can read (no name, ID or key in a beacon; to
